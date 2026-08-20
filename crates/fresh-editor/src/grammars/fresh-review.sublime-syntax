@@ -1,0 +1,26 @@
+%YAML 1.2
+---
+# Review-mode diff stream (audit_mode). Not a unified diff: every content
+# row carries a fixed-width old/new line-number gutter, so the bundled
+# line-anchored `Diff` grammar matches nothing here.
+#
+# Only content rows are matched. Chrome rows (section / file / hunk
+# headers, note boxes) deliberately fall through unscoped so the plugin's
+# own overlays stay authoritative for them.
+name: Fresh Review
+file_extensions: [freshreview]
+scope: source.freshreview
+contexts:
+  main:
+    - include: content-rows
+  content-rows:
+    # Gutter is ` OOOO NNNN ` — two right-aligned fixed-width fields.
+    # Matching its exact width is what keeps a context row whose text
+    # happens to start with digits and a `+` from reading as an addition.
+    - match: '^[ \d]{11}\+.*$'
+      scope: markup.inserted.freshreview
+    - match: '^[ \d]{11}-.*$'
+      scope: markup.deleted.freshreview
+    # Context row: no background wash, so the gutter alone is dimmed.
+    - match: '^[ \d]{11}(?=[^\d])'
+      scope: comment.line.gutter.freshreview

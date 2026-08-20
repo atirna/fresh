@@ -4438,3 +4438,155 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod fresh_review_grammar_tests {
+    use super::*;
+    use crate::view::theme;
+    use ratatui::style::Color;
+
+    /// Mirrors `LINE_NUM_W` in `plugins/audit_mode.ts`. The grammar anchors
+    /// on the gutter's exact rendered width, so the two have to agree; the
+    /// e2e review-mode colour tests are what catch drift between them.
+    const LINE_NUM_W: usize = 4;
+
+    /// Build a content row's gutter the way `lineNumPrefix` does.
+    fn gutter(old: Option<u32>, new: Option<u32>) -> String {
+        let field = |v: Option<u32>| match v {
+            Some(x) => format!("{:>width$}", x, width = LINE_NUM_W),
+            None => " ".repeat(LINE_NUM_W),
+        };
+        format!(" {} {} ", field(old), field(new))
+    }
+
+    fn engine_and_theme() -> (HighlightEngine, Theme) {
+        let registry =
+            GrammarRegistry::load(&crate::primitives::grammar::LocalGrammarLoader::embedded_only());
+        let engine = HighlightEngine::for_file(Path::new("review.freshreview"), None, &registry);
+        let theme = Theme::load_builtin(theme::THEME_DARK).unwrap();
+        (engine, theme)
+    }
+
+    /// Scope category and bg at the first byte of each line of `content`.
+    fn per_line(
+        content: &str,
+        engine: &mut HighlightEngine,
+        theme: &Theme,
+    ) -> Vec<(Option<HighlightCategory>, Option<Color>)> {
+        let buffer = crate::model::buffer::Buffer::from_str(
+            content,
+            0,
+            Arc::new(crate::model::filesystem::StdFileSystem),
+        );
+        let HighlightEngine::TextMate(tm) = engine else {
+            panic!("expected the TextMate engine for a .freshreview buffer");
+        };
+        let spans = tm.highlight_viewport(&buffer, 0, content.len(), theme, 0);
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for line in content.lines() {
+            let span = spans
+                .iter()
+                .find(|s| s.range.start <= start && s.range.end > start);
+            out.push((span.and_then(|s| s.category), span.and_then(|s| s.bg)));
+            start += line.len() + 1;
+        }
+        out
+    }
+
+    /// The review stream is not a unified diff — a line-number gutter sits
+    /// ahead of every `+`/`-` marker — so this asserts the review grammar
+    /// colours content rows that the bundled line-anchored `Diff` grammar
+    /// leaves entirely unscoped.
+    #[test]
+    fn content_rows_carry_diff_categories() {
+        let (mut engine, theme) = engine_and_theme();
+        let content = format!(
+            "{} context line\n{}-removed line\n{}+added line\n",
+            gutter(Some(1), Some(1)),
+            gutter(Some(2), None),
+            gutter(None, Some(2)),
+        );
+        let lines = per_line(&content, &mut engine, &theme);
+
+        // Context rows get no wash; only their gutter is dimmed.
+        assert_eq!(lines[0], (Some(HighlightCategory::Comment), None));
+        assert_eq!(
+            lines[1],
+            (Some(HighlightCategory::Deleted), Some(theme.diff_remove_bg)),
+        );
+        assert_eq!(
+            lines[2],
+            (Some(HighlightCategory::Inserted), Some(theme.diff_add_bg)),
+        );
+    }
+
+    /// The whole content row, gutter included, is one span, so the
+    /// renderer's diff tail-fill washes it edge to edge rather than
+    /// stopping where the text does.
+    #[test]
+    fn added_row_wash_starts_at_column_zero_and_extends() {
+        let (mut engine, theme) = engine_and_theme();
+        let row = format!("{}+added", gutter(None, Some(7)));
+        let content = format!("{}\n", row);
+        let buffer = crate::model::buffer::Buffer::from_str(
+            &content,
+            0,
+            Arc::new(crate::model::filesystem::StdFileSystem),
+        );
+        let HighlightEngine::TextMate(ref mut tm) = engine else {
+            panic!("expected the TextMate engine");
+        };
+        let spans = tm.highlight_viewport(&buffer, 0, content.len(), &theme, 0);
+        for byte_pos in 0..row.len() {
+            let span = spans
+                .iter()
+                .find(|s| s.range.start <= byte_pos && s.range.end > byte_pos);
+            assert_eq!(
+                span.and_then(|s| s.bg),
+                Some(theme.diff_add_bg),
+                "byte {} of an added row lost the wash; the gutter must share \
+                 the row's span so the fill starts at column zero",
+                byte_pos,
+            );
+        }
+        assert!(
+            spans
+                .iter()
+                .find(|s| s.range.start == 0)
+                .and_then(|s| s.category)
+                .is_some_and(|c| c.bg_extends_to_line_end()),
+            "the row's category must extend its bg past the last source byte",
+        );
+    }
+
+    /// A context row whose *text* begins with digits and a `+` must stay
+    /// context. This is why the gutter is matched at its exact width
+    /// instead of scanning forward for a marker.
+    #[test]
+    fn context_row_of_digits_and_plus_is_not_an_addition() {
+        let (mut engine, theme) = engine_and_theme();
+        let content = format!("{} 1 + 2\n", gutter(Some(3), Some(3)));
+        let lines = per_line(&content, &mut engine, &theme);
+        assert_eq!(lines[0], (Some(HighlightCategory::Comment), None));
+    }
+
+    /// Chrome rows carry no diff scope: the plugin's own overlays stay
+    /// authoritative for headers, so the grammar must not guess at them.
+    #[test]
+    fn chrome_rows_are_left_unscoped() {
+        let (mut engine, theme) = engine_and_theme();
+        let content = concat!(
+            " \u{25be} STAGED  (3)\n",
+            " \u{25be} src/main.rs   +5 / -2\n",
+            " \u{25be} @@ -1,3 +1,5 @@\n",
+        );
+        for (i, (category, bg)) in per_line(content, &mut engine, &theme)
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(category, None, "chrome row {} picked up a scope", i);
+            assert_eq!(bg, None, "chrome row {} picked up a wash", i);
+        }
+    }
+}

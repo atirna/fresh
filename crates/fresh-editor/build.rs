@@ -388,6 +388,7 @@ fn generate_syntax_packdump() -> Result<(), Box<dyn std::error::Error>> {
         ("src/grammars/fish.sublime-syntax", "Fish"),
         ("src/grammars/starlark.sublime-syntax", "Starlark"),
         ("src/grammars/justfile.sublime-syntax", "Justfile"),
+        ("src/grammars/fresh-review.sublime-syntax", "Fresh Review"),
         ("src/grammars/earthfile.sublime-syntax", "Earthfile"),
         ("src/grammars/gomod.sublime-syntax", "Go Module"),
         ("src/grammars/vue.sublime-syntax", "Vue"),

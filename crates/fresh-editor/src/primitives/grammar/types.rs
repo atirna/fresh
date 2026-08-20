@@ -248,6 +248,9 @@ pub const FISH_GRAMMAR: &str = include_str!("../../grammars/fish.sublime-syntax"
 pub const STARLARK_GRAMMAR: &str = include_str!("../../grammars/starlark.sublime-syntax");
 /// Embedded Justfile grammar
 pub const JUSTFILE_GRAMMAR: &str = include_str!("../../grammars/justfile.sublime-syntax");
+/// Review-mode diff stream; see the grammar file for why the bundled
+/// `Diff` grammar cannot serve it.
+pub const FRESH_REVIEW_GRAMMAR: &str = include_str!("../../grammars/fresh-review.sublime-syntax");
 /// Embedded Earthfile grammar
 pub const EARTHFILE_GRAMMAR: &str = include_str!("../../grammars/earthfile.sublime-syntax");
 /// Embedded Go Module grammar
@@ -790,6 +793,7 @@ impl GrammarRegistry {
             (FISH_GRAMMAR, "Fish"),
             (STARLARK_GRAMMAR, "Starlark"),
             (JUSTFILE_GRAMMAR, "Justfile"),
+            (FRESH_REVIEW_GRAMMAR, "Fresh Review"),
             (EARTHFILE_GRAMMAR, "Earthfile"),
             (GOMOD_GRAMMAR, "Go Module"),
             (VUE_GRAMMAR, "Vue"),
