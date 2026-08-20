@@ -749,6 +749,9 @@ impl Editor {
             } => {
                 self.handle_set_buffer_cursor(buffer_id, position);
             }
+            PluginCommand::SetBufferLanguage { buffer_id, name } => {
+                self.handle_set_buffer_language(buffer_id, &name);
+            }
             PluginCommand::SetBufferShowCursors { buffer_id, show } => {
                 self.handle_set_buffer_show_cursors(buffer_id, show);
             }
@@ -4569,6 +4572,21 @@ impl Editor {
             .read()
             .unwrap()
             .resolve_callback(callback_id, json);
+    }
+
+    fn handle_set_buffer_language(&mut self, buffer_id: BufferId, name: &str) {
+        let registry = Arc::clone(&self.active_window().resources.grammar_registry);
+        if let Some(state) = self
+            .windows
+            .get_mut(&self.active_window)
+            .map(|w| &mut w.buffers)
+            .expect("active window present")
+            .get_mut(&buffer_id)
+        {
+            state.set_language_from_name(name, &registry);
+        } else {
+            tracing::warn!("SetBufferLanguage: buffer {:?} not found", buffer_id);
+        }
     }
 
     fn handle_set_buffer_show_cursors(&mut self, buffer_id: BufferId, show: bool) {

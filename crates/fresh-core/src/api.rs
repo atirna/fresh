@@ -4507,6 +4507,10 @@ pub enum PluginCommand {
     /// buffer (e.g. for magit-style row navigation) flip this to `true` after
     /// `createBufferGroup` returns.
     SetBufferShowCursors { buffer_id: BufferId, show: bool },
+    /// Pick a virtual buffer's grammar by name. `name` is resolved the
+    /// same way a virtual buffer's own name is, so an extension in it
+    /// (`"review.freshreview"`) selects the grammar.
+    SetBufferLanguage { buffer_id: BufferId, name: String },
 
     /// Send an arbitrary LSP request and return the raw JSON response
     SendLspRequest {

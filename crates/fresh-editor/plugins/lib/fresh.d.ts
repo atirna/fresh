@@ -4196,6 +4196,16 @@ interface EditorAPI {
 	*/
 	setBufferShowCursors(bufferId: number, show: boolean): boolean;
 	/**
+	* Choose the grammar a virtual buffer is highlighted with.
+	*
+	* Panel buffers are named `*<panel id>*`, which resolves to no grammar.
+	* A plugin rendering a known text shape into one calls this so the host
+	* highlights it instead of the plugin painting per-row overlays. `name`
+	* is resolved like a virtual buffer's own name, so an extension in it
+	* (`"review.freshreview"`) selects the grammar.
+	*/
+	setBufferLanguage(bufferId: number, name: string): boolean;
+	/**
 	* Set a line indicator in the gutter
 	*/
 	setLineIndicator(bufferId: number, line: number, namespace: string, symbol: string, r: number, g: number, b: number, priority: number): boolean;

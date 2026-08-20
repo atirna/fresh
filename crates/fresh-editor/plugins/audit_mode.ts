@@ -1374,9 +1374,7 @@ function buildDiffLines(_rightWidth: number): DiffLine[] {
                 const removePrefix = lineNumPrefix(curOldLine, undefined);
                 const removeText = removePrefix + line;
                 const removePrefixLen = getByteLength(removePrefix);
-                const removeOverlays: InlineOverlay[] = [
-                    { start: 0, end: removePrefixLen, style: { fg: STYLE_LINE_NUM_FG } },
-                ];
+                const removeOverlays: InlineOverlay[] = [];
                 let rOffset = removePrefixLen + getByteLength(line[0]); // skip diff prefix
                 for (const part of parts) {
                     const pLen = getByteLength(part.text);
@@ -1387,7 +1385,6 @@ function buildDiffLines(_rightWidth: number): DiffLine[] {
                 }
                 lines.push({
                     text: removeText, type: 'remove',
-                    style: { bg: STYLE_REMOVE_BG, extendToLineEnd: true },
                     hunkId: hunk.id, file: hunk.file,
                     lineType: 'remove', oldLine: curOldLine, newLine: undefined, lineContent: line,
                     inlineOverlays: removeOverlays,
@@ -1400,9 +1397,7 @@ function buildDiffLines(_rightWidth: number): DiffLine[] {
                 const addPrefix = lineNumPrefix(undefined, newLineNum);
                 const addText = addPrefix + nextLine;
                 const addPrefixLen = getByteLength(addPrefix);
-                const addOverlays: InlineOverlay[] = [
-                    { start: 0, end: addPrefixLen, style: { fg: STYLE_LINE_NUM_FG } },
-                ];
+                const addOverlays: InlineOverlay[] = [];
                 let aOffset = addPrefixLen + getByteLength(nextLine[0]);
                 for (const part of parts) {
                     const pLen = getByteLength(part.text);
@@ -1413,7 +1408,6 @@ function buildDiffLines(_rightWidth: number): DiffLine[] {
                 }
                 lines.push({
                     text: addText, type: 'add',
-                    style: { bg: STYLE_ADD_BG, extendToLineEnd: true },
                     hunkId: hunk.id, file: hunk.file,
                     lineType: 'add', oldLine: undefined, newLine: newLineNum, lineContent: nextLine,
                     inlineOverlays: addOverlays,
@@ -1426,27 +1420,19 @@ function buildDiffLines(_rightWidth: number): DiffLine[] {
 
             const numPrefix = lineNumPrefix(curOldLine, curNewLine);
             const decoratedText = numPrefix + line;
-            const numPrefixLen = getByteLength(numPrefix);
-            const dimNumOverlay: InlineOverlay = {
-                start: 0, end: numPrefixLen, style: { fg: STYLE_LINE_NUM_FG },
-            };
 
             if (prefix === '+') {
                 lines.push({
                     text: decoratedText, type: 'add',
-                    style: { bg: STYLE_ADD_BG, extendToLineEnd: true },
                     hunkId: hunk.id, file: hunk.file,
                     lineType, oldLine: curOldLine, newLine: curNewLine, lineContent: line,
-                    inlineOverlays: [dimNumOverlay],
                 });
                 newLineNum++;
             } else if (prefix === '-') {
                 lines.push({
                     text: decoratedText, type: 'remove',
-                    style: { bg: STYLE_REMOVE_BG, extendToLineEnd: true },
                     hunkId: hunk.id, file: hunk.file,
                     lineType, oldLine: curOldLine, newLine: curNewLine, lineContent: line,
-                    inlineOverlays: [dimNumOverlay],
                 });
                 oldLineNum++;
             } else {
@@ -1454,7 +1440,6 @@ function buildDiffLines(_rightWidth: number): DiffLine[] {
                     text: decoratedText, type: 'context',
                     hunkId: hunk.id, file: hunk.file,
                     lineType, oldLine: curOldLine, newLine: curNewLine, lineContent: line,
-                    inlineOverlays: [dimNumOverlay],
                 });
                 oldLineNum++;
                 newLineNum++;
@@ -4914,6 +4899,17 @@ function mountStreamContent(): void {
     if (state.groupId === null) return;
     const signature = streamSignature();
     if (state.streamMountedSignature === signature) return;
+    // Content rows are styled by the `Fresh Review` grammar rather than a
+    // per-row overlay. The side-by-side layout has a different gutter the
+    // grammar can't read, so it falls back to plain text and its own
+    // per-column overlays.
+    const diffBuffer = state.panelBuffers["diff"];
+    if (diffBuffer !== undefined) {
+        editor.setBufferLanguage(
+            diffBuffer,
+            state.splitView ? "review.txt" : "review.freshreview",
+        );
+    }
     editor.setPanelContent(state.groupId, "diff", buildDiffPanelEntries());
     state.streamMountedSignature = signature;
     // Fresh content, so the host's folds went with the old rows.
