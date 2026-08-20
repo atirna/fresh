@@ -6548,6 +6548,30 @@ impl JsEditorApi {
             .is_ok())
     }
 
+    /// Append entries after a panel's current content, keeping what is
+    /// already mounted in place.
+    #[qjs(rename = "appendPanelContent")]
+    pub fn append_panel_content<'js>(
+        &self,
+        ctx: rquickjs::Ctx<'js>,
+        group_id: u32,
+        panel_name: String,
+        entries_arr: Vec<rquickjs::Object<'js>>,
+    ) -> rquickjs::Result<bool> {
+        let entries: Vec<TextPropertyEntry> = entries_arr
+            .iter()
+            .filter_map(|obj| parse_text_property_entry(&ctx, obj))
+            .collect();
+        Ok(self
+            .command_sender
+            .send(PluginCommand::AppendPanelContent {
+                group_id: group_id as usize,
+                panel_name,
+                entries,
+            })
+            .is_ok())
+    }
+
     /// Close a buffer group
     #[qjs(rename = "closeBufferGroup")]
     pub fn close_buffer_group(&self, group_id: u32) -> bool {

@@ -304,6 +304,15 @@ impl Editor {
         self.active_window_mut()
             .set_virtual_buffer_content(buffer_id, entries)
     }
+
+    pub fn append_virtual_buffer_content(
+        &mut self,
+        buffer_id: BufferId,
+        entries: Vec<crate::primitives::text_property::TextPropertyEntry>,
+    ) -> Result<(), String> {
+        self.active_window_mut()
+            .append_virtual_buffer_content(buffer_id, entries)
+    }
 }
 
 impl crate::app::window::Window {
@@ -415,6 +424,66 @@ impl crate::app::window::Window {
         }
 
         buffer_id
+    }
+
+    /// Append entries after a virtual buffer's current content.
+    ///
+    /// The counterpart to [`Self::set_virtual_buffer_content`] for a panel
+    /// built in pieces: text, properties and overlays already mounted keep
+    /// their byte offsets, so a reader's scroll position and the markers
+    /// under it survive the addition. Everything new is numbered from the
+    /// current end, which is why the offsets need no later fixup.
+    ///
+    /// Not cheap in the way adding to a list is — the marker tree and the
+    /// property array are both rebuilt from everything the buffer ends up
+    /// holding, so an append costs something proportional to the whole
+    /// buffer. Callers should append in a few large pieces, not many small
+    /// ones.
+    pub fn append_virtual_buffer_content(
+        &mut self,
+        buffer_id: BufferId,
+        entries: Vec<crate::primitives::text_property::TextPropertyEntry>,
+    ) -> Result<(), String> {
+        let state = self
+            .buffers
+            .get_mut(&buffer_id)
+            .ok_or_else(|| "Buffer not found".to_string())?;
+
+        let base = state.buffer.len();
+        let (text, properties, collected_overlays) =
+            crate::primitives::text_property::TextPropertyManager::from_entries_at(entries, base);
+
+        state.buffer.insert(base, &text);
+        state.buffer.clear_modified();
+
+        let mut merged = state.text_properties.all().to_vec();
+        merged.extend(properties.all().iter().cloned());
+        state.text_properties.set_all(merged);
+
+        {
+            use crate::view::overlay::{Overlay, OverlayFace};
+            use fresh_core::overlay::OverlayNamespace;
+
+            let inline_ns = OverlayNamespace::from_string("_inline".to_string());
+            let mut specs = Vec::with_capacity(collected_overlays.len());
+            let mut extras = Vec::with_capacity(collected_overlays.len());
+            for co in collected_overlays {
+                let face = OverlayFace::from_options(&co.options);
+                extras.push((co.options.extend_to_line_end, co.options.url));
+                specs.push((co.range, face));
+            }
+            let mut new_overlays =
+                Overlay::many_with_namespace(&mut state.marker_list, specs, inline_ns);
+            for (overlay, (extend_to_line_end, url)) in new_overlays.iter_mut().zip(extras) {
+                overlay.extend_to_line_end = extend_to_line_end;
+                if let Some(url) = url {
+                    overlay.url = Some(url);
+                }
+            }
+            state.overlays.extend(new_overlays);
+        }
+
+        Ok(())
     }
 
     /// Replace a virtual buffer's content + overlays + cursors clamp.

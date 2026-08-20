@@ -136,6 +136,8 @@ interface ReviewState {
   comments: ReviewComment[];
   note: string;
   reviewBufferId: number | null;
+  /** Bumped per stream mount so a superseded chunk loop stops. */
+  streamMountGeneration: number;
   /** Review slice: working tree vs. static commit / range. */
   mode: ReviewMode;
   /** Populated when `mode === 'range'`. */
@@ -327,6 +329,7 @@ const state: ReviewState = {
   comments: [],
   note: '',
   reviewBufferId: null,
+  streamMountGeneration: 0,
   mode: 'worktree',
   range: null,
   repo: null,
@@ -1568,44 +1571,106 @@ function renderToolbar(): void {
  * `state.fileHeaderRows` so the rest of the plugin can map cursor rows
  * back to hunks/files.
  */
-function buildDiffPanelEntries(): TextPropertyEntry[] {
-    const entries: TextPropertyEntry[] = [];
-
-    const hunkHeaderRows: number[] = [];
-    const diffLineByteOffsets: number[] = [];
-    const fileHeaderRows: Record<string, number> = {};
-    const sectionHeaderRows: Record<string, number> = {};
-    const hunkRowByHunkId: Record<string, number> = {};
-    const diffLineRowByCommentId: Record<string, number> = {};
-    const entryPropsByRow: Record<number, Record<string, unknown>> = {};
+/**
+ * Everything one pass over the stream carries between rows, plus the row
+ * and byte maps it fills in. Held in an object rather than locals so the
+ * pass can stop at a row boundary and be resumed for the next chunk —
+ * `mountStreamContent` builds a large stream in pieces.
+ */
+interface StreamBuildCtx {
+    hunkHeaderRows: number[];
+    diffLineByteOffsets: number[];
+    fileHeaderRows: Record<string, number>;
+    sectionHeaderRows: Record<string, number>;
+    hunkRowByHunkId: Record<string, number>;
+    diffLineRowByCommentId: Record<string, number>;
+    entryPropsByRow: Record<number, Record<string, unknown>>;
     // Byte ranges of collapsible bodies, captured in this same single
     // pass so collapse later just registers a host fold (no rebuild).
     // The "body" of an entity is the byte range from the byte after
     // its header's newline up to the byte before the next header that
     // ends it.
-    const sectionBodyRange: Record<string, { start: number; end: number }> = {};
-    const fileBodyRange: Record<string, { start: number; end: number }> = {};
-    const hunkBodyRange: Record<string, { start: number; end: number }> = {};
-    let curSection: string | null = null;
-    let curFile: string | null = null;
-    let curHunk: string | null = null;
-    let sectionBodyStart = 0;
-    let fileBodyStart = 0;
-    let hunkBodyStart = 0;
+    sectionBodyRange: Record<string, { start: number; end: number }>;
+    fileBodyRange: Record<string, { start: number; end: number }>;
+    hunkBodyRange: Record<string, { start: number; end: number }>;
+    curSection: string | null;
+    curFile: string | null;
+    curHunk: string | null;
+    sectionBodyStart: number;
+    fileBodyStart: number;
+    hunkBodyStart: number;
+    runningByte: number;
+    row: number;
+    lastDiffLineRow: number;
+}
 
-    let runningByte = 0;
-    let row = 0; // 0-indexed counter; row + 1 is the 1-indexed line number
-    let lastDiffLineRow = 0; // 1-indexed row of the most recent +/-/context line
+function newStreamBuildCtx(): StreamBuildCtx {
+    return {
+        hunkHeaderRows: [], diffLineByteOffsets: [], fileHeaderRows: {},
+        sectionHeaderRows: {}, hunkRowByHunkId: {}, diffLineRowByCommentId: {},
+        entryPropsByRow: {}, sectionBodyRange: {}, fileBodyRange: {}, hunkBodyRange: {},
+        curSection: null, curFile: null, curHunk: null,
+        sectionBodyStart: 0, fileBodyStart: 0, hunkBodyStart: 0,
+        runningByte: 0, row: 0, lastDiffLineRow: 0,
+    };
+}
+
+/**
+ * Publish `c` to the `state` maps the rest of the plugin navigates by.
+ *
+ * Safe to call after every chunk: an in-progress body is closed at the
+ * bytes mounted so far and reopened wider by the next chunk, so what is
+ * published always describes exactly what the buffer currently holds.
+ */
+function publishStreamBuildCtx(c: StreamBuildCtx): void {
+    const sectionBodyRange = { ...c.sectionBodyRange };
+    const fileBodyRange = { ...c.fileBodyRange };
+    const hunkBodyRange = { ...c.hunkBodyRange };
+    if (c.curHunk) hunkBodyRange[c.curHunk] = { start: c.hunkBodyStart, end: c.runningByte };
+    if (c.curFile) fileBodyRange[c.curFile] = { start: c.fileBodyStart, end: c.runningByte };
+    if (c.curSection) sectionBodyRange[c.curSection] = { start: c.sectionBodyStart, end: c.runningByte };
+
+    state.hunkHeaderRows = c.hunkHeaderRows;
+    // The trailing entry is the one-past-the-end sentinel; it moves as more
+    // rows mount, so it is appended to a copy rather than into the running
+    // array.
+    state.diffLineByteOffsets = [...c.diffLineByteOffsets, c.runningByte];
+    state.fileHeaderRows = c.fileHeaderRows;
+    state.sectionHeaderRows = c.sectionHeaderRows;
+    state.hunkRowByHunkId = c.hunkRowByHunkId;
+    state.diffLineRowByCommentId = c.diffLineRowByCommentId;
+    state.entryPropsByRow = c.entryPropsByRow;
+    state.sectionBodyRange = sectionBodyRange;
+    state.fileBodyRange = fileBodyRange;
+    state.hunkBodyRange = hunkBodyRange;
+}
+
+/** Entries for `lines[from..to)`, advancing `c` across the slice. */
+function buildStreamEntries(
+    lines: DiffLine[], from: number, to: number, c: StreamBuildCtx,
+): TextPropertyEntry[] {
+    const entries: TextPropertyEntry[] = [];
+
+    const hunkHeaderRows = c.hunkHeaderRows;
+    const diffLineByteOffsets = c.diffLineByteOffsets;
+    const fileHeaderRows = c.fileHeaderRows;
+    const sectionHeaderRows = c.sectionHeaderRows;
+    const hunkRowByHunkId = c.hunkRowByHunkId;
+    const diffLineRowByCommentId = c.diffLineRowByCommentId;
+    const entryPropsByRow = c.entryPropsByRow;
+    const sectionBodyRange = c.sectionBodyRange;
+    const fileBodyRange = c.fileBodyRange;
+    const hunkBodyRange = c.hunkBodyRange;
 
     const pushEntry = (entry: TextPropertyEntry) => {
-        diffLineByteOffsets.push(runningByte);
-        runningByte += getByteLength(entry.text);
+        diffLineByteOffsets.push(c.runningByte);
+        c.runningByte += getByteLength(entry.text);
         entries.push(entry);
-        row++;
+        c.row++;
     };
 
-    const lines = buildDiffLines(state.viewportWidth);
-    for (const line of lines) {
+    for (let li = from; li < to; li++) {
+        const line = lines[li];
         const props: Record<string, unknown> = { type: line.type };
         if (line.hunkId !== undefined) props.hunkId = line.hunkId;
         if (line.file !== undefined) props.file = line.file;
@@ -1618,47 +1683,47 @@ function buildDiffPanelEntries(): TextPropertyEntry[] {
         if (line.fileKey !== undefined) props.fileKey = line.fileKey;
         if (line.fileIndex !== undefined) props.fileIndex = line.fileIndex;
 
-        const entryStart = runningByte;
+        const entryStart = c.runningByte;
 
         // Header bookkeeping — close any in-progress body for the
         // entities about to be replaced, then open a new body range.
         if (line.type === 'section-header' && line.filePath) {
-            if (curHunk) hunkBodyRange[curHunk] = { start: hunkBodyStart, end: entryStart };
-            if (curFile) fileBodyRange[curFile] = { start: fileBodyStart, end: entryStart };
-            if (curSection) sectionBodyRange[curSection] = { start: sectionBodyStart, end: entryStart };
-            curSection = line.filePath;
-            curFile = null;
-            curHunk = null;
+            if (c.curHunk) hunkBodyRange[c.curHunk] = { start: c.hunkBodyStart, end: entryStart };
+            if (c.curFile) fileBodyRange[c.curFile] = { start: c.fileBodyStart, end: entryStart };
+            if (c.curSection) sectionBodyRange[c.curSection] = { start: c.sectionBodyStart, end: entryStart };
+            c.curSection = line.filePath;
+            c.curFile = null;
+            c.curHunk = null;
         }
         if (line.type === 'file-header' && line.fileKey) {
-            if (curHunk) hunkBodyRange[curHunk] = { start: hunkBodyStart, end: entryStart };
-            if (curFile) fileBodyRange[curFile] = { start: fileBodyStart, end: entryStart };
-            curFile = line.fileKey;
-            curHunk = null;
+            if (c.curHunk) hunkBodyRange[c.curHunk] = { start: c.hunkBodyStart, end: entryStart };
+            if (c.curFile) fileBodyRange[c.curFile] = { start: c.fileBodyStart, end: entryStart };
+            c.curFile = line.fileKey;
+            c.curHunk = null;
         }
         if (line.type === 'hunk-header' && line.hunkId) {
-            if (curHunk) hunkBodyRange[curHunk] = { start: hunkBodyStart, end: entryStart };
-            curHunk = line.hunkId;
+            if (c.curHunk) hunkBodyRange[c.curHunk] = { start: c.hunkBodyStart, end: entryStart };
+            c.curHunk = line.hunkId;
         }
 
         if (line.type === 'hunk-header') {
-            hunkHeaderRows.push(row + 1);
-            if (line.hunkId) hunkRowByHunkId[line.hunkId] = row + 1;
+            hunkHeaderRows.push(c.row + 1);
+            if (line.hunkId) hunkRowByHunkId[line.hunkId] = c.row + 1;
         }
         if (line.type === 'file-header' && line.fileKey) {
-            fileHeaderRows[line.fileKey] = row + 1;
+            fileHeaderRows[line.fileKey] = c.row + 1;
         }
         if (line.type === 'section-header' && line.filePath) {
-            sectionHeaderRows[line.filePath] = row + 1;
+            sectionHeaderRows[line.filePath] = c.row + 1;
         }
         if (line.type === 'add' || line.type === 'remove' || line.type === 'context') {
-            lastDiffLineRow = row + 1;
+            c.lastDiffLineRow = c.row + 1;
         }
         if (line.type === 'comment' && line.commentId) {
-            diffLineRowByCommentId[line.commentId] = lastDiffLineRow || (row + 1);
+            diffLineRowByCommentId[line.commentId] = c.lastDiffLineRow || (c.row + 1);
         }
 
-        entryPropsByRow[row + 1] = props;
+        entryPropsByRow[c.row + 1] = props;
 
         pushEntry({
             text: (line.text || "") + "\n",
@@ -1669,28 +1734,20 @@ function buildDiffPanelEntries(): TextPropertyEntry[] {
 
         // After the header is pushed, runningByte points to the first
         // byte of the body that follows.
-        if (line.type === 'section-header') sectionBodyStart = runningByte;
-        if (line.type === 'file-header') fileBodyStart = runningByte;
-        if (line.type === 'hunk-header') hunkBodyStart = runningByte;
+        if (line.type === 'section-header') c.sectionBodyStart = c.runningByte;
+        if (line.type === 'file-header') c.fileBodyStart = c.runningByte;
+        if (line.type === 'hunk-header') c.hunkBodyStart = c.runningByte;
     }
 
-    // Close trailing bodies.
-    if (curHunk) hunkBodyRange[curHunk] = { start: hunkBodyStart, end: runningByte };
-    if (curFile) fileBodyRange[curFile] = { start: fileBodyStart, end: runningByte };
-    if (curSection) sectionBodyRange[curSection] = { start: sectionBodyStart, end: runningByte };
+    return entries;
+}
 
-    diffLineByteOffsets.push(runningByte);
-
-    state.hunkHeaderRows = hunkHeaderRows;
-    state.diffLineByteOffsets = diffLineByteOffsets;
-    state.fileHeaderRows = fileHeaderRows;
-    state.sectionHeaderRows = sectionHeaderRows;
-    state.hunkRowByHunkId = hunkRowByHunkId;
-    state.diffLineRowByCommentId = diffLineRowByCommentId;
-    state.entryPropsByRow = entryPropsByRow;
-    state.sectionBodyRange = sectionBodyRange;
-    state.fileBodyRange = fileBodyRange;
-    state.hunkBodyRange = hunkBodyRange;
+/** The whole stream in one pass — the unchunked path, and what tests drive. */
+function buildDiffPanelEntries(): TextPropertyEntry[] {
+    const lines = buildDiffLines(state.viewportWidth);
+    const c = newStreamBuildCtx();
+    const entries = buildStreamEntries(lines, 0, lines.length, c);
+    publishStreamBuildCtx(c);
     return entries;
 }
 
@@ -4910,9 +4967,73 @@ function mountStreamContent(): void {
             state.splitView ? "review.txt" : "review.freshreview",
         );
     }
-    editor.setPanelContent(state.groupId, "diff", buildDiffPanelEntries());
+
+    const lines = buildDiffLines(state.viewportWidth);
+    const c = newStreamBuildCtx();
+    const first = Math.min(lines.length, STREAM_FIRST_CHUNK);
+    editor.setPanelContent(state.groupId, "diff", buildStreamEntries(lines, 0, first, c));
+    publishStreamBuildCtx(c);
     state.streamMountedSignature = signature;
     // Fresh content, so the host's folds went with the old rows.
+    applyFolds();
+
+    if (first < lines.length) {
+        state.streamMountGeneration++;
+        void mountRemainingStream(lines, first, c, signature, state.streamMountGeneration);
+    }
+}
+
+/** First slice mounted synchronously, sized to fill a tall viewport with
+ *  room to scroll into before the next chunk lands. */
+const STREAM_FIRST_CHUNK = 400;
+
+
+/**
+ * Append the rest of the stream in growing chunks, yielding between them.
+ *
+ * Laying out a large review is seconds of work, and the reader used to
+ * wait all of it before a single row appeared. Mounting the first screen
+ * first means the diff is readable almost immediately; the rest arrives
+ * behind it without ever moving what is already on screen, because
+ * `appendPanelContent` leaves mounted bytes — and the markers over
+ * them — where they are.
+ *
+ * Yielding is what makes the wait usable rather than merely reordered:
+ * each `delay(0)` lets the editor render and handle input, so scrolling
+ * and navigation work over the part that has landed.
+ */
+async function mountRemainingStream(
+    lines: DiffLine[],
+    from: number,
+    c: StreamBuildCtx,
+    signature: string,
+    generation: number,
+): Promise<void> {
+    while (from < lines.length) {
+        // Let the host paint what is mounted before building the next piece.
+        await editor.delay(0);
+        // A newer mount (or a closed review) took over while we were away;
+        // its own pass owns the buffer now.
+        if (state.groupId === null) return;
+        if (state.streamMountGeneration !== generation) return;
+        if (state.streamMountedSignature !== signature) return;
+
+        // Everything after the first chunk lands in one piece. Appending
+        // is not free the way adding to a list is: the buffer's marker
+        // tree is rebuilt from the overlays it ends up holding and the
+        // property array from all of its entries, so an append costs
+        // something proportional to the whole stream rather than to the
+        // piece being added. The number of appends is therefore what to
+        // keep down, not their size — splitting the tail finer buys a
+        // sooner-scrollable middle and pays for it in total work, which
+        // is what the reader experiences as the editor being busy.
+        const to = lines.length;
+        editor.appendPanelContent(state.groupId, "diff", buildStreamEntries(lines, from, to, c));
+        from = to;
+        // Publish as we go so the rows already mounted are navigable
+        // rather than waiting on the whole stream.
+        publishStreamBuildCtx(c);
+    }
     applyFolds();
 }
 

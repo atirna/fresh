@@ -337,8 +337,39 @@ fn bench_open(label: &str, repo: &GitTestRepo, note: &str) -> u128 {
         .wait_until(|h| h.screen_to_string().contains("_0_0"))
         .unwrap();
     let open_ms = open_start.elapsed().as_millis();
+    // The stream mounts its first screenful and appends the rest behind it,
+    // so "open" is when the reader can start reading. Keep measuring
+    // through to the last chunk as well — the two answer different
+    // questions and only reporting the first would flatter the change.
+    // The stream mounts its first screenful and appends the rest behind it,
+    // so "open" is when the reader can start reading. Keep measuring
+    // through to the last chunk as well — the two answer different
+    // questions and only reporting the first would flatter the change.
+    // Quiescence is not a completion signal here: the plugin thread can
+    // still be building the tail while the editor looks idle. The buffer
+    // growing and then stopping is.
+    let mut last = 0usize;
+    let mut stable = 0usize;
+    // Time of the last growth, not of the settle that confirms it — the
+    // settle window is long enough to outlast a slow chunk and would
+    // otherwise be added to every measurement.
+    let mut grew_at = open_start.elapsed();
+    harness
+        .wait_until(|h| {
+            let n = h.editor().active_state().buffer.line_count().unwrap_or(0);
+            if n == last && n > 0 {
+                stable += 1;
+            } else {
+                stable = 0;
+                last = n;
+                grew_at = open_start.elapsed();
+            }
+            stable >= 200
+        })
+        .unwrap();
+    let full_ms = grew_at.as_millis();
 
-    println!("BENCH open {label}: {note} open={open_ms}ms");
+    println!("BENCH open {label}: {note} open={open_ms}ms full={full_ms}ms rows={last}");
     open_ms
 }
 

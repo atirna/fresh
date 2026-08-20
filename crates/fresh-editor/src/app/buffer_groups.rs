@@ -411,6 +411,30 @@ impl super::Editor {
         }
     }
 
+    /// Append content to a panel within a buffer group.
+    #[cfg(feature = "plugins")]
+    pub(super) fn append_panel_content(
+        &mut self,
+        group_id: usize,
+        panel_name: String,
+        entries: Vec<fresh_core::text_property::TextPropertyEntry>,
+    ) {
+        let bg_id = BufferGroupId(group_id);
+        let buffer_id = self
+            .active_window_mut()
+            .buffer_groups
+            .get(&bg_id)
+            .and_then(|g| g.panel_buffers.get(&panel_name).copied());
+
+        if let Some(buffer_id) = buffer_id {
+            if let Err(e) = self.append_virtual_buffer_content(buffer_id, entries) {
+                tracing::error!("Failed to append panel '{}' content: {}", panel_name, e);
+            }
+        } else {
+            tracing::warn!("Panel '{}' not found in group {}", panel_name, group_id);
+        }
+    }
+
     /// Close a buffer group — remove the Grouped subtree, close all panel
     /// buffers, and remove the group tab from any split's tab bar.
     pub(super) fn close_buffer_group(&mut self, group_id: usize) {

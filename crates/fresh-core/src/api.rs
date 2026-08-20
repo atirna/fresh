@@ -4216,6 +4216,17 @@ pub enum PluginCommand {
         request_id: Option<u64>,
     },
 
+    /// Append entries to a panel's existing content, leaving what is
+    /// already mounted — its text, properties and overlays — in place.
+    AppendPanelContent {
+        /// Group ID
+        group_id: usize,
+        /// Panel name
+        panel_name: String,
+        /// Entries to append after the panel's current content
+        entries: Vec<TextPropertyEntry>,
+    },
+
     /// Set the content of a panel within a buffer group.
     SetPanelContent {
         /// Group ID
