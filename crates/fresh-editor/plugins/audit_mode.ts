@@ -904,19 +904,77 @@ interface DiffLine {
     commentId?: string;
 }
 
-/** Compute +N / -M line counts for a file. */
-function fileChangeCounts(file: FileEntry): { added: number; removed: number } {
-    let added = 0;
-    let removed = 0;
-    for (const h of state.hunks) {
-        if (h.file === file.path && h.gitStatus === file.category) {
-            for (const line of h.lines) {
-                if (line[0] === '+') added++;
-                else if (line[0] === '-') removed++;
-            }
+// --- Derived views of `state.hunks` ---
+//
+// Everything that needs "the hunks for this file" or "how many lines this
+// file changes" used to answer it by scanning every hunk in the review.
+// Per file that is O(files x hunks) and, once the line counts are wanted
+// too, O(files x total diff lines) — on a large changeset the scans cost
+// more than parsing the diff did.
+//
+// So the answers are derived once, in a single pass, and keyed by
+// `fileKey`. The cache is guarded by identity of the array it was built
+// from: `state.hunks` is only ever replaced wholesale (hunk objects are
+// filled in during parsing, before the array is installed), so a new
+// array is exactly the event that invalidates the derivation.
+
+interface HunkIndex {
+    /** Hunks per `fileKey`, in `state.hunks` order. */
+    byFileKey: Map<string, Hunk[]>;
+    /** +added / -removed line counts per `fileKey`. */
+    countsByFileKey: Map<string, { added: number; removed: number }>;
+}
+
+const NO_HUNKS: readonly Hunk[] = [];
+const NO_CHANGES: Readonly<{ added: number; removed: number }> = { added: 0, removed: 0 };
+
+let hunkIndexCache: { source: Hunk[]; index: HunkIndex } | null = null;
+
+function hunkIndex(): HunkIndex {
+    const source = state.hunks;
+    if (hunkIndexCache !== null && hunkIndexCache.source === source) {
+        return hunkIndexCache.index;
+    }
+    const byFileKey = new Map<string, Hunk[]>();
+    const countsByFileKey = new Map<string, { added: number; removed: number }>();
+    for (const h of source) {
+        const key = fileKeyOf(h.file, h.gitStatus || 'unstaged');
+        let group = byFileKey.get(key);
+        let counts = countsByFileKey.get(key);
+        if (group === undefined || counts === undefined) {
+            group = [];
+            counts = { added: 0, removed: 0 };
+            byFileKey.set(key, group);
+            countsByFileKey.set(key, counts);
+        }
+        group.push(h);
+        for (const line of h.lines) {
+            if (line[0] === '+') counts.added++;
+            else if (line[0] === '-') counts.removed++;
         }
     }
-    return { added, removed };
+    const index: HunkIndex = { byFileKey, countsByFileKey };
+    hunkIndexCache = { source, index };
+    return index;
+}
+
+// The index owns these arrays and count records, so both accessors hand
+// back read-only views: a caller that mutated one would corrupt every
+// later reader of the same file.
+
+/** The hunks belonging to `key` (a `fileKey`), in review order. */
+function hunksForKey(key: string): readonly Hunk[] {
+    return hunkIndex().byFileKey.get(key) || NO_HUNKS;
+}
+
+/** The hunks belonging to `file`, in review order. */
+function hunksForFile(file: FileEntry): readonly Hunk[] {
+    return hunksForKey(fileKey(file));
+}
+
+/** Compute +N / -M line counts for a file. */
+function fileChangeCounts(file: FileEntry): Readonly<{ added: number; removed: number }> {
+    return hunkIndex().countsByFileKey.get(fileKey(file)) || NO_CHANGES;
 }
 
 // Inline review-note box sizing. The note renders as a bordered, wrapped
@@ -1212,9 +1270,7 @@ function buildDiffLines(_rightWidth: number): DiffLine[] {
         }
 
         // Find hunks for this file
-        const fileHunks = state.hunks.filter(
-            h => h.file === file.path && h.gitStatus === file.category
-        );
+        const fileHunks = hunksForKey(key);
 
         if (fileHunks.length === 0) {
             if (file.status === 'R' && file.origPath) {
@@ -2647,9 +2703,7 @@ function jumpToFile(file: FileEntry): void {
     // (see `applyFolds`) and their hunk headers are still in the stream,
     // so the Nth counted hunk was not the Nth row — clicking the sticky
     // header with a collapsed file above landed inside that file instead.
-    const firstHunk = state.hunks.find(
-        h => h.file === file.path && h.gitStatus === file.category
-    );
+    const firstHunk = hunksForKey(key)[0];
     if (firstHunk) {
         const row = state.hunkRowByHunkId[firstHunk.id];
         if (row !== undefined) { jumpDiffCursorToRow(row); return; }
@@ -2781,9 +2835,7 @@ function jumpToComment(commentId: string): void {
     // jumpDiffCursorToRow path is inert when the composite is showing). Switch
     // to the comment's file if needed and rebuild focused on that hunk.
     if (state.centerComposite && cFile) {
-        const fileHunks = state.hunks.filter(
-            h => h.file === hunk.file && (h.gitStatus || 'unstaged') === hunk.gitStatus
-        );
+        const fileHunks = hunksForKey(fileKeyOf(hunk.file, hunk.gitStatus || 'unstaged'));
         const idx = Math.max(0, fileHunks.findIndex(h => h.id === hunk.id));
         state.filesCurrentKey = fileKey(cFile);
         state.commentsHighlightId = commentId;
@@ -3784,9 +3836,7 @@ async function getHunkAtCursor(): Promise<Hunk | null> {
         // Fallback: the focused file's first hunk.
         const file = state.files.find(f => fileKey(f) === cc.fileKey);
         if (file) {
-            return state.hunks.find(
-                h => h.file === file.path && (h.gitStatus || 'unstaged') === file.category
-            ) || null;
+            return hunksForFile(file)[0] || null;
         }
         return null;
     }
@@ -3803,9 +3853,7 @@ function getHunkAtDiffCursor(): Hunk | null {
     // Fallback: first hunk for the file under the cursor (if any).
     const cur = currentFileFromCursor();
     if (!cur) return null;
-    return state.hunks.find(
-        h => h.file === cur.path && h.gitStatus === cur.category
-    ) || null;
+    return hunksForFile(cur)[0] || null;
 }
 
 /**
@@ -4560,7 +4608,7 @@ function contentToEntries(content: string): TextPropertyEntry[] {
     return text.length > 0 ? [{ text }] : [];
 }
 
-function compositeHunksForFile(fileHunks: Hunk[]): TsCompositeHunk[] {
+function compositeHunksForFile(fileHunks: readonly Hunk[]): TsCompositeHunk[] {
     return fileHunks.map(fh => {
         let oldCount = 0, newCount = 0;
         for (const line of fh.lines) {
@@ -4597,8 +4645,7 @@ function closeComposite(cc: { compositeBufId: number; oldBufId: number; newBufId
  *  whole-file buffers and an alignment pass are worth skipping when none
  *  of this has moved — and worth redoing the moment any of it has. */
 function compositeSignature(file: FileEntry): string {
-    const ranges = state.hunks
-        .filter(h => h.file === file.path && (h.gitStatus || 'unstaged') === file.category)
+    const ranges = hunksForFile(file)
         .map(h => `${h.oldRange.start}-${h.oldRange.end}:${h.range.start}-${h.range.end}`)
         .join(',');
     // The comment count is in the pane label, so it is part of what was built.
@@ -4723,9 +4770,7 @@ async function buildCenterComposite(focusHunkIdx: number = 0): Promise<void> {
     const { oldContent, newContent, absPath } = await fetchFileVersions(file);
     if (token !== state.centerBuildToken || state.groupId === null) return;
 
-    const fileHunks = state.hunks.filter(
-        h => h.file === file.path && (h.gitStatus || 'unstaged') === file.category
-    );
+    const fileHunks = hunksForFile(file);
     const compositeHunks = compositeHunksForFile(fileHunks);
 
     const oldEntries: TextPropertyEntry[] = contentToEntries(oldContent);
@@ -5155,9 +5200,7 @@ function anchorHunk(anchor: ReviewAnchor): Hunk | undefined {
 function anchorHunkIndex(anchor: ReviewAnchor): number {
     const file = state.files.find(f => fileKey(f) === anchor.fileKey);
     if (!file) return 0;
-    const fileHunks = state.hunks.filter(
-        h => h.file === file.path && (h.gitStatus || 'unstaged') === file.category
-    );
+    const fileHunks = hunksForFile(file);
     // The hunk the anchor names outright wins: a header row has no line
     // to place inside a range.
     if (anchor.hunkId !== undefined) {
@@ -5248,8 +5291,7 @@ function nearestHunkRowToAnchor(anchor: ReviewAnchor): number | undefined {
     const useOld = anchor.lineType === 'remove';
     let before: Hunk | undefined;
     let after: Hunk | undefined;
-    for (const h of state.hunks) {
-        if (h.file !== file.path || (h.gitStatus || 'unstaged') !== file.category) continue;
+    for (const h of hunksForFile(file)) {
         const start = useOld ? h.oldRange.start : h.range.start;
         const end = useOld ? h.oldRange.end : h.range.end;
         if (end <= line) before = h;              // hunks come in file order
@@ -6072,9 +6114,7 @@ async function compositeHunkNav(dir: 1 | -1): Promise<void> {
     const cc = state.centerComposite;
     if (cc) {
         const file = state.files.find(f => fileKey(f) === cc.fileKey);
-        const fileHunks = file ? state.hunks.filter(
-            h => h.file === file.path && (h.gitStatus || 'unstaged') === file.category
-        ) : [];
+        const fileHunks = file ? hunksForFile(file) : NO_HUNKS;
         const target = state.compositeHunkIdx + dir;
         if (target >= 0 && target < fileHunks.length) {
             // Within the focused file: step the composite hunk cursor and
@@ -6164,9 +6204,7 @@ async function getCompositeLineInfo(): Promise<PendingCommentInfo | null> {
         (newLine !== undefined && oldLine === undefined) ? 'add'
             : (oldLine !== undefined && newLine === undefined) ? 'remove'
                 : 'context';
-    const fileHunks = state.hunks.filter(
-        h => h.file === file.path && (h.gitStatus || 'unstaged') === file.category
-    );
+    const fileHunks = hunksForFile(file);
     let hunk = fileHunks.find(h =>
         (newLine !== undefined && newLine >= h.range.start && newLine <= h.range.end) ||
         (oldLine !== undefined && oldLine >= h.oldRange.start && oldLine <= h.oldRange.end)
