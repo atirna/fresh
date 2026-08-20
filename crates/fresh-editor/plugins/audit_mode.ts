@@ -438,6 +438,36 @@ const STYLE_LINE_NUM_FG: OverlayColorSpec = "editor.line_number_fg";
 // gutter (extremely rare in review-diff context).
 const LINE_NUM_W = 4;
 
+/**
+ * Calculate UTF-8 byte length of a string manually since TextEncoder is not
+ * available.
+ *
+ * The values are byte offsets the host places overlays at, so the slow path
+ * has to stay exact — including the surrogate pair, which is one code point
+ * and four bytes, not two characters of three.
+ *
+ * An all-ASCII string has a byte length equal to its character length, and
+ * diff text is overwhelmingly ASCII, so the interpreted per-character loop
+ * is skipped whenever a single engine-level regex scan says it can be. The
+ * regex is non-global on purpose: a `/g/` one carries `lastIndex` between
+ * calls and would start half its scans in the middle of the string.
+ */
+const NON_ASCII = /[^\x00-\x7F]/;
+
+function getByteLength(str: string): number {
+    if (!NON_ASCII.test(str)) return str.length;
+    let s = 0;
+    for (let i = 0; i < str.length; i++) {
+        const code = str.charCodeAt(i);
+        if (code <= 0x7f) s += 1;
+        else if (code <= 0x7ff) s += 2;
+        else if (code >= 0xd800 && code <= 0xdfff) {
+            s += 4; i++;
+        } else s += 3;
+    }
+    return s;
+}
+
 /** Disclosure triangles for collapsible headers (sections, files,
  *  hunks). The buffer text always carries `GLYPH_EXPANDED`; `applyFolds`
  *  overlays `GLYPH_COLLAPSED` as a replacement conceal while the body is
@@ -455,23 +485,6 @@ function lineNumPrefix(oldNum: number | undefined, newNum: number | undefined): 
     const o = oldNum !== undefined ? String(oldNum).padStart(LINE_NUM_W) : ' '.repeat(LINE_NUM_W);
     const n = newNum !== undefined ? String(newNum).padStart(LINE_NUM_W) : ' '.repeat(LINE_NUM_W);
     return ` ${o} ${n} `;
-}
-
-
-/**
- * Calculate UTF-8 byte length of a string manually since TextEncoder is not available
- */
-function getByteLength(str: string): number {
-    let s = 0;
-    for (let i = 0; i < str.length; i++) {
-        const code = str.charCodeAt(i);
-        if (code <= 0x7f) s += 1;
-        else if (code <= 0x7ff) s += 2;
-        else if (code >= 0xd800 && code <= 0xdfff) {
-            s += 4; i++;
-        } else s += 3;
-    }
-    return s;
 }
 
 // --- Persistence ---
