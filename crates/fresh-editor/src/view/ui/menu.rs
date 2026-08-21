@@ -33,6 +33,14 @@ pub struct MenuLayout {
     pub dropdown_box: Option<Rect>,
     /// Each expanded submenu level's full bordered box: (depth, area).
     pub submenu_boxes: Vec<(usize, Rect)>,
+    /// The theme-key provenance the walk recorded, for the theme inspector.
+    ///
+    /// The walk's third payload, beside the geometry and the description. All
+    /// three come out of one pass because they are one derivation of the menu
+    /// — the alternative, which this replaced, was three invocations from
+    /// three different bar rectangles held together by a `debug_assert_eq!`
+    /// that release builds compile out.
+    pub theme_runs: Vec<crate::app::types::ThemeRun>,
     /// The bar row as the migration shell describes it: its labels, cut into
     /// themed runs. Same provenance as `shell_dropdowns` below — the walk that
     /// decides each label's rectangle also says what it reads and how it looks.
@@ -226,6 +234,7 @@ impl MenuLayout {
             menu_areas: Vec::new(),
             item_areas: Vec::new(),
             submenu_areas: Vec::new(),
+            theme_runs: Vec::new(),
             shell_bar: crate::view::shell::menu::MenuBar::default(),
             shell_dropdowns: Vec::new(),
             bar_area,
@@ -649,9 +658,9 @@ impl MenuRenderer {
         keybindings: &crate::input::keybindings::KeybindingResolver,
         hover_target: Option<&crate::app::HoverTarget>,
         mnemonics_enabled: bool,
-        rec: Option<&mut CellThemeRecorder>,
     ) -> MenuLayout {
-        Self::render_impl(
+        let mut runs: Vec<crate::app::types::ThemeRun> = Vec::new();
+        let mut layout = Self::render_impl(
             screen,
             area,
             all_menus,
@@ -659,8 +668,10 @@ impl MenuRenderer {
             keybindings,
             hover_target,
             mnemonics_enabled,
-            rec,
-        )
+            Some(&mut CellThemeRecorder::new(&mut runs)),
+        );
+        layout.theme_runs = runs;
+        layout
     }
 
     #[allow(clippy::too_many_arguments)]
