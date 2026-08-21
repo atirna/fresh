@@ -12,18 +12,18 @@
 //! `OUTSIDE_POINTER` dismissal is what the full-frame
 //! `chrome:menu_close_guard` box used to be.
 //!
-//! **Placement has not migrated**, and it is not the same debt the context
-//! menu's was. There `clamped_position` was a second derivation of the same
-//! arithmetic, and deleting it was pure subtraction. Here `fit_dropdown_area`
-//! runs once and feeds all three consumers — this description, the web
-//! `Scene`'s boxes, and the theme recorder — so there is no duplicate
-//! authority, only a placement the editor performs that the layer could
-//! declare.
+//! **Placement has not migrated**, and the reason is upstream of placement:
+//! this chain has no content model in the tree to place. `DropdownLevel`
+//! carries `x`, `y` and `width` — a rect on a description type, which the
+//! design doc names as its own stop sign — plus strings already fitted to a
+//! width nothing measured. `Place::RightOf` places against a *measured* box,
+//! so it is not merely unused here, it is not yet expressible.
 //!
-//! Moving it needs something the library does not have. A submenu aligns its
-//! *first item* with the parent row it opened from, which puts its box one row
-//! above that row; `Anchor::Node` plus `Place::RightOf` can name the parent
-//! but not the offset. See §6.2 of the migration doc.
+//! An earlier version of this note claimed `Anchor::Node` could not express
+//! the one-row rise a submenu's border needs. It can: anchor to the row
+//! *above*. That is not the blocker; the content model is. See §6.2 of the
+//! migration doc for the order the pieces have to move in, and for the
+//! measured divergence between this walk's flip rule and `Fit::FLIP`.
 
 use std::rc::Rc;
 
