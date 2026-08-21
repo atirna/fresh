@@ -72,7 +72,6 @@ pub mod review_diff_hunk_parity;
 pub mod review_diff_layout_bench;
 pub mod review_diff_line_staging;
 pub mod review_diff_non_ascii_offsets;
-pub mod review_diff_progressive_mount;
 pub mod review_diff_row_highlighting;
 pub mod review_diff_ux_bugs;
 pub mod set_split_ratio_leaf;

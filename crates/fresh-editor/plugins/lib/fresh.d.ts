@@ -4451,12 +4451,6 @@ interface EditorAPI {
 	*/
 	setPanelContent(groupId: number, panelName: string, entriesArr: Record<string, unknown>[]): boolean;
 	/**
-	* Append entries after a panel's current content, keeping what is already
-	* mounted — its text, properties and overlays — in place. Lets a large
-	* panel be built in pieces without the reader losing scroll position.
-	*/
-	appendPanelContent(groupId: number, panelName: string, entriesArr: Record<string, unknown>[]): boolean;
-	/**
 	* Close a buffer group
 	*/
 	closeBufferGroup(groupId: number): boolean;

@@ -122,19 +122,10 @@ impl TextPropertyManager {
     /// Returns the assembled text, the property manager, and any collected
     /// inline overlay specifications (with absolute byte offsets).
     pub fn from_entries(entries: Vec<TextPropertyEntry>) -> (String, Self, Vec<CollectedOverlay>) {
-        Self::from_entries_at(entries, 0)
-    }
-
-    /// Like [`Self::from_entries`], but numbering offsets from `base` so the
-    /// result can be appended after existing content.
-    pub fn from_entries_at(
-        entries: Vec<TextPropertyEntry>,
-        base: usize,
-    ) -> (String, Self, Vec<CollectedOverlay>) {
         let mut text = String::new();
         let mut properties: Vec<TextProperty> = Vec::new();
         let mut collected_overlays = Vec::new();
-        let mut offset = base;
+        let mut offset = 0;
 
         for entry in entries {
             let start = offset;
