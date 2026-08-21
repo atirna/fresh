@@ -14,13 +14,17 @@ contexts:
   main:
     - include: content-rows
   content-rows:
-    # Gutter is ` OOOO NNNN ` — two right-aligned fixed-width fields.
-    # Matching its exact width is what keeps a context row whose text
-    # happens to start with digits and a `+` from reading as an addition.
-    - match: '^[ \d]{11}\+.*$'
+    # Gutter is ` OOOO NNNN ` — two right-aligned fixed-width fields,
+    # 11 columns in total (`LINE_NUM_W` is 4 in audit_mode.ts). Matching
+    # its exact width is what keeps a context row whose text happens to
+    # begin with digits and a `+` from reading as an addition, so the
+    # plugin elides a number too wide for its column rather than letting
+    # the gutter grow — `…` is that elision mark and belongs to the
+    # gutter, not to the row's text.
+    - match: '^[ \d…]{11}\+.*$'
       scope: markup.inserted.freshreview
-    - match: '^[ \d]{11}-.*$'
+    - match: '^[ \d…]{11}-.*$'
       scope: markup.deleted.freshreview
     # Context row: no background wash, so the gutter alone is dimmed.
-    - match: '^[ \d]{11}(?=[^\d])'
+    - match: '^[ \d…]{11}(?=[^\d])'
       scope: comment.line.gutter.freshreview

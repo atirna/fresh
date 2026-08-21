@@ -91,6 +91,12 @@ fn repo_with_a_modification_and_an_addition() -> GitTestRepo {
 }
 
 fn open_review(repo: &GitTestRepo) -> EditorTestHarness {
+    open_review_showing(repo, PURE_ADD)
+}
+
+/// Open the review and wait until `marker` — a row the fixture is known to
+/// put on the first screen — has rendered.
+fn open_review_showing(repo: &GitTestRepo, marker: &str) -> EditorTestHarness {
     let mut harness = harness_with_highlighting(repo.path.clone());
     harness.render().unwrap();
     harness.run_palette_command("Review Diff").unwrap();
@@ -102,7 +108,7 @@ fn open_review(repo: &GitTestRepo) -> EditorTestHarness {
         })
         .unwrap();
     harness
-        .wait_until(|h| h.screen_to_string().contains(PURE_ADD))
+        .wait_until(|h| h.screen_to_string().contains(marker))
         .unwrap();
     harness.wait_for_async_quiescence(3).unwrap();
     harness
@@ -201,4 +207,80 @@ fn the_add_row_wash_reaches_the_pane_edge() {
              row: {text:?}\nScreen:\n{screen}",
         );
     }
+}
+
+/// A line number wider than its gutter column must not cost the row its
+/// colour.
+///
+/// The grammar recognises a content row by the gutter's exact width, and
+/// nothing in either language checks that the plugin still produces that
+/// width — `String.padStart` widens rather than truncates, so a file long
+/// enough for five-digit line numbers used to push the marker out of
+/// position and drop every row of that file through to unscoped. The
+/// symptom is a diff that renders as plain text with no add/remove
+/// backgrounds at all, in exactly the big generated files where a reader
+/// is least likely to question it.
+// TODO: git command output differs on Windows; the other review tests skip it.
+#[test]
+#[cfg_attr(target_os = "windows", ignore)]
+fn review_line_numbers_past_the_gutter_width_keep_their_wash() {
+    /// Comfortably past 9999, so both columns need eliding.
+    const CHANGE_AT: usize = 12_000;
+    const TOTAL: usize = CHANGE_AT + 40;
+    const DEEP_ADD: &str = "DEEP ADDED ROW";
+    const DEEP_CTX: &str = "DEEP CONTEXT ROW";
+
+    let repo = GitTestRepo::new();
+    setup(&repo);
+    let body = |changed: bool| {
+        (0..TOTAL)
+            .map(|l| {
+                if l == CHANGE_AT {
+                    if changed {
+                        format!("fn l{l}() {{ /* {DEEP_ADD} */ }}")
+                    } else {
+                        format!("fn l{l}() {{ /* was here */ }}")
+                    }
+                } else if l == CHANGE_AT + 2 {
+                    format!("fn l{l}() {{ /* {DEEP_CTX} */ }}")
+                } else {
+                    format!("fn l{l}() {{}}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    repo.create_file("src/long.rs", &body(false));
+    repo.git_add_all();
+    repo.git_commit("baseline");
+    repo.create_file("src/long.rs", &body(true));
+
+    let harness = open_review_showing(&repo, DEEP_ADD);
+    let screen = harness.screen_to_string();
+    let added_y = row_containing(&harness, DEEP_ADD)
+        .unwrap_or_else(|| panic!("the deep added row never rendered.\nScreen:\n{screen}"));
+    let ctx_y = row_containing(&harness, DEEP_CTX)
+        .unwrap_or_else(|| panic!("the deep context row never rendered.\nScreen:\n{screen}"));
+
+    // Same shape as the shallow case: one background edge to edge, and
+    // an added row that does not look like context.
+    let add_bgs = backgrounds(&harness, added_y);
+    assert_eq!(
+        add_bgs.len(),
+        1,
+        "the added row at line {CHANGE_AT} should carry a single background \
+         across its width, got {add_bgs:?}\nrow: {:?}\nScreen:\n{screen}",
+        row_text(&harness, added_y),
+    );
+    let add_bg = add_bgs.into_iter().next().unwrap();
+    let ctx_bg = backgrounds(&harness, ctx_y).into_iter().next().unwrap();
+    assert_ne!(
+        add_bg,
+        ctx_bg,
+        "the added row at line {CHANGE_AT} is painted like context, so its \
+         gutter no longer matches the width the grammar anchors on\n\
+         added row:   {:?}\ncontext row: {:?}\nScreen:\n{screen}",
+        row_text(&harness, added_y),
+        row_text(&harness, ctx_y),
+    );
 }

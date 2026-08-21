@@ -478,13 +478,34 @@ const GLYPH_EXPANDED = '▾';
 const GLYPH_COLLAPSED = '▸';
 const TRIANGLE_BYTES = getByteLength(GLYPH_EXPANDED);
 
+/** Marks a line number too wide for its column, keeping the low-order
+ *  digits — those are what locate a line on screen. */
+const LINE_NUM_ELIDE = '…';
+
+/**
+ * One line-number column: `num` right-aligned in `LINE_NUM_W`, blank when
+ * absent, elided from the left when it does not fit.
+ *
+ * The width is load-bearing, not just cosmetic. The review grammar
+ * recognises a content row by the exact width of this gutter — that is
+ * what stops a context row whose text begins with digits and a `+` from
+ * reading as an addition — so a column that grew to fit a wide number
+ * would leave every row of that file unstyled instead of merely
+ * misaligned. `review_line_numbers_past_the_gutter_width_keep_their_wash`
+ * drives a file long enough to need this.
+ */
+function lineNumCell(num: number | undefined): string {
+    if (num === undefined) return ' '.repeat(LINE_NUM_W);
+    const s = String(num);
+    if (s.length <= LINE_NUM_W) return s.padStart(LINE_NUM_W);
+    return LINE_NUM_ELIDE + s.slice(s.length - (LINE_NUM_W - 1));
+}
+
 /** Format the per-row "OLD  NEW " prefix (with trailing space). Either
  *  side passes `undefined` for blank — removed lines blank the new
  *  column, added lines blank the old column. */
 function lineNumPrefix(oldNum: number | undefined, newNum: number | undefined): string {
-    const o = oldNum !== undefined ? String(oldNum).padStart(LINE_NUM_W) : ' '.repeat(LINE_NUM_W);
-    const n = newNum !== undefined ? String(newNum).padStart(LINE_NUM_W) : ' '.repeat(LINE_NUM_W);
-    return ` ${o} ${n} `;
+    return ` ${lineNumCell(oldNum)} ${lineNumCell(newNum)} `;
 }
 
 // --- Persistence ---
