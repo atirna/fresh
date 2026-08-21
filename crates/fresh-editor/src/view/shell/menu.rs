@@ -139,20 +139,30 @@ pub struct DropdownLevel {
     pub rows: Vec<DropdownRow>,
 }
 
-/// The open chain, outermost level first.
+/// The open chain, **nested**: each level is declared inside the one it opened
+/// from, not beside it.
 ///
-/// Declaration order is paint order, so a submenu lands on top of the level it
-/// opened from — which is what the old loop achieved by painting in the same
-/// order, and what a z-rank would otherwise have to state.
-pub fn dropdown_chain(levels: &[DropdownLevel]) -> Vec<Node<UiMsg>> {
-    levels
-        .iter()
-        .enumerate()
-        .map(|(depth, l)| dropdown(depth, l))
-        .collect()
+/// Nesting is not a stylistic choice, it is what makes the chain one surface.
+/// `OUTSIDE_POINTER` is an ancestor test — a press is "outside" a layer when
+/// the layer is not on the hit path — so with the levels declared as siblings a
+/// press inside a *submenu* is outside the level above it, and the outermost
+/// level dismisses the whole chain. Dismissal lands on the press, so by the
+/// release there is no open menu left and the row's own click finds nothing to
+/// activate: clicking a submenu item with the mouse did nothing at all.
+///
+/// Declaring the child inside its parent's subtree puts every level on the
+/// path, so a press anywhere in the chain is inside all of it. Paint order is
+/// unchanged — `resolve_layers` walks a worklist that grows as it goes, so a
+/// nested layer resolves after its parent and paints after it too.
+pub fn dropdown_chain(levels: &[DropdownLevel]) -> Option<Node<UiMsg>> {
+    let mut inner: Option<Node<UiMsg>> = None;
+    for (depth, level) in levels.iter().enumerate().rev() {
+        inner = Some(dropdown(depth, level, inner.take()));
+    }
+    inner
 }
 
-fn dropdown(depth: usize, level: &DropdownLevel) -> Node<UiMsg> {
+fn dropdown(depth: usize, level: &DropdownLevel, nested: Option<Node<UiMsg>>) -> Node<UiMsg> {
     let rows: Vec<Node<UiMsg>> = level
         .rows
         .iter()
@@ -191,16 +201,23 @@ fn dropdown(depth: usize, level: &DropdownLevel) -> Node<UiMsg> {
         // cells.
         .anchor(Anchor::Point(level.x, level.y))
         .child(
-            gesture(
-                col()
+            gesture({
+                let mut b = col()
                     .border()
                     // Border ink over the dropdown ground; the fill draws
                     // spaces, so only the background of this key reaches the
                     // eye there.
                     .theme("menu.dropdown")
                     .w(Sizing::Cells(level.width))
-                    .children(rows),
-            )
+                    .children(rows);
+                // The level this one opened, inside it. A layer is out of
+                // flow, so it takes none of this box's space — it is here for
+                // ancestry, which is what dismissal tests.
+                if let Some(child) = nested {
+                    b = b.child(child);
+                }
+                b
+            })
             // An inert cell of the box — its border — closes the menu, which
             // is what a click inside the dropdown that hit no item always did.
             .on_click(|_| UiMsg::Ui(UiFact::CloseMenu)),
@@ -849,6 +866,119 @@ mod input_tests {
                 .any(|m| matches!(m, UiMsg::Ui(UiFact::MenuHover(None)))),
             "got {:?}",
             d.msgs
+        );
+    }
+}
+
+#[cfg(test)]
+mod submenu_regression {
+    use super::*;
+    use crate::view::shell::frame::{frame_tree, Frame};
+    use fresh_ui::{Input, Mods, MouseButton, Point, Size, Ui};
+
+    /// A two-level chain: File's dropdown at (0,1), its submenu to the right.
+    fn open_chain() -> Ui<UiMsg> {
+        let row = |t: &str| DropdownRow {
+            text: t.to_string(),
+            theme: "menu.item",
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            frame_tree(Frame {
+                dropdowns: vec![
+                    DropdownLevel {
+                        x: 0,
+                        y: 1,
+                        width: 12,
+                        rows: vec![row(" New      "), row(" More    >")],
+                    },
+                    DropdownLevel {
+                        x: 11,
+                        y: 2,
+                        width: 12,
+                        rows: vec![row(" Deep     ")],
+                    },
+                ],
+                ..Frame::default()
+            }),
+            Size::new(40, 12),
+        );
+        ui
+    }
+
+    fn facts(msgs: Vec<UiMsg>) -> Vec<UiFact> {
+        msgs.into_iter()
+            .map(|m| match m {
+                UiMsg::Ui(f) => f,
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect()
+    }
+
+    fn click(ui: &mut Ui<UiMsg>, x: i32, y: i32) -> Vec<UiFact> {
+        let pos = Point::new(x, y);
+        let mut out = ui
+            .dispatch(Input::Press {
+                pos,
+                button: MouseButton::Left,
+                mods: Mods::NONE,
+            })
+            .msgs;
+        out.extend(
+            ui.dispatch(Input::Release {
+                pos,
+                button: MouseButton::Left,
+                mods: Mods::NONE,
+            })
+            .msgs,
+        );
+        facts(out)
+    }
+
+    /// **Clicking a submenu row activates it, and does not close the chain.**
+    ///
+    /// The levels were declared as sibling layers, and `OUTSIDE_POINTER` is an
+    /// ancestor test — so a press inside the *submenu* counted as outside the
+    /// level above it and the outermost layer dismissed the lot. Dismissal
+    /// lands on the press, so by the release there was no open menu and the
+    /// row's own click found nothing to activate: clicking a submenu item with
+    /// the mouse did nothing at all. Every submenu test was keyboard-driven,
+    /// so nothing caught it.
+    #[test]
+    fn clicking_a_submenu_row_activates_it_and_keeps_the_chain_open() {
+        let mut ui = open_chain();
+        // The depth-1 box spans x 11..23, y 2..5; its one row sits at y 3.
+        assert_eq!(
+            click(&mut ui, 14, 3),
+            vec![UiFact::MenuItemClick { depth: 1, index: 0 }]
+        );
+    }
+
+    /// The parent level still answers its own rows, now that its child is
+    /// declared inside it.
+    #[test]
+    fn clicking_a_parent_row_still_activates_that_row() {
+        let mut ui = open_chain();
+        assert_eq!(
+            click(&mut ui, 4, 2),
+            vec![UiFact::MenuItemClick { depth: 0, index: 0 }]
+        );
+    }
+
+    /// **Nesting must not cost the close guard.** A press genuinely outside
+    /// the whole chain still dismisses it — that is the outermost layer's
+    /// `OUTSIDE_POINTER`, and nesting only changed what counts as inside.
+    #[test]
+    fn clicking_outside_the_whole_chain_still_dismisses() {
+        let mut ui = open_chain();
+        let press = ui.dispatch(Input::Press {
+            pos: Point::new(35, 10),
+            button: MouseButton::Left,
+            mods: Mods::NONE,
+        });
+        assert!(
+            facts(press.msgs).contains(&UiFact::CloseMenu),
+            "outside the chain is still outside"
         );
     }
 }
