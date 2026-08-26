@@ -80,6 +80,13 @@ let opening = false;
  *  auto-opened screen nobody touched steps aside when a real file
  *  opens; one the reader engaged with is theirs to close. */
 let engaged = false;
+/** Set when the reader closes the page — by Escape, by the tab's `×`,
+ *  by `Ctrl+W`. The ambient open paths then stay quiet for the rest of
+ *  the session: closing this screen must never be undone by the very
+ *  `buffer_closed` event the close itself produced, and "I closed it"
+ *  is an answer, not a question to ask again. The `Welcome` command
+ *  clears it — asking for the page back is the other answer. */
+let dismissed = false;
 
 const folded = new Set<string>();
 
@@ -835,7 +842,8 @@ async function openWelcome(force: boolean): Promise<void> {
     return;
   }
   if (opening) return;
-  if (!force && !showOnStartup()) return;
+  if (force) dismissed = false;
+  if (!force && (dismissed || !showOnStartup())) return;
   opening = true;
   try {
     const res = await editor.createVirtualBuffer({
@@ -872,9 +880,13 @@ async function openWelcome(force: boolean): Promise<void> {
   opening = false;
 }
 
-function closeWelcome(): void {
+/** `dismiss` distinguishes the reader closing the page (stay away)
+ *  from the page stepping aside for a file it had nothing to do with
+ *  (stay available). */
+function closeWelcome(dismiss: boolean): void {
   if (bufferId === null) return;
   const id = bufferId;
+  if (dismiss) dismissed = true;
   panel?.unmount();
   panel = null;
   bufferId = null;
@@ -894,9 +906,12 @@ registerHandler("welcomeOnReady", async () => {
   if (!hasRealFiles()) await openWelcome(false);
 });
 registerHandler("welcomeOnBufferClosed", async (e: { buffer_id: number }) => {
+  // The tab's `×` / `Ctrl+W` route: the buffer is gone and we were not
+  // the ones who asked, so treat it as the reader dismissing the page.
   if (bufferId !== null && e.buffer_id === bufferId) {
     panel = null;
     bufferId = null;
+    dismissed = true;
     return;
   }
   if (!hasRealFiles()) await openWelcome(false);
@@ -905,7 +920,7 @@ registerHandler("welcomeOnAfterFileOpen", (_e: { buffer_id: number; path: string
   // An auto-opened screen nobody touched was ambient — step aside. One
   // the reader engaged with is a document they are reading; leave it.
   if (bufferId === null || engaged) return;
-  closeWelcome();
+  closeWelcome(false);
 });
 // `viewport_changed` fires on scroll and on every height change as
 // well as on resize, and a repaint replaces the buffer's whole
@@ -1000,7 +1015,7 @@ registerHandler("welcome_close", () => {
     render();
     return;
   }
-  closeWelcome();
+  closeWelcome(true);
 });
 
 // A mode that declares `allowTextInput` owns the keyboard: the host
