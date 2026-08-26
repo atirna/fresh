@@ -5,7 +5,6 @@ import {
   divider,
   flexSpacer,
   labeledSection,
-  list,
   raw,
   row,
   spacer,
@@ -114,7 +113,7 @@ let workspaces: Workspace[] = [];
 let lastFocusedWidget = "";
 
 function finderFocused(): boolean {
-  return lastFocusedWidget === "finderField" || lastFocusedWidget === "finderList";
+  return lastFocusedWidget === "finderField";
 }
 
 /** Buffer line of each level banner, resolved after each render by
@@ -150,7 +149,7 @@ function cardForWidget(k: string): string | null {
   if (k.startsWith("fold:")) return k.slice(5);
   if (k.startsWith("theme:")) return "themes";
   if (k.startsWith("ws:")) return "orch";
-  if (k === "finderField" || k === "finderList") return "finder";
+  if (k === "finderField") return "finder";
   if (k === "act_review" || k === "act_gitlog") return "git";
   if (k.startsWith("act_ws_")) return "orch";
   return null;
@@ -368,19 +367,26 @@ function finderCard(): WidgetSpec {
     } else if (finderHits.length === 0) {
       rows.push(plain("  no match", C.muted));
     } else {
-      rows.push(
-        list({
-          items: finderHits.slice(0, 60).map((h, i) =>
-            styledRow([
-              { text: i === finderIndex ? " ▸ " : "   ", style: { fg: C.accent } },
-              { text: h.path, style: { fg: i === finderIndex ? C.value : C.muted } },
-            ])
-          ),
-          selectedIndex: finderIndex,
-          visibleRows: Math.min(6, finderHits.length),
-          key: "finderList",
-        }),
-      );
+      // Rendered as rows rather than a List widget: a List's items are
+      // emitted at their natural width and the enclosing section's
+      // right border cannot be reached from inside one, so every row
+      // ended in a `…` clip marker where the frame should be. `raw`
+      // rows are padded to the section by the host, so the card stays a
+      // card. Selection is ours to track either way — `finderIndex` was
+      // already the model.
+      for (let i = 0; i < Math.min(finderHits.length, 6); i++) {
+        const h = finderHits[i];
+        const on = i === finderIndex;
+        rows.push(
+          line([
+            { text: on ? "  ▸ " : "    ", style: { fg: C.accent } },
+            { text: h.path, style: { fg: on ? C.value : C.muted } },
+          ]),
+        );
+      }
+      if (finderHits.length > 6) {
+        rows.push(plain(`    … and ${finderHits.length - 6} more`, C.muted));
+      }
     }
     rows.push(blank());
     rows.push(
@@ -975,16 +981,31 @@ registerHandler("welcome_jump_top", () => {
 });
 registerHandler("welcome_tab", () => dispatch(widgetKey("Tab")));
 registerHandler("welcome_shift_tab", () => dispatch(widgetKey("Shift+Tab")));
-registerHandler("welcome_enter", () => dispatch(widgetKey("Enter")));
+registerHandler("welcome_enter", () => {
+  engaged = true;
+  // A single-line Text widget treats Enter as advance-focus, so a
+  // finder that only forwarded the key would move on rather than open
+  // what the reader picked. Opening is this field's whole purpose.
+  if (finderFocused()) {
+    openFinderHit(finderIndex);
+    return;
+  }
+  dispatch(widgetKey("Enter"));
+});
 registerHandler("welcome_space", () => dispatch(widgetKey("Space")));
+function moveFinder(delta: number): void {
+  if (finderHits.length === 0) return;
+  finderIndex = (finderIndex + delta + finderHits.length) % finderHits.length;
+  render();
+}
 registerHandler("welcome_up", () => {
   engaged = true;
-  if (finderFocused()) dispatch(widgetKey("Up"));
+  if (finderFocused()) moveFinder(-1);
   else editor.executeAction("scroll_up");
 });
 registerHandler("welcome_down", () => {
   engaged = true;
-  if (finderFocused()) dispatch(widgetKey("Down"));
+  if (finderFocused()) moveFinder(1);
   else editor.executeAction("scroll_down");
 });
 /** Page keys scroll the view, they do not move a cursor. `move_page_*`
@@ -1195,15 +1216,6 @@ editor.on("widget_event", (args) => {
     return;
   }
 
-  if (args.event_type === "select" && k === "finderList") {
-    const payload = args.payload as { index?: number; via?: string } | undefined;
-    if (typeof payload?.index !== "number") return;
-    finderIndex = payload.index;
-    if (payload.via === "click") openFinderHit(finderIndex);
-    else render();
-    return;
-  }
-
   if (args.event_type === "toggle" && k === "startupToggle") {
     const payload = args.payload as { checked?: boolean } | undefined;
     const next = payload?.checked === true;
@@ -1213,7 +1225,7 @@ editor.on("widget_event", (args) => {
   }
 
   if (args.event_type === "activate") {
-    if (k === "finderList" || k === "finderField") {
+    if (k === "finderField") {
       openFinderHit(finderIndex);
       return;
     }
