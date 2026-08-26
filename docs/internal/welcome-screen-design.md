@@ -596,7 +596,7 @@ is a widget from `plugins/lib/widgets.ts`; the demos read real data through
 `spawnProcess`, `getAllThemes` / `applyTheme`, and
 `getPluginApi("orchestrator").listWorkspaces()`.
 
-Seven things the wireframes did not know:
+Ten things the wireframes did not know:
 
 1. **A panel repaint replaces the whole buffer, so it parks the viewport at
    line 0.** Fine for a panel that fits its pane; wrong for a document you
@@ -640,6 +640,26 @@ Seven things the wireframes did not know:
 7. **`getAllThemes()` answers with the registry object, not a list.** Its keys
    are the theme names.
 
+8. **Closing the page reopened it.** `closeBuffer` fires `buffer_closed`,
+   which — with no other buffer left — is exactly the condition the ambient
+   open path watches for. Escape, the tab's `×` and `Ctrl+W` were all
+   unclosable. A `dismissed` flag now records that the *reader* closed it and
+   the ambient paths stay quiet for the session; the `Welcome` command clears
+   it. Stepping aside for a file deliberately does not set it — that is the
+   page being polite, not the reader dismissing it. §8's "closing it never
+   reopens it" was a design rule; it needed code.
+
+9. **A `List` inside a `labeledSection` cannot reach the section's right
+   border.** Its items are emitted at their natural width, so every finder
+   result ended in a `…` clip marker exactly where the frame should be — and
+   padding cannot fix it: one column short leaves the border undrawn, one
+   column over draws the marker in its cell. `raw` rows, which the host pads
+   to the enclosing section, do reach it. The results are rows now and the
+   plugin owns the selection, which `finderIndex` already was.
+
+10. **Enter on a single-line `Text` widget is advance-focus**, so a finder
+    that merely forwarded the key moved on instead of opening the pick.
+
 ### Still aspirational
 
 - **The LSP card** shows a real syntax-highlighted Rust sample (a markdown
@@ -655,7 +675,10 @@ Seven things the wireframes did not know:
 
 ### Verified by hand
 
-Driven in tmux at 160×44, 74×40 and 52×30 against a scratch repo: the ladder
+Driven in tmux at 160×44, 74×40 and 52×30, against both a two-file scratch
+repo and this repository (where the workspace-trust modal correctly renders
+over the page and owns the keyboard, and the finder fuzzy-matches the whole
+tracked tree — `wlcscr` finds `welcome_screen.ts`): the ladder
 and jump keys, `/` to the finder, live fuzzy-find over `git ls-files` and
 `Enter` to open a hit, folding by click and by `Enter`, live theme switching
 by click (status bar confirms), the startup toggle flipping and **persisting
