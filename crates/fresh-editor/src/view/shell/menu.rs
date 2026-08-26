@@ -85,9 +85,20 @@ pub fn menu_bar(bar: &MenuBar) -> Node<UiMsg> {
                 // bubbles to every handler on its path, so a label that only
                 // *answered* would be followed by the ground's close and the
                 // menu would open and shut in one gesture.
+                //
+                // Left only, like the pre-migration routing
+                // (`handle_click_menu_bar` was reached from
+                // `MouseEventKind::Down(Left)` alone). Without the guard a
+                // right-click on a label opens its menu *and* claims the
+                // press, so it never reaches the theme inspector's pre-band —
+                // the same regression the search-options row's toggles have,
+                // where issue #2362's inspector test caught it.
                 .on(
                     GestureKind::Press,
                     Rc::new(move |e: &Event| {
+                        if e.button != fresh_ui::MouseButton::Left {
+                            return None;
+                        }
                         e.stop();
                         Some(UiMsg::Ui(UiFact::MenuBarPress { index }))
                     }),
@@ -727,6 +738,35 @@ mod input_tests {
         let mut ui = open_menu(None);
         let got = facts(press(&mut ui, 1, 0).msgs);
         assert_eq!(got, vec![UiFact::MenuBarPress { index: 0 }]);
+    }
+
+    /// A **right** press on a label opens nothing and claims nothing.
+    ///
+    /// The claim is the part that matters. Ctrl+Right-click is the theme
+    /// inspector's gesture and it reaches the inspector through the legacy
+    /// pre-band, which only runs on events the tree declined. Pre-migration
+    /// the bar was routed from `MouseEventKind::Down(Left)` alone, so a right
+    /// press never touched it; without the button guard the migrated label
+    /// opens its menu *and* swallows the inspector.
+    #[test]
+    fn a_right_press_on_a_label_opens_nothing_and_is_not_claimed() {
+        let mut ui = open_menu(None);
+        let got = ui.dispatch(Input::Press {
+            pos: Point::new(1, 0),
+            button: MouseButton::Right,
+            mods: Mods::NONE,
+        });
+        assert!(
+            !got.claimed,
+            "a right press must reach the legacy pre-band, not stop at the bar"
+        );
+        assert!(
+            !got.msgs
+                .iter()
+                .any(|m| matches!(m, UiMsg::Ui(UiFact::MenuBarPress { .. }))),
+            "got {:?}",
+            got.msgs
+        );
     }
 
     /// **The toggle is one gesture, and one dispatch.** Pressing the open

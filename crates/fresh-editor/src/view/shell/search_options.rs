@@ -208,9 +208,18 @@ fn toggle(t: &Toggle, is_hovered: bool) -> Node<UiMsg> {
         // toggled: the old routing ran off `MouseEventKind::Down(Left)`
         // through the chrome walk. `stop()` claims it, which is what the
         // component's `Disposition::Consumed` did.
+        //
+        // **Left only**, and the guard is load-bearing: without it a
+        // Ctrl+Right-click on a toggle both flips the option and *claims* the
+        // press, so it never reaches the theme inspector's pre-band — which
+        // is exactly what the component's `press != Left => Pass` prevented.
+        // Issue #2362's inspector test catches this.
         .on(
             GestureKind::Press,
             Rc::new(move |e: &Event| {
+                if e.button != fresh_ui::MouseButton::Left {
+                    return None;
+                }
                 e.stop();
                 Some(UiMsg::Action(action.clone()))
             }),
@@ -463,6 +472,31 @@ mod tests {
             "expected one toggle action, got {:?}",
             got.msgs
         );
+    }
+
+    /// A **right** press passes straight through: no message, no claim.
+    ///
+    /// The claim is the part that matters. Ctrl+Right-click is the theme
+    /// inspector's gesture, and it reaches the inspector through the legacy
+    /// pre-band — which only runs on events the tree declined. A toggle that
+    /// claimed every button would flip the option *and* swallow the
+    /// inspector, which is what the old component's `press != Left => Pass`
+    /// was for.
+    #[test]
+    fn a_right_press_is_not_a_toggle_and_is_not_claimed() {
+        use fresh_ui::{Input, Mods, MouseButton, Point};
+        let mut ui = laid_out(plain(), 52, 6);
+        let e = ui
+            .find_by_key(&SearchOption::WholeWord.key())
+            .expect("the toggle");
+        let r = ui.rect_of(e);
+        let got = ui.dispatch(Input::Press {
+            pos: Point::new(r.x + 1, r.y),
+            button: MouseButton::Right,
+            mods: Mods::default(),
+        });
+        assert!(!got.claimed, "a right press must reach the legacy pre-band");
+        assert!(got.msgs.is_empty(), "got {:?}", got.msgs);
     }
 
     /// Moving onto a toggle reports where the pointer is; the restyle is the
