@@ -444,9 +444,16 @@ impl Editor {
                 }
             }
             // -- file explorer ---------------------------------------------
-            UiFact::ExplorerRowPress { index } => self.explorer_row_pressed(index),
+            UiFact::ExplorerRowPress { index, clicks } => self.explorer_row_pressed(index, clicks),
             UiFact::ExplorerRowContext { index, x, y } => self.explorer_row_context(index, x, y),
             UiFact::ExplorerClose => self.toggle_file_explorer(),
+            UiFact::ExplorerResizeBegin { x, y } => {
+                let w = self.active_window().file_explorer_width;
+                let st = &mut self.active_window_mut().mouse_state;
+                st.dragging_file_explorer = true;
+                st.drag_start_position = Some((x, y));
+                st.drag_start_explorer_width = Some(w);
+            }
             UiFact::ExplorerScroll { delta, x, y } => {
                 // The surface's wheel, with the surface. Unchanged from the
                 // chrome component's `on_wheel`, including the plugin hook —

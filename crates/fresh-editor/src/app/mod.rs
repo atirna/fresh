@@ -1159,17 +1159,6 @@ pub struct Editor {
     /// before a layer's dismissal closed one. The menu bar's toggle reads it.
     /// See `UiFact::MenuBarPress`.
     pub(crate) shell_menu_open_before: Option<usize>,
-    /// Whether the pointer press now being dispatched is the second of a
-    /// double click.
-    ///
-    /// The same shape as `shell_menu_open_before`, and for the same reason: a
-    /// fact the editor knows *before* the tree runs, which a handler in the
-    /// tree cannot derive. `fresh-ui` has no double-click gesture — a double is
-    /// a fact about time, not about position, and the editor already computes
-    /// it from `previous_click_time` before dispatching. So the tree reports
-    /// the press and the applier reads the timing from here, rather than the
-    /// library growing a clock.
-    pub(crate) shell_double_click: bool,
     /// THE menu walk for the frame being rendered: rectangles, the shell's
     /// description, and the theme-key provenance, all from one pass.
     ///

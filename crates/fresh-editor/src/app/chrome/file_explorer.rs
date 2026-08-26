@@ -9,40 +9,17 @@ use super::{ChromeComponent, ChromePointer, ChromeTreeBuilder, Disposition, Edit
 pub(crate) struct FileExplorer;
 
 impl ChromeComponent for FileExplorer {
-    fn collect(&self, ed: &Editor, t: &mut ChromeTreeBuilder) {
-        // **One column, not the whole panel.** The panel is a native region in
-        // the shell's tree and answers its own pointer; what is left here is
-        // the resize border — the drawn edge on the rightmost column, whose
-        // press starts a drag that `mouse_state.dragging_file_explorer` and
-        // `handle_file_explorer_border_drag` still own. Migrating the press
-        // without the drag would split one gesture across two systems, so the
-        // grip keeps its box until pointer capture takes the whole thing.
+    fn collect(&self, _ed: &Editor, t: &mut ChromeTreeBuilder) {
+        // **Nothing of the panel.** It is a native region in the shell's tree
+        // and answers its own pointer — rows, title, close button and the
+        // right-edge resize grip alike. What is left here is the guard for
+        // clicks that land *outside* it.
         //
-        // The title line's rightmost three cells are the close button's, and
-        // the tree claims them first, so this box never sees them.
-        if let Some(r) = ed.active_layout().file_explorer_area {
-            if r.width > 0 {
-                t.rect(
-                    "chrome:explorer_resize",
-                    100,
-                    ratatui::layout::Rect {
-                        x: r.x + r.width - 1,
-                        y: r.y,
-                        width: 1,
-                        height: r.height,
-                    },
-                );
-            }
-        }
-        // Off-explorer right-click clears its menu (declining guard).
+        // The grip could migrate because `pointer_mode` reaches an ordinary
+        // container: the strip carrying it lets presses through to the rows
+        // beneath, and only the one column absorbs. What it starts is still
+        // the legacy drag; see `view::shell::file_explorer`.
         t.full("chrome:clear_explorer_menu", 90);
-    }
-
-    fn hover(&self, _ed: &mut Editor, bx: &LayoutBox, _col: u16, _row: u16) -> Option<HoverTarget> {
-        // The panel's own hovers — the close button, and each row's status
-        // indicator — are the tree's now, reported through `UiFact::Hover`.
-        // This box is one column wide, so a hit on it *is* the resize grip.
-        (bx.kind == "chrome:explorer_resize").then_some(HoverTarget::FileExplorerBorder)
     }
 
     fn on_hover_change(
@@ -76,22 +53,13 @@ impl ChromeComponent for FileExplorer {
         bx: &LayoutBox,
         ev: &ChromePointer,
     ) -> AnyhowResult<Disposition> {
-        match (ev.press, bx.kind) {
-            (PointerPress::Left, "chrome:explorer_resize") => {
-                ed.active_window_mut().mouse_state.dragging_file_explorer = true;
-                ed.active_window_mut().mouse_state.drag_start_position = Some((ev.col, ev.row));
-                ed.active_window_mut().mouse_state.drag_start_explorer_width =
-                    Some(ed.active_window().file_explorer_width);
-                Ok(Disposition::Consumed)
-            }
-            (PointerPress::Right, "chrome:clear_explorer_menu") => {
-                // Off-explorer right-click dismisses its menu, then routing
-                // continues (act-then-continue guard).
-                ed.active_window_mut().file_explorer_context_menu = None;
-                Ok(Disposition::PassAfter)
-            }
-            _ => Ok(Disposition::Pass),
+        if (ev.press, bx.kind) == (PointerPress::Right, "chrome:clear_explorer_menu") {
+            // Off-explorer right-click dismisses its menu, then routing
+            // continues (act-then-continue guard).
+            ed.active_window_mut().file_explorer_context_menu = None;
+            return Ok(Disposition::PassAfter);
         }
+        Ok(Disposition::Pass)
     }
 }
 
@@ -105,11 +73,11 @@ impl Editor {
     /// and close-button branches are gone because the title line is its own
     /// node in the tree.
     ///
-    /// It also absorbs the old `Double` arm. Whether this press is the second
-    /// of a double is a fact about *time*, which the editor computed before
-    /// dispatching (see [`Editor::shell_double_click`]) — so one fact covers
-    /// both, and the two routes cannot disagree about which row they mean.
-    pub(crate) fn explorer_row_pressed(&mut self, index: usize) {
+    /// It also absorbs the old `Double` arm. `clicks` is which press of a run
+    /// this is, carried on the event from the editor's own multi-click
+    /// detector — so one fact covers both routes, and they cannot disagree
+    /// about which row they mean.
+    pub(crate) fn explorer_row_pressed(&mut self, index: usize, clicks: u8) {
         // Focus first. `open_file_preview` below routes through
         // `set_active_buffer`, which detects "leaving a terminal buffer while
         // terminal_mode is on" and resets `key_context = Normal`
@@ -119,7 +87,7 @@ impl Editor {
         // re-asserted afterwards in case one of `set_active_buffer`'s other
         // branches reset it.
         self.take_focus_for_file_explorer();
-        let double = self.shell_double_click;
+        let double = clicks >= 2;
         // Everything the branches below need, read out under one borrow of
         // the tree so the editor is free again by the time a file is opened.
         let picked = self.file_explorer_mut().and_then(|explorer| {

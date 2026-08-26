@@ -25,13 +25,14 @@
 //! windowing is a model concern (which ancestors are sticky, what the search
 //! filter admits), not a layout one.
 //!
-//! **The resize border.** The panel's rightmost column is a drag handle, and
-//! the drag is still driven by `mouse_state.dragging_file_explorer` and
-//! `handle_file_explorer_border_drag`. Migrating the press without the drag
-//! would split one gesture across two systems, so the border keeps its (now
-//! one-column) chrome box until pointer capture takes the whole drag. This is
-//! the explorer's counterpart to the menu bar's keyboard grab: a named
-//! remainder, not an oversight.
+//! **The drag itself.** The panel's rightmost column is a native grip — it
+//! answers its own press — but what that press starts is still the legacy
+//! drag: `mouse_state.dragging_file_explorer`, motion routed by
+//! `chrome::pointer_grab`, and `handle_file_explorer_border_drag` doing the
+//! arithmetic. Pointer capture replaces all three, and that is its own change.
+//! The grip is here rather than on a chrome box because it *can* be: an
+//! overlay strip whose spacers pass presses through is exactly what
+//! `pointer_mode` on an ordinary container made expressible.
 //!
 //! # Colour
 //!
@@ -45,7 +46,8 @@
 use std::rc::Rc;
 
 use fresh_ui::{
-    col, gesture, row, stack, text, text_runs, Event, GestureKind, Key, Node, Run, Sizing,
+    col, gesture, row, stack, text, text_runs, Event, GestureKind, Key, Node, PointerMode, Run,
+    Sizing,
 };
 
 use crate::app::shell_host::shell_theme::{attrs, pair};
@@ -134,6 +136,10 @@ pub fn close_key() -> Key {
     Key::Str("explorer_close".into())
 }
 
+pub fn grip_key() -> Key {
+    Key::Str("explorer_grip".into())
+}
+
 fn hover_msg(t: Option<HoverTarget>) -> fresh_ui::Handler<UiMsg> {
     Rc::new(move |_: &Event| Some(UiMsg::Ui(UiFact::Hover(t.clone()))))
 }
@@ -151,7 +157,52 @@ fn runs_of(runs: &Runs) -> Vec<Run> {
 /// title too. The strip is one cell high, so it covers the border row and
 /// nothing else; the rows below it stay reachable by the pointer.
 pub fn explorer(e: &Explorer) -> Node<UiMsg> {
-    stack().children([panel(e), title_strip(e)])
+    stack().children([panel(e), overlay(e)])
+}
+
+/// Everything drawn *on* the panel's border: the title, the close button and
+/// the resize grip.
+///
+/// It covers the whole panel, so every part of it that is not a control says
+/// it is not a pointer target — otherwise the strip swallows every click on
+/// the rows beneath. That is one attribute per container rather than a
+/// rectangle each control has to be hit-tested against by hand.
+fn overlay(e: &Explorer) -> Node<UiMsg> {
+    col()
+        .pointer_mode(PointerMode::Transparent)
+        .children([title_strip(e), grip_strip()])
+}
+
+/// The one-column drag handle on the panel's right edge, below the title line.
+///
+/// Below, because the title line's rightmost three cells are the close
+/// button's — which is the precedence the old hover walk had (it tested the
+/// close button first), and the opposite of the one its *click* walk had (it
+/// tested the border first). The two disagreed: hovering the top-right corner
+/// lit the close button while clicking it started a resize. They agree now,
+/// and they agree because there is one description instead of two walks.
+fn grip_strip() -> Node<UiMsg> {
+    let grip = gesture(row().w(Sizing::Cells(1)))
+        .key(grip_key())
+        .on(
+            GestureKind::Press,
+            Rc::new(|e: &Event| {
+                if e.button != fresh_ui::MouseButton::Left {
+                    return None;
+                }
+                e.stop();
+                Some(UiMsg::Ui(UiFact::ExplorerResizeBegin {
+                    x: e.pos.x.max(0) as u16,
+                    y: e.pos.y.max(0) as u16,
+                }))
+            }),
+        )
+        .on_enter(hover_msg(Some(HoverTarget::FileExplorerBorder)))
+        .on_leave(hover_msg(None));
+    row()
+        .flex(1)
+        .pointer_mode(PointerMode::Transparent)
+        .children([row().flex(1).pointer_mode(PointerMode::Transparent), grip])
 }
 
 fn panel(e: &Explorer) -> Node<UiMsg> {
@@ -177,8 +228,10 @@ fn node_row(e: &Explorer, r: &Row) -> Node<UiMsg> {
         // **The padding rule, as layout.** The old walk computed
         // `content_width - left_side_width - total_right_width` and a second
         // function computed it again to find the slot; a flex spacer states it
-        // once and both the cells and the rectangle come out of it.
-        row().flex(1),
+        // once and both the cells and the rectangle come out of it — including
+        // the `min_gap = 1` floor, which is `min_w` rather than a `max()` in
+        // two places.
+        row().flex(1).min_w(1),
     ];
     if let Some(slot) = &r.trailing {
         let path = slot.path.clone();
@@ -232,7 +285,10 @@ fn node_row(e: &Explorer, r: &Row) -> Node<UiMsg> {
                     return None;
                 }
                 e.stop();
-                Some(UiMsg::Ui(UiFact::ExplorerRowPress { index }))
+                Some(UiMsg::Ui(UiFact::ExplorerRowPress {
+                    index,
+                    clicks: e.clicks,
+                }))
             }),
         )
         // The context menu opens on the **press**, which is when
@@ -300,14 +356,24 @@ fn title_strip(e: &Explorer) -> Node<UiMsg> {
     let cells: Vec<Node<UiMsg>> = vec![
         // One cell of border before the title, which is where ratatui's
         // `Block` starts a left-aligned title.
-        row().w(Sizing::Cells(1)),
-        text(e.title.clone()).theme(e.title_theme.clone()),
-        row().flex(1),
+        row()
+            .w(Sizing::Cells(1))
+            .pointer_mode(PointerMode::Transparent),
+        text(e.title.clone())
+            .theme(e.title_theme.clone())
+            // The title is decoration. Pressing it used to select the panel's
+            // first row — `row.saturating_sub(area.y + 1)` clamps to 0 on the
+            // title line — while the right-click and double-click paths both
+            // guarded the row out explicitly. Saying it is not a target makes
+            // all three agree.
+            .pointer_mode(PointerMode::Transparent),
+        row().flex(1).pointer_mode(PointerMode::Transparent),
         close,
     ];
-    col()
+    row()
         .h(Sizing::Cells(1))
-        .child(row().h(Sizing::Cells(1)).children(cells))
+        .pointer_mode(PointerMode::Transparent)
+        .children(cells)
 }
 
 // -- the styles, as names ----------------------------------------------------
