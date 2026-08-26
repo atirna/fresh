@@ -189,6 +189,9 @@ impl Editor {
         // highlight without claiming, and a right-click outside a menu closes
         // it while staying available to open the next one.
         if let Some(input) = crate::view::shell::input::mouse(mouse_event) {
+            // The timing half of this press, which the tree cannot see. See
+            // `Editor::shell_double_click`.
+            self.shell_double_click = is_double_click;
             if self.shell_dispatch(input) {
                 return Ok(true);
             }

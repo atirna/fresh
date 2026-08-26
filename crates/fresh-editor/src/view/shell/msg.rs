@@ -76,6 +76,26 @@ pub enum UiFact {
     /// Close the open menu (an outside click, or a click on an inert cell of
     /// the dropdown's own box).
     CloseMenu,
+
+    // -- file explorer -------------------------------------------------------
+    /// A left press on a tree row, named by its **viewport** index — the same
+    /// number `FileTreeView::get_display_node_at_viewport_row` takes.
+    ///
+    /// One fact for what used to be three routes (single click, double click,
+    /// and the right-click's selection side effect), because the difference
+    /// between them is not positional: whether this press is the second of a
+    /// double is a fact about *time*, which the editor already computed before
+    /// the tree was dispatched. The applier reads it from
+    /// `Editor::shell_multi_click`.
+    ExplorerRowPress { index: usize },
+    /// A right click on a tree row: select it and open its context menu at the
+    /// pointer.
+    ExplorerRowContext { index: usize, x: u16, y: u16 },
+    /// The `×` on the panel's title line.
+    ExplorerClose,
+    /// The wheel over the panel. Positive is down, matching `Input::Wheel`.
+    /// Carries the pointer so the plugin `wheel` hook still gets a position.
+    ExplorerScroll { delta: i32, x: u16, y: u16 },
 }
 
 /// Which way a menu's highlight moves.

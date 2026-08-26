@@ -223,7 +223,7 @@ impl crate::view::shell::fold::Palette for ShellPalette {
 /// provenance as exactly this pair (`ThemeRun { fg_key, bg_key }`). The display
 /// list and the inspector now say the same thing in the same words.
 pub mod shell_theme {
-    use ratatui::style::{Modifier, Style};
+    use ratatui::style::{Color, Modifier, Style};
 
     use crate::view::theme::Theme;
 
@@ -265,16 +265,54 @@ pub mod shell_theme {
         let Some((fg_key, bg_key)) = pair.split_once('/') else {
             return base(theme);
         };
-        let (Some(fg), Some(bg)) = (
-            theme.resolve_theme_key(fg_key),
-            theme.resolve_theme_key(bg_key),
-        ) else {
+        let (Some(fg), Some(bg)) = (resolve_half(fg_key, theme), resolve_half(bg_key, theme))
+        else {
             return base(theme);
         };
         // The attribute the theme declares for the foreground key, plus the
         // structural one the name asked for.
         let modifier = modifier | theme.resolve_modifier_key(fg_key);
         Style::default().fg(fg).bg(bg).add_modifier(modifier)
+    }
+
+    /// One half of a pair: a theme key, or the `#rrggbb` literal escape.
+    ///
+    /// **The literal is an interim, and it is the only thing here that is not
+    /// traceable to a theme entry.** It exists because a plugin can hand the
+    /// editor an `OverlayColorSpec::Rgb` — an arbitrary runtime value that no
+    /// theme ever declared, so there is no key to name it with. Today those
+    /// colours are already untraceable: `resolve_overlay_color` turns them
+    /// straight into `Color::Rgb`, which the theme inspector cannot explain and
+    /// a user cannot override. Writing them as `#rrggbb` here loses nothing
+    /// that exists and unblocks the surfaces that carry them.
+    ///
+    /// What replaces it: plugins **register** their colours as named keys
+    /// (`plugin.git.status_added_fg`) and `resolve_theme_key` gains a dynamic
+    /// tier for them, at which point a plugin colour becomes an ordinary,
+    /// inspectable, user-overridable name and this arm can go. See §6.2 of the
+    /// migration doc. Nothing in this repository emits a literal: every
+    /// in-tree slot provider already sends a `ThemeKey`.
+    fn resolve_half(key: &str, theme: &Theme) -> Option<Color> {
+        if let Some(hex) = key.strip_prefix('#') {
+            if hex.len() == 6 {
+                let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+                return Some(Color::Rgb(byte(0)?, byte(2)?, byte(4)?));
+            }
+            return None;
+        }
+        theme.resolve_theme_key(key)
+    }
+
+    /// A concrete colour as a name, for the interim case above.
+    pub fn literal(c: Color) -> String {
+        match c {
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            // Every other `Color` is one the theme could have named, but by the
+            // time it reaches here the name is gone. Indexed and ANSI colours
+            // have no hex form, so they fall back to the panel's own ink rather
+            // than to an invented value.
+            _ => "editor.fg".to_string(),
+        }
     }
 
     fn base(theme: &Theme) -> Style {
@@ -405,6 +443,20 @@ impl Editor {
                     self.menu_state.open_menu(index);
                 }
             }
+            // -- file explorer ---------------------------------------------
+            UiFact::ExplorerRowPress { index } => self.explorer_row_pressed(index),
+            UiFact::ExplorerRowContext { index, x, y } => self.explorer_row_context(index, x, y),
+            UiFact::ExplorerClose => self.toggle_file_explorer(),
+            UiFact::ExplorerScroll { delta, x, y } => {
+                // The surface's wheel, with the surface. Unchanged from the
+                // chrome component's `on_wheel`, including the plugin hook —
+                // the position it reports is the pointer's, which the tree
+                // carries on the event.
+                self.dismiss_transient_popups();
+                self.active_window().wheel_plugin_hook(x, y, delta);
+                self.active_window_mut().scroll_file_explorer_view(delta);
+            }
+
             UiFact::MenuItemClick { depth, index } => {
                 let Some(active) = self.menu_state.active_menu else {
                     return;
