@@ -1,7 +1,11 @@
 # Welcome Screen — a ladder, not a launcher
 
-> _Design note. Status: **PLANNED**. Nothing here ships yet. AI-generated from
-> the source; where it disagrees with the code, the code is authoritative._
+> _Design note. Status: **PARTLY IMPLEMENTED** — `plugins/welcome_screen.ts`
+> ships the ladder, the three doors, the jump keys, foldable cards, the live
+> finder, the live theme picker, the real git and Orchestrator cards, and the
+> startup toggle. §13 records what the build taught, including the three
+> places the wireframes above are still aspirational. AI-generated from the
+> source; where it disagrees with the code, the code is authoritative._
 
 Fresh replaces the `[No Name]` scratch buffer and the blank placeholder hint
 with an **interactive welcome buffer**: a scrollable document, rendered in the
@@ -580,3 +584,82 @@ naming rather than hand-waving:
 
 Phases 1–2 are shippable on their own and already beat all three of today's
 empty states. The default does not move until phase 6.
+
+---
+
+## 13. What the build taught
+
+`plugins/welcome_screen.ts` implements this design. It is a TypeScript plugin
+— **no host change was needed**, which was the bet §4 made and it held. The
+page is a virtual buffer with a `WidgetPanel` mounted into it; every control
+is a widget from `plugins/lib/widgets.ts`; the demos read real data through
+`spawnProcess`, `getAllThemes` / `applyTheme`, and
+`getPluginApi("orchestrator").listWorkspaces()`.
+
+Seven things the wireframes did not know:
+
+1. **A panel repaint replaces the whole buffer, so it parks the viewport at
+   line 0.** Fine for a panel that fits its pane; wrong for a document you
+   scroll. Every repaint now captures `getViewport().topLine` and restores it
+   afterwards. Folding only removes rows *below* a card's header, so the
+   restore is exact rather than approximate.
+
+2. **`viewport_changed` fires on height changes too — including the one the
+   command palette causes by taking a row.** Repainting there cancelled the
+   prompt the user had just opened (`Search cancelled.` in the status bar,
+   every time). The listener now dedupes on **width only**: width is what the
+   layout depends on, and every list pins its own `visibleRows`, so height
+   changes have nothing to recompute.
+
+3. **`scrollBufferToLine` is a *reveal*, not a scroll-to-top** — it
+   deliberately leaves `viewport_height / 3` of context above its target.
+   Right for "show me this match", wrong for a level jump and for the repaint
+   restore above. A local `scrollTopTo` compensates rather than asking for a
+   second host verb.
+
+4. **`move_page_up` / `move_page_down` page the *cursor*.** On a cursorless
+   page whose cursor is wherever the widget runtime last parked it, that jumps
+   somewhere the reader never was. Page keys compute the new top line from the
+   viewport instead.
+
+5. **A mode with `allowTextInput` owns the keyboard**: the host blocks unbound
+   Ctrl-/Alt-modified keys so a focused text field can never be hijacked by
+   Open or Save. That is the right default, and it means the accelerators this
+   page promises have to be named — `FORWARDED` lists them and each one
+   forwards to the real action, so a rebound key keeps working. Notably they
+   do *not* mark the page engaged: reaching past it for the palette is the
+   ambient case.
+
+6. **Tab moves widget focus, but the host only scrolls the pane for a focused
+   *text* widget.** A focused button further down a long document was
+   invisible. The `focus` event now reveals the focused widget's card, using
+   card-header rows read back from the painted buffer — the same read-back
+   `resolveLevelLines` already did for the jump keys. A keyed read-only widget
+   also joins the Tab cycle, so the markdown sample is deliberately keyless.
+
+7. **`getAllThemes()` answers with the registry object, not a list.** Its keys
+   are the theme names.
+
+### Still aspirational
+
+- **The LSP card** shows a real syntax-highlighted Rust sample (a markdown
+  `Text` widget carrying the grammar registry — the highlighting is genuinely
+  the editor's own), but no live hover popup or diagnostic. That needs a real
+  buffer with a real language server behind a `windowEmbed`, which is §10's
+  first cost item.
+- **The git card** reports the real branch and the real changed-file list, but
+  the stage / unstage buttons of the mock are not there; it links to the
+  branch-diff review instead.
+- **The Orchestrator card** lists the real workspaces with their agent state
+  and focuses one on click, but does not embed a live terminal transcript.
+
+### Verified by hand
+
+Driven in tmux at 160×44, 74×40 and 52×30 against a scratch repo: the ladder
+and jump keys, `/` to the finder, live fuzzy-find over `git ls-files` and
+`Enter` to open a hit, folding by click and by `Enter`, live theme switching
+by click (status bar confirms), the startup toggle flipping and **persisting
+across a restart** (the screen then stays away, and the `Welcome` command
+brings it back), `Ctrl+P` opening the palette from the page, the `[No Name]`
+seed being retired on open, `fresh notes.txt` never leaving a Welcome tab
+behind, and both responsive breakpoints.
