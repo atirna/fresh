@@ -37,7 +37,7 @@ use crate::app::types::HoverTarget;
 use super::msg::{UiFact, UiMsg};
 
 fn hover(t: Option<HoverTarget>) -> fresh_ui::Handler<UiMsg> {
-    Rc::new(move |_: &Event| Some(UiMsg::Ui(UiFact::MenuHover(t.clone()))))
+    Rc::new(move |_: &Event| Some(UiMsg::Ui(UiFact::Hover(t.clone()))))
 }
 
 /// One label on the menu bar: `" Label "`, cut into runs so a mnemonic
@@ -827,7 +827,7 @@ mod input_tests {
         assert!(
             msgs.iter().any(|m| matches!(
                 m,
-                UiMsg::Ui(UiFact::MenuHover(Some(HoverTarget::MenuDropdownItem(_, 1))))
+                UiMsg::Ui(UiFact::Hover(Some(HoverTarget::MenuDropdownItem(_, 1))))
             )),
             "got {msgs:?}"
         );
@@ -854,9 +854,7 @@ mod input_tests {
         assert!(
             matches!(
                 d.msgs.last(),
-                Some(UiMsg::Ui(UiFact::MenuHover(Some(
-                    HoverTarget::MenuBarItem(0)
-                ))))
+                Some(UiMsg::Ui(UiFact::Hover(Some(HoverTarget::MenuBarItem(0)))))
             ),
             "got {:?}",
             d.msgs
@@ -904,7 +902,7 @@ mod input_tests {
         assert!(
             d.msgs
                 .iter()
-                .any(|m| matches!(m, UiMsg::Ui(UiFact::MenuHover(None)))),
+                .any(|m| matches!(m, UiMsg::Ui(UiFact::Hover(None)))),
             "got {:?}",
             d.msgs
         );
