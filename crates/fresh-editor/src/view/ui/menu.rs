@@ -126,28 +126,37 @@ impl BarLabelStyle {
         }
     }
 
-    /// The `(fg, bg)` provenance keys. Hover is transient and was never
-    /// recorded; it still is not, so the inspector reports the resting look of
-    /// the label under the pointer.
+    /// The `(fg, bg)` theme keys this label reads.
+    ///
+    /// One pair, for every consumer: the inspector's provenance, the ratatui
+    /// painter's colours, and the shell's `ThemeKey`. Hover used to report the
+    /// *resting* keys here while `style()` returned the hover colours — the two
+    /// disagreed, and nothing noticed because only the inspector read this one.
     pub(crate) fn theme_keys(self) -> (&'static str, &'static str) {
         match self {
+            BarLabelStyle::Normal => ("ui.menu_fg", "ui.menu_bg"),
             BarLabelStyle::Active => ("ui.menu_active_fg", "ui.menu_active_bg"),
-            BarLabelStyle::Normal | BarLabelStyle::Hovered => ("ui.menu_fg", "ui.menu_bg"),
+            BarLabelStyle::Hovered => ("ui.menu_hover_fg", "ui.menu_hover_bg"),
         }
     }
 
     /// The description's name for this label, and for its mnemonic character —
     /// which differs only by an underline, and an underline is part of how a
     /// run looks, so it is part of the name.
-    pub(crate) fn shell_theme(self, mnemonic: bool) -> &'static str {
-        match (self, mnemonic) {
-            (BarLabelStyle::Normal, false) => "menu.bar.item",
-            (BarLabelStyle::Normal, true) => "menu.bar.item.mnemonic",
-            (BarLabelStyle::Active, false) => "menu.bar.item.active",
-            (BarLabelStyle::Active, true) => "menu.bar.item.active.mnemonic",
-            (BarLabelStyle::Hovered, false) => "menu.bar.item.hover",
-            (BarLabelStyle::Hovered, true) => "menu.bar.item.hover.mnemonic",
+    pub(crate) fn shell_theme(self, mnemonic: bool) -> String {
+        use crate::app::shell_host::shell_theme;
+        let (fg, bg) = self.theme_keys();
+        // Structural attributes, not themed ones: the active label is bold
+        // because it is active, the mnemonic underlined because it is a
+        // mnemonic. They compose, so `active + mnemonic` needs no sixth name.
+        let mut attrs: Vec<&str> = Vec::new();
+        if self == BarLabelStyle::Active {
+            attrs.push("bold");
         }
+        if mnemonic {
+            attrs.push("underline");
+        }
+        shell_theme::attrs(fg, bg, &attrs)
     }
 }
 
@@ -215,15 +224,9 @@ impl MenuRowStyle {
 
     /// The name the shell's description carries, resolved by the fold's
     /// palette. One name per style, so the two backends cannot drift.
-    pub(crate) fn shell_theme(self) -> &'static str {
-        match self {
-            MenuRowStyle::Normal => "menu.item",
-            MenuRowStyle::Highlighted => "menu.item.highlighted",
-            MenuRowStyle::Hovered => "menu.item.hover",
-            MenuRowStyle::Disabled => "menu.item.disabled",
-            MenuRowStyle::Info => "menu.item.info",
-            MenuRowStyle::Separator => "menu.separator",
-        }
+    pub(crate) fn shell_theme(self) -> String {
+        let (fg, bg) = self.theme_keys();
+        crate::app::shell_host::shell_theme::pair(fg, bg)
     }
 }
 
@@ -754,32 +757,35 @@ impl MenuRenderer {
 
             // `" Label "` plus the separating space, cut at the mnemonic so
             // that one character can be underlined *inside* the label.
-            let mut runs: Vec<(String, &'static str)> = Vec::new();
+            let mut runs: Vec<(String, String)> = Vec::new();
             let plain = label_style.shell_theme(false);
             let under = label_style.shell_theme(true);
-            runs.push((" ".to_string(), plain));
+            runs.push((" ".to_string(), plain.clone()));
             match mnemonic {
                 Some(m) => {
                     let mut found = false;
                     for c in menu.label.chars() {
                         let hit = !found && c.to_ascii_lowercase() == m;
                         found |= hit;
-                        let theme = if hit { under } else { plain };
+                        let theme = if hit { &under } else { &plain };
                         match runs.last_mut() {
                             // Neighbouring characters in the same theme are one
                             // run: the cut exists for the mnemonic, not per
                             // character.
-                            Some((t, th)) if *th == theme => t.push(c),
-                            _ => runs.push((c.to_string(), theme)),
+                            Some((t, th)) if th == theme => t.push(c),
+                            _ => runs.push((c.to_string(), theme.clone())),
                         }
                     }
                 }
-                None => runs.push((menu.label.clone(), plain)),
+                None => runs.push((menu.label.clone(), plain.clone())),
             }
             runs.push((" ".to_string(), plain));
             // The gap to the next label wears the bar's ground, not this
             // label's — `Span::raw` did that by carrying no style at all.
-            runs.push((" ".to_string(), "menu.bar"));
+            runs.push((
+                " ".to_string(),
+                crate::app::shell_host::shell_theme::pair("ui.menu_fg", "ui.menu_bg"),
+            ));
             bar.items
                 .push(crate::view::shell::menu::BarItem { runs, index: idx });
 

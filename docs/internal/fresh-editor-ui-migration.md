@@ -1561,47 +1561,53 @@ list.
    borrow are covered by tests. What remains is threading real per-frame state
    and publishing `BodyOutput` to the geometry bridge — mechanical S1 work. The
    `Ui`-beside-`Editor` constraint it revealed is recorded in §4.4.
-4. **Colour that is not a theme name** (blocks S4 — the file explorer — and
-   M6, and the status bar's plugin tokens). An `Item` carries one `ThemeKey`: a
-   *name* for where its appearance comes from, which the backend resolves. That
-   is the right model for everything migrated so far, because every colour so
-   far came from a theme slot.
+4. ~~**Colour that is not a theme name**~~ — **decided and shipped: a name is
+   always real theme keys.**
 
-   The file explorer breaks it. `ExplorerSlotPayload::fg` and
-   `name_color_hint` are `ratatui::Color` values **supplied by plugins** — a
-   badge tinted by a linter, a filename coloured by a git-status provider.
-   There is no theme slot to name, and the set is not known until the frame is
-   built. The same vocabulary reappears in plugin panels (M6) and in the status
-   bar's plugin tokens, so this is not one surface's quirk.
+   The entry here proposed minting `dyn:N` names during build. That was wrong
+   twice over — it makes `build` mutate a table, which goal 3 forbids in as many
+   words, and `dyn:17` destroys the provenance a `ThemeKey` exists to carry. The
+   review's content-derived alternative was better but still invented a name
+   space.
 
-   Three ways out:
+   What shipped needs neither, because the editor already had the answer:
+   `Theme::resolve_theme_key("section.field")` is a generic, table-generated
+   name resolver, and `Theme::resolve_modifier_key` reads the attribute declared
+   on the same table row. The shell was hand-writing a twenty-arm match over
+   names of its own beside it.
 
-   - **Content-derived names.** Name the style after what it *is* —
-     `"rgb:7f3fbf"` — so the name is a pure function of the colour. Two rows
-     that resolve to the same colour get the same name without anyone
-     coordinating, `build` stays a pure function of state, and the palette
-     parses the name instead of consulting a table.
-   - **Per-frame minted names.** Intern each dynamic style as the description
-     is built, name it `dyn:N`, and carry the table beside the palette.
-   - **A colour variant on `ThemeKey`.** Honest, but it puts appearance in the
-     display list and every backend then has to understand a colour model.
+   **A shell `ThemeKey` is `fg_key/bg_key`**, optionally `+bold` / `+underline`.
+   A cell needs two colours and an `Item` carries one name, so the name is a
+   pair; both halves resolve through the editor's own table. Nothing is invented,
+   every colour on screen traces to an entry a user can edit, and the six
+   spellings for two orthogonal attributes
+   (`menu.bar.item{,.mnemonic}{,.active,.hover}`) collapse into one pair plus
+   composable attributes — which is the point, because the blow-up arrives in
+   earnest with the explorer's git status × selection × cut × focus.
 
-   **Content-derived names win**, and the minted variant is not merely
-   second-best — it is disqualified. Minting during `build` makes `build`
-   mutate a table, and goal 3 forbids that in as many words ("rebuild is cheap
-   and side-effect-free"). It also reintroduces the side-table the library
-   design's Appendix A calls out by name, and destroys `ThemeKey`'s provenance
-   meaning: `dyn:17` says nothing about where the colour came from, so the
-   theme inspector has nothing to report. `"rgb:7f3fbf"` at least says what it
-   is. This entry previously recommended minting; that was wrong.
+   It also converges two things that were saying the same thing in different
+   words: the theme inspector has always recorded provenance as
+   `ThemeRun { fg_key, bg_key }`, exactly this pair. `MenuRowStyle::shell_theme`
+   is now derived from `theme_keys()`, so the display list and the inspector
+   cannot disagree — and unifying them fixed a real drift, where a hovered bar
+   label reported its *resting* keys to the inspector while painting hover
+   colours.
 
-   **Settle the name grammar at the same time.** `ShellPalette` already spells
-   six names for two orthogonal attributes
-   (`menu.bar.item{,.mnemonic}{,.active,.hover}`), which is the combinatorial
-   blow-up that arrives properly with the explorer's git status × selection ×
-   cut × focus. Decide now whether a `ThemeKey` is one opaque name or a
-   structured path the backend resolves attribute by attribute, because the
-   explorer is where guessing gets expensive.
+   **The one genuine limit**, for whoever migrates the explorer: plugins may
+   send `OverlayColorSpec::Rgb`, a shipped wire variant, and a raw colour is not
+   a theme entry. Two things make it smaller than it looks. Every in-repo slot
+   provider already sends `ThemeKey` (`syntax.string`, `syntax.type`,
+   `ui.file_status_modified_fg`, and LSP diagnostics), so the built-ins need
+   nothing. And the plugins that genuinely need raw colour are the ones
+   displaying colour *as data* — `theme_editor.ts`'s swatch grid — which should
+   not be theme entries. When the explorer migrates, the choice is to give that
+   family a self-describing name (`rgb:7f3fbf`, resolved by the same parser) or
+   to leave those rows behind a `Host` leaf. Neither needs a side table, and
+   neither is needed before then.
+
+   `resolve_overlay_color` collapsing a spec to a `Color` inside the slot
+   *cache* — long before any description exists — is the thing to move when that
+   day comes.
 
 5. **The dropdown chain's placement** (the tail of M3). *A dependency, not a
    decision — and the previous entry here got both its facts wrong.*

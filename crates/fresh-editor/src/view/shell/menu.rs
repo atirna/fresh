@@ -50,7 +50,7 @@ fn hover(t: Option<HoverTarget>) -> fresh_ui::Handler<UiMsg> {
 pub struct BarItem {
     /// `(text, theme name)`, in order. Usually one run; three when a mnemonic
     /// splits the label.
-    pub runs: Vec<(String, &'static str)>,
+    pub runs: Vec<(String, String)>,
     /// Which menu this label opens.
     pub index: usize,
 }
@@ -77,7 +77,7 @@ pub fn menu_bar(bar: &MenuBar) -> Node<UiMsg> {
             let runs: Vec<Run> = it
                 .runs
                 .iter()
-                .map(|(t, theme)| Run::themed(t.clone(), *theme))
+                .map(|(t, theme)| Run::themed(t.clone(), theme))
                 .collect();
             let index = it.index;
             gesture(text_runs(runs))
@@ -108,15 +108,22 @@ pub fn menu_bar(bar: &MenuBar) -> Node<UiMsg> {
     // `row == 0` arm of `handle_click_menu_bar` did; a label above answers
     // first, because a click is derived per path and the label is the deeper
     // one.
-    gesture(row().theme("menu.bar").children(labels))
-        // On the press, with the labels above it: the whole bar acts on the
-        // same gesture, so the dismissal, the close and the toggle are one
-        // dispatch and cannot see each other's aftermath.
-        .on(
-            GestureKind::Press,
-            Rc::new(|_: &Event| Some(UiMsg::Ui(UiFact::CloseMenu))),
-        )
-        .on_enter(hover(None))
+    gesture(
+        row()
+            .theme(crate::app::shell_host::shell_theme::pair(
+                "ui.menu_fg",
+                "ui.menu_bg",
+            ))
+            .children(labels),
+    )
+    // On the press, with the labels above it: the whole bar acts on the
+    // same gesture, so the dismissal, the close and the toggle are one
+    // dispatch and cannot see each other's aftermath.
+    .on(
+        GestureKind::Press,
+        Rc::new(|_: &Event| Some(UiMsg::Ui(UiFact::CloseMenu))),
+    )
+    .on_enter(hover(None))
 }
 
 /// One row of one dropdown: what it says, and the name of how it looks.
@@ -127,7 +134,7 @@ pub fn menu_bar(bar: &MenuBar) -> Node<UiMsg> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DropdownRow {
     pub text: String,
-    pub theme: &'static str,
+    pub theme: String,
 }
 
 /// One level of an open dropdown chain: the bordered box and its rows.
@@ -168,29 +175,33 @@ fn dropdown(depth: usize, level: &DropdownLevel, nested: Option<Node<UiMsg>>) ->
         .iter()
         .enumerate()
         .map(|(index, r)| {
-            gesture(text(r.text.clone()).theme(r.theme).h(Sizing::Cells(1)))
-                // Stops, for the same reason the bar's labels do: the box
-                // behind the rows closes the menu, and a row that only
-                // answered would be followed by that close — which would shut
-                // the menu on the way into a submenu.
-                .on(
-                    GestureKind::Click,
-                    Rc::new(move |e: &Event| {
-                        e.stop();
-                        Some(UiMsg::Ui(UiFact::MenuItemClick { depth, index }))
-                    }),
-                )
-                // The hover machine decides what a row under the pointer
-                // means — highlight, open a submenu, close the deeper ones.
-                .on_leave(hover(None))
-                .on_enter(hover(Some(if depth == 0 {
-                    // The bar index the reaction fills in for itself; it knows
-                    // which menu is open.
-                    HoverTarget::MenuDropdownItem(0, index)
-                } else {
-                    HoverTarget::SubmenuItem(depth, index)
-                })))
-                .into()
+            gesture(
+                text(r.text.clone())
+                    .theme(r.theme.clone())
+                    .h(Sizing::Cells(1)),
+            )
+            // Stops, for the same reason the bar's labels do: the box
+            // behind the rows closes the menu, and a row that only
+            // answered would be followed by that close — which would shut
+            // the menu on the way into a submenu.
+            .on(
+                GestureKind::Click,
+                Rc::new(move |e: &Event| {
+                    e.stop();
+                    Some(UiMsg::Ui(UiFact::MenuItemClick { depth, index }))
+                }),
+            )
+            // The hover machine decides what a row under the pointer
+            // means — highlight, open a submenu, close the deeper ones.
+            .on_leave(hover(None))
+            .on_enter(hover(Some(if depth == 0 {
+                // The bar index the reaction fills in for itself; it knows
+                // which menu is open.
+                HoverTarget::MenuDropdownItem(0, index)
+            } else {
+                HoverTarget::SubmenuItem(depth, index)
+            })))
+            .into()
         })
         .collect();
 
@@ -207,7 +218,10 @@ fn dropdown(depth: usize, level: &DropdownLevel, nested: Option<Node<UiMsg>>) ->
                     // Border ink over the dropdown ground; the fill draws
                     // spaces, so only the background of this key reaches the
                     // eye there.
-                    .theme("menu.dropdown")
+                    .theme(crate::app::shell_host::shell_theme::pair(
+                        "ui.menu_border_fg",
+                        "ui.menu_dropdown_bg",
+                    ))
                     .w(Sizing::Cells(level.width))
                     .children(rows);
                 // The level this one opened, inside it. A layer is out of
@@ -240,6 +254,23 @@ fn dropdown(depth: usize, level: &DropdownLevel, nested: Option<Node<UiMsg>>) ->
     l
 }
 
+/// The names a bar label carries, spelled once for the test fixtures below.
+/// They are ordinary theme keys — the point of the grammar is that a test can
+/// write them out and mean exactly what the editor means.
+#[cfg(test)]
+const ITEM: &str = "ui.menu_fg/ui.menu_bg";
+#[cfg(test)]
+const BAR: &str = "ui.menu_fg/ui.menu_bg";
+#[cfg(test)]
+const MNEMONIC: &str = "ui.menu_fg/ui.menu_bg+underline";
+/// The active label is bold *and* its mnemonic underlined — two structural
+/// attributes composing on one pair, which is the whole reason the grammar
+/// replaced a name per combination.
+#[cfg(test)]
+const ACTIVE: &str = "ui.menu_active_fg/ui.menu_active_bg+bold";
+#[cfg(test)]
+const ACTIVE_MNEMONIC: &str = "ui.menu_active_fg/ui.menu_active_bg+bold+underline";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,7 +289,10 @@ mod tests {
     fn row_of(text: &str) -> DropdownRow {
         DropdownRow {
             text: text.to_string(),
-            theme: "menu.item",
+            theme: crate::app::shell_host::shell_theme::pair(
+                "ui.menu_dropdown_fg",
+                "ui.menu_dropdown_bg",
+            ),
         }
     }
 
@@ -316,19 +350,19 @@ mod tests {
                 items: vec![
                     BarItem {
                         runs: vec![
-                            (" ".into(), "menu.bar.item"),
-                            ("File".into(), "menu.bar.item"),
-                            (" ".into(), "menu.bar.item"),
-                            (" ".into(), "menu.bar"),
+                            (" ".into(), ITEM.to_string()),
+                            ("File".into(), ITEM.to_string()),
+                            (" ".into(), ITEM.to_string()),
+                            (" ".into(), BAR.to_string()),
                         ],
                         index: 0,
                     },
                     BarItem {
                         runs: vec![
-                            (" ".into(), "menu.bar.item"),
-                            ("Edit".into(), "menu.bar.item"),
-                            (" ".into(), "menu.bar.item"),
-                            (" ".into(), "menu.bar"),
+                            (" ".into(), ITEM.to_string()),
+                            ("Edit".into(), ITEM.to_string()),
+                            (" ".into(), ITEM.to_string()),
+                            (" ".into(), BAR.to_string()),
                         ],
                         index: 1,
                     },
@@ -357,9 +391,9 @@ mod tests {
         let bar = MenuBar {
             items: vec![BarItem {
                 runs: vec![
-                    (" ".into(), "menu.bar.item.active"),
-                    ("F".into(), "menu.bar.item.active.mnemonic"),
-                    ("ile".into(), "menu.bar.item.active"),
+                    (" ".into(), ACTIVE.to_string()),
+                    ("F".into(), ACTIVE_MNEMONIC.to_string()),
+                    ("ile".into(), ACTIVE.to_string()),
                 ],
                 index: 0,
             }],
@@ -379,12 +413,12 @@ mod tests {
 
         assert_eq!(
             buf[(1, 0)].style(),
-            test_palette::painted("menu.bar.item.active.mnemonic"),
+            test_palette::painted(ACTIVE_MNEMONIC),
             "the mnemonic is underlined and bold"
         );
         assert_eq!(
             buf[(2, 0)].style(),
-            test_palette::painted("menu.bar.item.active"),
+            test_palette::painted(ACTIVE),
             "the character beside it is only bold"
         );
         assert_ne!(
@@ -414,7 +448,10 @@ mod tests {
                         width: 10,
                         rows: vec![DropdownRow {
                             text: " New    ".into(),
-                            theme: "menu.item",
+                            theme: crate::app::shell_host::shell_theme::pair(
+                                "ui.menu_dropdown_fg",
+                                "ui.menu_dropdown_bg",
+                            ),
                         }],
                     }],
                     ..Frame::default()
@@ -434,7 +471,7 @@ mod tests {
 
         assert_eq!(
             buf[(2, 1)].style(),
-            test_palette::painted("menu.item"),
+            test_palette::painted(&crate::view::ui::MenuRowStyle::Normal.shell_theme()),
             "the row says what its cells look like outright"
         );
         assert!(
@@ -452,11 +489,11 @@ mod tests {
         let bar = MenuBar {
             items: vec![BarItem {
                 runs: vec![
-                    (" ".into(), "menu.bar.item"),
-                    ("F".into(), "menu.bar.item.mnemonic"),
-                    ("ile".into(), "menu.bar.item"),
-                    (" ".into(), "menu.bar.item"),
-                    (" ".into(), "menu.bar"),
+                    (" ".into(), ITEM.to_string()),
+                    ("F".into(), MNEMONIC.to_string()),
+                    ("ile".into(), ITEM.to_string()),
+                    (" ".into(), ITEM.to_string()),
+                    (" ".into(), BAR.to_string()),
                 ],
                 index: 0,
             }],
@@ -480,9 +517,7 @@ mod tests {
             crate::view::shell::frame::HostRegion::MenuBar,
         ));
         assert!(
-            items
-                .iter()
-                .any(|i| i.theme.as_str() == "menu.bar.item.mnemonic"),
+            items.iter().any(|i| i.theme.as_str() == MNEMONIC),
             "the mnemonic run must reach the display list under its own name"
         );
     }
@@ -589,10 +624,10 @@ mod input_tests {
     fn bar_item(label: &str, index: usize) -> BarItem {
         BarItem {
             runs: vec![
-                (" ".into(), "menu.bar.item"),
-                (label.into(), "menu.bar.item"),
-                (" ".into(), "menu.bar.item"),
-                (" ".into(), "menu.bar"),
+                (" ".into(), ITEM.to_string()),
+                (label.into(), ITEM.to_string()),
+                (" ".into(), ITEM.to_string()),
+                (" ".into(), BAR.to_string()),
             ],
             index,
         }
@@ -615,11 +650,17 @@ mod input_tests {
                             rows: vec![
                                 DropdownRow {
                                     text: " New      ".into(),
-                                    theme: "menu.item",
+                                    theme: crate::app::shell_host::shell_theme::pair(
+                                        "ui.menu_dropdown_fg",
+                                        "ui.menu_dropdown_bg",
+                                    ),
                                 },
                                 DropdownRow {
                                     text: " Open     ".into(),
-                                    theme: "menu.item",
+                                    theme: crate::app::shell_host::shell_theme::pair(
+                                        "ui.menu_dropdown_fg",
+                                        "ui.menu_dropdown_bg",
+                                    ),
                                 },
                             ],
                         }]
@@ -880,7 +921,10 @@ mod submenu_regression {
     fn open_chain() -> Ui<UiMsg> {
         let row = |t: &str| DropdownRow {
             text: t.to_string(),
-            theme: "menu.item",
+            theme: crate::app::shell_host::shell_theme::pair(
+                "ui.menu_dropdown_fg",
+                "ui.menu_dropdown_bg",
+            ),
         };
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(
