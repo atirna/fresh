@@ -596,7 +596,7 @@ is a widget from `plugins/lib/widgets.ts`; the demos read real data through
 `spawnProcess`, `getAllThemes` / `applyTheme`, and
 `getPluginApi("orchestrator").listWorkspaces()`.
 
-Ten things the wireframes did not know:
+Eleven things the wireframes did not know:
 
 1. **A panel repaint replaces the whole buffer, so it parks the viewport at
    line 0.** Fine for a panel that fits its pane; wrong for a document you
@@ -659,6 +659,15 @@ Ten things the wireframes did not know:
 
 10. **Enter on a single-line `Text` widget is advance-focus**, so a finder
     that merely forwarded the key moved on instead of opening the pick.
+
+11. **`executeAction` with a name no action and no plugin handler owns fails
+    only in the log.** The Git log button was wired to `git_log`, which is the
+    palette *label*; the handler is `show_git_log`. The click did nothing on
+    screen and reported "executed successfully". Cross-plugin dispatch does
+    work — `start_review_branch` (audit_mode) and `orchestrator_new` resolve
+    fine — but the name has to be the handler's, and a button whose provider
+    may not be loaded should be gated: the Orchestrator's two are drawn only
+    when `getPluginApi("orchestrator")` answers.
 
 ### Still aspirational
 
