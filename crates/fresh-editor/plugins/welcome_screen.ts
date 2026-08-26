@@ -939,17 +939,21 @@ function dispatch(action: ReturnType<typeof widgetKey>): void {
   panel?.command(action);
 }
 
-function jumpTo(level: string): void {
+async function jumpTo(level: string): Promise<void> {
   engaged = true;
   if (bufferId === null) return;
+  // The banner rows are read back from the painted buffer, which is
+  // async: a jump key pressed in the first moments after the page
+  // opens would otherwise be a silent no-op. Resolve on demand.
+  if (typeof levelLines[level] !== "number") await resolveLevelLines();
   const target = levelLines[level];
   if (typeof target !== "number") return;
   scrollTopTo(target);
 }
 
-registerHandler("welcome_jump_1", () => jumpTo("1"));
-registerHandler("welcome_jump_2", () => jumpTo("2"));
-registerHandler("welcome_jump_3", () => jumpTo("3"));
+registerHandler("welcome_jump_1", () => void jumpTo("1"));
+registerHandler("welcome_jump_2", () => void jumpTo("2"));
+registerHandler("welcome_jump_3", () => void jumpTo("3"));
 registerHandler("welcome_jump_top", () => {
   engaged = true;
   if (bufferId !== null) editor.scrollBufferToLine(bufferId, 0);
@@ -1034,8 +1038,7 @@ registerHandler("welcome_focus_find", () => {
   }
   lastFocusedWidget = "finderField";
   panel.setFocusKey("finderField");
-  const target = levelLines["1"];
-  if (typeof target === "number") scrollTopTo(target);
+  void jumpTo("1");
 });
 
 registerHandler("mode_text_input", (args: { text: string }) => {
@@ -1086,7 +1089,7 @@ function activateKey(k: string): void {
     return;
   }
   if (k.startsWith("jump:")) {
-    jumpTo(k.slice(5));
+    void jumpTo(k.slice(5));
     return;
   }
   if (k.startsWith("theme:")) {
