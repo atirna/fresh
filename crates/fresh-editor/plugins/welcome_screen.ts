@@ -594,16 +594,23 @@ function orchestratorCard(): WidgetSpec {
       );
     }
     rows.push(blank());
-    rows.push(
-      row(
-        spacer(2),
+    // The first two are the Orchestrator's own handlers. Offer them only
+    // when that plugin is actually loaded — a button whose action no
+    // plugin defines fails silently in the log, which is worse than an
+    // absent button. `Open the dock` is a built-in action and always
+    // holds.
+    const orchLoaded = editor.getPluginApi("orchestrator") !== null;
+    const actions: WidgetSpec[] = [spacer(2)];
+    if (orchLoaded) {
+      actions.push(
         button("New workspace…", { key: "act_ws_new", hoverStyle: { fg: C.accent } }),
         spacer(2),
         button("Run agent here…", { key: "act_ws_agent", hoverStyle: { fg: C.accent } }),
         spacer(2),
-        button("Open the dock", { key: "act_ws_dock", hoverStyle: { fg: C.accent } }),
-      ),
-    );
+      );
+    }
+    actions.push(button("Open the dock", { key: "act_ws_dock", hoverStyle: { fg: C.accent } }));
+    rows.push(row(...actions));
     rows.push(blank());
     rows.push(plain("  One workspace per git worktree, each with its own terminals and", C.muted));
     rows.push(plain("  agent. Sessions resume after a restart. Leave the rest running.", C.muted));
@@ -1155,7 +1162,11 @@ function activateKey(k: string): void {
       editor.executeAction("start_review_branch");
       return;
     case "act_gitlog":
-      editor.executeAction("git_log");
+      // The git-log plugin's handler is `show_git_log`; `git_log` is
+      // only the palette label. An unknown name is dispatched as a
+      // plugin action, finds no handler in any context, and fails in
+      // the log rather than on screen — so the name has to be right.
+      editor.executeAction("show_git_log");
       return;
     case "act_ws_new":
       editor.executeAction("orchestrator_new");
