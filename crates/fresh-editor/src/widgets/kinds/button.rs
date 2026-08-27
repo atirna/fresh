@@ -89,6 +89,7 @@ impl WidgetImpl for Button {
             bare,
             full_width,
             hover_style,
+            style,
             ..
         } = spec
         else {
@@ -116,7 +117,15 @@ impl WidgetImpl for Button {
             full_width.then(|| fill_button_label(label, *bare, ctx.marker_gutter, panel_width));
         let label = filled.as_deref().unwrap_or(label);
         let mut entry = if *bare {
-            render_bare_button(label, is_focused, *intent, *disabled, hover, hovered)
+            render_bare_button(
+                label,
+                is_focused,
+                *intent,
+                *disabled,
+                hover,
+                hovered,
+                style.as_ref(),
+            )
         } else {
             render_button(
                 label,
@@ -126,6 +135,7 @@ impl WidgetImpl for Button {
                 ctx.marker_gutter,
                 hover,
                 hovered,
+                style.as_ref(),
             )
         };
         // Disabled buttons skip the hit area entirely — clicks on

@@ -338,6 +338,14 @@ export function button(
      * editor's shared "close affordance under the pointer" look — the
      * tab `×` and the file explorer's `×` both use it. */
     hoverStyle?: Partial<OverlayOptions>;
+    /** How the button looks at rest — not focused, not hovered, not
+     * disabled. Omit to keep the look its `intent` gives it.
+     *
+     * The sibling of `hoverStyle`, one state earlier: `hoverStyle` can
+     * say what a control looks like under the pointer, but only this
+     * can say that a word IS a control. `{ underline: true }` is the
+     * conventional mark. */
+    style?: Partial<OverlayOptions>;
   },
 ): WidgetSpec {
   const spec: WidgetSpec = {
@@ -355,6 +363,7 @@ export function button(
   // present `undefined` into JSON `null`, which fails to deserialize
   // as the host's `Option<OverlayOptions>`.
   if (options?.hoverStyle !== undefined) spec.hoverStyle = options.hoverStyle;
+  if (options?.style !== undefined) spec.style = options.style;
   return spec;
 }
 

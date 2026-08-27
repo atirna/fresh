@@ -2291,6 +2291,23 @@ pub enum WidgetSpec {
         #[ts(type = "Partial<OverlayOptions>")]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hover_style: Option<OverlayOptions>,
+        /// How the button looks at rest — not focused, not hovered,
+        /// not disabled. `None` (the default) keeps the look its
+        /// `intent` gives it.
+        ///
+        /// The sibling of `hover_style`, and the answer to the same
+        /// question one state earlier: `hover_style` could say what a
+        /// control looks like under the pointer, but nothing could say
+        /// that it is a control at all. A bare button is just its
+        /// label, so without this the only way to mark a word as
+        /// clickable was to spend a colour on it — and `intent` offers
+        /// three fixed looks, none of them an underline.
+        ///
+        /// Focus, hover and disabled each still win over it, in that
+        /// order of immediacy.
+        #[ts(type = "Partial<OverlayOptions>")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<OverlayOptions>,
     },
     /// Horizontal whitespace eater. In a `Row`, produces `cols`
     /// spaces (or fills remaining width if `flex: true`); in a

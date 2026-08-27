@@ -810,6 +810,33 @@ Eleven things the wireframes did not know:
     page up over a workspace that was plainly in use. It now counts every
     buffer except this page and the host's own untitled seed.
 
+26. **`hoverStyle` had no sibling.** A bare button is just its label, so
+    the only way to mark a word as clickable was to spend a colour on
+    it — and `intent` offers three fixed looks, none of them an
+    underline. `Button` now carries a `style` for the resting state, the
+    same shape as `hover_style` and one state earlier. Focus, hover and
+    disabled still win over it, in that order of immediacy. The page
+    uses it for the conventional mark: clickable words are underlined,
+    and under the pointer they lift — brightest ink, bold, underline
+    kept — rather than being highlighted. A background band reads as a
+    *selection*, a state the thing is in; a glow reads as the pointer
+    being on it, which is what is actually true.
+
+    It is not applied to everything that can be clicked. A framed
+    `[ button ]` already says what it is, a fold arrow is a glyph, and a
+    full-width finder row would underline its padding as well as its
+    path. Inside a door only the verb row is marked — a card is a card,
+    not a link.
+
+27. **A code block wraps rather than truncates**, so a sample too wide
+    for its box silently loses its own tail to continuation rows. The
+    sample has a short variant, chosen against the width the box
+    actually draws at rather than a derived one. It sits in a rounded
+    `labeledSection`, inset from the prose: a listing, not a paragraph.
+    Its background is the host's `ui.inline_code_bg`, hardwired in the
+    markdown renderer shared with every hover popup and the markdown
+    preview — not this page's to switch off.
+
 ### Still aspirational
 
 - **The LSP card** shows a real syntax-highlighted Rust sample (a markdown

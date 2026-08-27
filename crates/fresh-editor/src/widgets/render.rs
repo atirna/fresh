@@ -2373,6 +2373,7 @@ pub(crate) fn dual_cursor_marker(on_cursor: bool, column_active: bool) -> &'stat
 /// `hover` style it paints the shared [`KEY_HOVER_BG`] band under the
 /// button's own colours — every framed button answers the pointer, with
 /// no per-call-site opt-in. An explicit `hover` still wins outright.
+#[allow(clippy::too_many_arguments)]
 pub fn render_button(
     label: &str,
     focused: bool,
@@ -2381,6 +2382,7 @@ pub fn render_button(
     marker_gutter: bool,
     hover: Option<&OverlayOptions>,
     hovered: bool,
+    resting: Option<&OverlayOptions>,
 ) -> TextPropertyEntry {
     // In a marker-gutter panel, focused buttons lead with `▸ ` and
     // every other button with two spaces. This is the cue that
@@ -2407,6 +2409,10 @@ pub fn render_button(
             fg: Some(OverlayColorSpec::theme_key("ui.menu_disabled_fg")),
             ..Default::default()
         }
+    } else if let Some(resting) = resting {
+        // A spec-declared resting style replaces the intent look
+        // outright, the same way `hover_style` replaces the hover one.
+        resting.clone()
     } else {
         match kind {
             ButtonKind::Normal => OverlayOptions::default(),
@@ -2490,6 +2496,7 @@ pub fn render_button(
 /// immediate signal, and the one the user is actively driving. `hovered`
 /// without a declared style falls back to the shared hover band, so even
 /// a glyph affordance lights up under the pointer.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_bare_button(
     label: &str,
     focused: bool,
@@ -2497,6 +2504,7 @@ pub(crate) fn render_bare_button(
     disabled: bool,
     hover: Option<&OverlayOptions>,
     hovered: bool,
+    resting: Option<&OverlayOptions>,
 ) -> TextPropertyEntry {
     let base = match kind {
         ButtonKind::Normal => OverlayOptions::default(),
@@ -2511,6 +2519,7 @@ pub(crate) fn render_bare_button(
             ..Default::default()
         },
     };
+    let base = resting.cloned().unwrap_or(base);
     let style = if disabled {
         OverlayOptions {
             fg: Some(OverlayColorSpec::theme_key("ui.menu_disabled_fg")),
@@ -3915,6 +3924,7 @@ pub(crate) mod tests {
             false,
             None,
             false,
+            None,
         );
         assert_eq!(entry.text, "[ Replace All ]");
         assert!(entry.inline_overlays.is_empty());
@@ -3934,6 +3944,7 @@ pub(crate) mod tests {
             false,
             None,
             false,
+            None,
         );
         assert_eq!(entry.inline_overlays.len(), 1);
         let style = &entry.inline_overlays[0].style;
@@ -3955,6 +3966,7 @@ pub(crate) mod tests {
             false,
             None,
             false,
+            None,
         );
         assert_eq!(entry.inline_overlays.len(), 1);
         let fg = entry.inline_overlays[0].style.fg.as_ref().unwrap();
@@ -3970,7 +3982,16 @@ pub(crate) mod tests {
         // former has ~6× the perceptual contrast against the popup
         // bg and is the same key the prompt already uses. See the
         // `KEY_FOCUSED_FG/BG` const comment.
-        let entry = render_button("OK", true, ButtonKind::Normal, false, false, None, false);
+        let entry = render_button(
+            "OK",
+            true,
+            ButtonKind::Normal,
+            false,
+            false,
+            None,
+            false,
+            None,
+        );
         let style = &entry.inline_overlays[0].style;
         assert_eq!(
             style.fg.as_ref().and_then(|c| c.as_theme_key()),
@@ -4012,6 +4033,7 @@ pub(crate) mod tests {
                     bare: false,
                     full_width: false,
                     hover_style: None,
+                    style: None,
                 },
             ],
             key: None,
@@ -4095,6 +4117,7 @@ pub(crate) mod tests {
                     bare: false,
                     full_width: false,
                     hover_style: None,
+                    style: None,
                 },
             ],
             key: None,
@@ -4174,6 +4197,7 @@ pub(crate) mod tests {
             bare: false,
             full_width: false,
             hover_style: None,
+            style: None,
         };
         let (_entries, hits, _state) = render_no_focus(&spec, &HashMap::new());
         assert_eq!(hits.len(), 1);
@@ -4200,6 +4224,7 @@ pub(crate) mod tests {
                     bare: false,
                     full_width: false,
                     hover_style: None,
+                    style: None,
                 },
                 WidgetSpec::Button {
                     label: "Cancel".into(),
@@ -4211,6 +4236,7 @@ pub(crate) mod tests {
                     bare: false,
                     full_width: false,
                     hover_style: None,
+                    style: None,
                 },
             ],
             key: None,
@@ -4241,6 +4267,7 @@ pub(crate) mod tests {
             false,
             None,
             false,
+            None,
         );
         assert_eq!(entry.inline_overlays.len(), 1);
         let style = &entry.inline_overlays[0].style;
@@ -4266,6 +4293,7 @@ pub(crate) mod tests {
             false,
             None,
             true,
+            None,
         );
         let style = &entry.inline_overlays[0].style;
         assert_eq!(
@@ -4290,6 +4318,7 @@ pub(crate) mod tests {
             false,
             None,
             true,
+            None,
         );
         let style = &entry.inline_overlays[0].style;
         assert!(
@@ -4459,6 +4488,7 @@ pub(crate) mod tests {
                             bare: false,
                             full_width: false,
                             hover_style: None,
+                            style: None,
                         },
                     ],
                     key: None,
@@ -7398,6 +7428,7 @@ pub(crate) mod tests {
                     bare: false,
                     full_width: false,
                     hover_style: None,
+                    style: None,
                 },
                 WidgetSpec::LabeledSection {
                     label: "Files".into(),
@@ -7748,6 +7779,7 @@ pub(crate) mod tests {
             bare: false,
             full_width: false,
             hover_style: None,
+            style: None,
         };
         let spec = WidgetSpec::Col {
             key: None,
@@ -7796,6 +7828,7 @@ pub(crate) mod tests {
             bare: false,
             full_width: false,
             hover_style: None,
+            style: None,
         };
         let spec = WidgetSpec::Col {
             key: None,

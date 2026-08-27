@@ -63,11 +63,8 @@ const C = {
    *  it made the chrome the brightest ink on the page. This is the
    *  editor's own "rule between regions" colour. */
   frame: "ui.split_separator_fg",
-  /** The editor's own "item under the pointer" pair — what the menu
-   *  bar and the file explorer paint. A clickable thing that does not
-   *  light up under the mouse does not read as clickable. */
+  /** The brightest ink the theme has for "under the pointer". */
   hoverFg: "ui.menu_hover_fg",
-  hoverBg: "ui.menu_hover_bg",
   ok: "ui.file_status_added_fg",
   err: "diagnostic.error_fg",
 };
@@ -75,8 +72,16 @@ const C = {
 /** Per-porcelain-code colour, matching the file explorer and git gutter.
  *  Themes that leave these unset fall back to the `diagnostic.*` family,
  *  so they stay theme-derived rather than a hardcoded grey. */
-/** What every clickable thing on the page does under the pointer. */
-const HOVER = { fg: C.hoverFg, bg: C.hoverBg, bold: true };
+/** A word that can be clicked is marked the way a link is marked. The
+ *  page is a document, and an underline says "this is a control" without
+ *  spending a colour that the page is already using for meaning. */
+const LINK = { underline: true };
+
+/** Under the pointer the same word lifts rather than being highlighted:
+ *  brightest ink, bold, underline kept. A background band reads as a
+ *  selection — a state the thing is in — where a glow reads as the
+ *  pointer being on it, which is what is actually true. */
+const HOVER = { fg: C.hoverFg, bold: true, underline: true };
 
 function statusFg(xy: string): string {
   const c = xy.trim();
@@ -204,12 +209,25 @@ function plain(t: string, fg?: string): WidgetSpec {
 
 /** A bullet whose marker is structure and whose text is content — the
  *  two were the same colour, which threw away the marker as a scanning
- *  aid and painted the sentence as a comment. */
+ *  aid and painted the sentence as a comment.
+ *
+ *  Wrapped at render time, with a hanging indent. Hand-wrapping set
+ *  these to the width of a wide terminal and left them breaking in the
+ *  wrong places on a narrow one — the same mistake the door copy made. */
 function bullet(t: string): WidgetSpec {
-  return line([
-    { text: "  · ", style: { fg: C.gutter } },
-    { text: t, style: { fg: C.body } },
-  ]);
+  const lines = wrap(t, Math.max(20, measure() - 6));
+  return col(
+    ...lines.map((l, i) =>
+      line(
+        i === 0
+          ? [
+            { text: "  · ", style: { fg: C.gutter } },
+            { text: l, style: { fg: C.body } },
+          ]
+          : [{ text: "    " + l, style: { fg: C.body } }]
+      )
+    ),
+  );
 }
 
 function blank(): WidgetSpec {
@@ -242,7 +260,7 @@ function verbs(): WidgetSpec[] {
     const acc = accel(action);
     const parts: WidgetSpec[] = [
       spacer(2),
-      button(shown[i], { key, bare: true, hoverStyle: HOVER }),
+      button(shown[i], { key, bare: true, style: LINK, hoverStyle: HOVER }),
     ];
     if (acc) {
       parts.push(
@@ -399,6 +417,7 @@ function startupRow(): WidgetSpec[] {
       button(`${on ? "[✓]" : "[ ]"} Show this screen on startup`, {
         key: "startupToggle",
         bare: true,
+        style: LINK,
         hoverStyle: HOVER,
       }),
     ),
@@ -464,13 +483,17 @@ function doorTextWidth(): number {
  *  the frame alone could never be routed), and the hover highlight —
  *  which the renderer applies to *every* widget sharing the hovered key
  *  — lights the whole card at once instead of one line of it. */
-function doorRow(d: Door, label: string, focusable = false): WidgetSpec {
+function doorRow(d: Door, label: string, verb = false): WidgetSpec {
   return row(
     button(label, {
       key: `jump:${d.n}`,
       bare: true,
       fullWidth: true,
-      focusable,
+      // One Tab stop per card, on the row that names the action.
+      focusable: verb,
+      // Only that row is marked: underlining every line of the card
+      // would underline its prose, and the card is a card, not a link.
+      ...(verb ? { style: LINK } : {}),
       hoverStyle: HOVER,
     }),
   );
@@ -641,6 +664,29 @@ const SAMPLE_CODE = [
   "  }",
 ];
 
+/** The same file, short enough for a narrow box. A code block does not
+ *  truncate — it *wraps*, and a wrapped line eats a row of a fixed-height
+ *  widget, so a sample too wide for its box loses its own tail. */
+const SAMPLE_CODE_NARROW = [
+  "pub struct UserStore {",
+  "    users: HashMap<u64, User>,",
+  "}",
+];
+
+/** Columns the sample actually has inside its box: the measure, less
+ *  the two-column inset, the section's own border and padding, and the
+ *  column the panel keeps for a scrollbar. Measured against the drawn
+ *  box rather than derived — a guess here shows up as a wrapped line. */
+function sampleWidth(): number {
+  return Math.max(16, measure() - 11);
+}
+
+function sampleLines(): string[] {
+  const w = sampleWidth();
+  const longest = Math.max(...SAMPLE_CODE.map((l) => l.length));
+  return longest + 1 <= w ? SAMPLE_CODE : SAMPLE_CODE_NARROW;
+}
+
 /** The sample, padded to a rectangle.
  *
  *  A markdown code block paints its background over the text it has and
@@ -651,11 +697,10 @@ const SAMPLE_CODE = [
  *  never be written into the sample: it painted a slab of code
  *  background across the whole margin.) */
 function sample(): string {
-  const longest = Math.max(...SAMPLE_CODE.map((l) => l.length));
-  const w = Math.min(longest + 2, Math.max(20, measure() - 6));
-  const body = SAMPLE_CODE.map((l) =>
-    l.length >= w ? l : l + " ".repeat(w - l.length)
-  );
+  const lines = sampleLines();
+  const longest = Math.max(...lines.map((l) => l.length));
+  const w = Math.min(longest + 2, sampleWidth());
+  const body = lines.map((l) => (l.length >= w ? l : l + " ".repeat(w - l.length)));
   return ["```rust", ...body, "```"].join("\n");
 }
 
@@ -664,26 +709,38 @@ function level2(): WidgetSpec[] {
     banner("2", "Language servers, git review, themes — here the whole time, waiting."),
     card("lsp", "Language smarts, zero setup", "real syntax highlighting", () => [
       blank(),
-      line([{ text: "  src/store.rs", style: { fg: C.value } }]),
-      blank(),
+      // The sample sits in its own rounded box, labelled with the file
+      // it is pretending to be, and inset from the prose around it — a
+      // listing, not a paragraph.
+      //
       // The margin goes AROUND the widget, never inside its text: the
       // markdown renderer turns leading spaces in a code fence into
       // NBSP and paints the code background across them, so an indent
       // written into the sample became a grey slab the width of the
-      // whole left margin.
-      text({
-        value: sample(),
-        rows: 9,
-        markdown: true,
-        readOnly: true,
-        fieldWidth: measure() - 2,
-        // Deliberately keyless: a keyed widget joins the Tab cycle, and
-        // a read-only sample is something to look at, not a stop on the
-        // way to the next control.
-      }),
+      // whole left margin. (The background inside the box is the
+      // host's `ui.inline_code_bg`, shared with every hover popup and
+      // the markdown preview, so it is not this page's to switch off.)
+      row(
+        spacer(2),
+        labeledSection({
+          label: "src/store.rs",
+          widthPct: pct(measure() - 4),
+          child: text({
+            value: sample(),
+            rows: sampleLines().length,
+            markdown: true,
+            readOnly: true,
+            fieldWidth: sampleWidth(),
+            // Deliberately keyless: a keyed widget joins the Tab cycle,
+            // and a read-only sample is something to look at, not a
+            // stop on the way to the next control.
+          }),
+        }),
+      ),
       blank(),
-      bullet("Open a file and the language server starts itself. Hover, goto,"),
-      line([{ text: "    references, rename, code actions and diagnostics, with no setup.", style: { fg: C.body } }]),
+      bullet(
+        "Open a file and the language server starts itself. Hover, goto, references, rename, code actions and diagnostics, with no setup.",
+      ),
       bullet("Configs shipped for Python, TypeScript, Rust, Go, Java, C/C++ and more."),
       bullet("Run multiple servers per language with merged completions."),
       blank(),
@@ -762,6 +819,7 @@ function themeCard(): WidgetSpec {
         button(name === activeTheme ? `● ${name}` : `  ${name}`, {
           key: `theme:${name}`,
           bare: true,
+          style: LINK,
           hoverStyle: HOVER,
         }),
         spacer(2),
@@ -804,6 +862,7 @@ function orchestratorCard(): WidgetSpec {
             button(w.name, {
               key: `ws:${w.windowId}`,
               bare: true,
+              style: LINK,
               hoverStyle: HOVER,
             }),
             flexSpacer(),
