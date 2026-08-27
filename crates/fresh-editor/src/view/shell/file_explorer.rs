@@ -270,7 +270,28 @@ fn panel(e: &Explorer) -> Node<UiMsg> {
         ),
         Body::Rows(rows) => b.children(rows.iter().map(|r| node_row(e, r))),
     };
-    b
+    // **The union box.** A right-press anywhere on the panel opens the menu,
+    // which is what the component did ("the union box spans the whole
+    // explorer") and what binding the gesture to rows alone lost: a click on
+    // the empty space below the last file answered nothing, so every test that
+    // right-clicks a row the fixture does not have saw no menu at all.
+    //
+    // Rows `stop()` their own right-press, so this fires only where no row
+    // did. The title row is excluded app-side against the panel's rectangle,
+    // exactly as the component excluded it with `ev.row <= explorer_area.y`.
+    gesture(b).on(
+        GestureKind::Press,
+        Rc::new(|ev: &Event| {
+            if ev.button != fresh_ui::MouseButton::Right || ev.mods.ctrl {
+                return None;
+            }
+            ev.stop();
+            Some(UiMsg::Ui(UiFact::ExplorerBodyContext {
+                x: ev.pos.x.max(0) as u16,
+                y: ev.pos.y.max(0) as u16,
+            }))
+        }),
+    )
 }
 
 fn node_row(e: &Explorer, r: &Row) -> Node<UiMsg> {
@@ -564,6 +585,69 @@ mod tests {
             caret_row: None,
             grip_hovered: false,
         }
+    }
+
+    /// **A right-press below the last row still opens the menu.**
+    ///
+    /// The component bound its right-press to the whole explorer, so a click
+    /// past the last entry opened the menu in its root form. Binding to rows
+    /// alone lost that, and it took out the whole `explorer_context_menu`
+    /// e2e file — those tests right-click a fixed row (10, 5) that a small
+    /// fixture does not have, so they saw no menu at all.
+    ///
+    /// The assertion is that *something* is said, on empty space. A test that
+    /// only right-clicked a row that exists would keep passing with this bug.
+    #[test]
+    fn a_right_press_below_the_last_row_still_asks_for_a_menu() {
+        // Two rows, a panel eight tall: y=6 is inside the panel, below both.
+        let e = panel_of(vec![row_of(0, "a.rs", None), row_of(1, "b.rs", None)], 30);
+        let mut ui = laid_out(e, 30, 8);
+        let got = ui.dispatch(Input::press(
+            Point::new(4, 6),
+            MouseButton::Right,
+            Mods::NONE,
+        ));
+        assert!(
+            got.msgs
+                .iter()
+                .any(|m| matches!(m, UiMsg::Ui(UiFact::ExplorerBodyContext { .. }))),
+            "empty space must still ask for a menu, got {:?}",
+            got.msgs
+        );
+    }
+
+    /// And a right-press *on* a row still reports that row — the panel-level
+    /// handler must not swallow or duplicate what a row already answered.
+    #[test]
+    fn a_right_press_on_a_row_still_reports_that_row() {
+        let e = panel_of(vec![row_of(0, "a.rs", None), row_of(1, "b.rs", None)], 30);
+        let mut ui = laid_out(e, 30, 8);
+        let r = ui.rect_of(ui.find_by_key(&row_key(1)).expect("row 1"));
+        let got = ui.dispatch(Input::press(
+            Point::new(r.x + 1, r.y),
+            MouseButton::Right,
+            Mods::NONE,
+        ));
+        let facts: Vec<_> = got
+            .msgs
+            .iter()
+            .filter_map(|m| match m {
+                UiMsg::Ui(f) => Some(f),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            facts
+                .iter()
+                .any(|f| matches!(f, UiFact::ExplorerRowContext { index: 1, .. })),
+            "got {facts:?}"
+        );
+        assert!(
+            !facts
+                .iter()
+                .any(|f| matches!(f, UiFact::ExplorerBodyContext { .. })),
+            "the row claimed it; the panel must not answer too: {facts:?}"
+        );
     }
 
     fn laid_out(e: Explorer, w: u16, h: u16) -> Ui<UiMsg> {
