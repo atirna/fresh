@@ -130,7 +130,17 @@ pub(crate) fn apply_hover_band(entry: &mut TextPropertyEntry) {
 // renders invisible against the panel bg. The diagnostic.error_fg
 // key is the canonical "red text" theme slot.
 pub(crate) const KEY_DANGER_FG: &str = "diagnostic.error_fg";
-pub(crate) const KEY_INPUT_BG: &str = "ui.prompt_bg";
+/// Background of an input's bracketed region — what makes it look
+/// editable.
+///
+/// Not `ui.prompt_bg`, which is what this was: several shipped themes
+/// set that key to a *foreground* colour (bright green on dracula,
+/// olive on nord, yellow on solarized), so a focused field on those
+/// themes lit up rather than reading as a well. This is the theme's own
+/// "a subtle band lies over the editor background", present everywhere
+/// and correct in both polarities — it lifts on the dark themes and
+/// recesses on the light one.
+pub(crate) const KEY_INPUT_BG: &str = "editor.current_line_bg";
 // Background tint for the selection span inside a widget Text
 // input. Distinct from the buffer's `ui.selection_bg` because
 // widget inputs sit on top of the `ui.prompt_bg` field-bg overlay
@@ -142,9 +152,6 @@ pub(crate) const KEY_TEXT_INPUT_SELECTION_BG: &str = "ui.text_input_selection_bg
 // vs ~RGB(100,100,100) for disabled menu items), so hint copy
 // reads as background guidance rather than a half-active value.
 pub(crate) const KEY_PLACEHOLDER_FG: &str = "editor.whitespace_indicator_fg";
-/// Background of a single-line input's bracketed region — what makes it
-/// look editable. See the overlay in `render_text_input`.
-pub(crate) const KEY_FIELD_BG: &str = "editor.current_line_bg";
 // Section-legend tint. `ui.help_key_fg` is the same key the
 // hint-bar uses to highlight keys against panel bg, so we know
 // it's tuned for readability against the same surface a
@@ -3262,35 +3269,6 @@ pub fn render_text_input(
 
     let mut overlays = Vec::new();
 
-    // The field reads as a field. Brackets alone are a weak signal —
-    // plenty of read-only labels carry them — so an input rendered on
-    // the panel's own background looked like inert text, in the welcome
-    // screen's finder, in Settings (Terminal -> Command) and in the New
-    // Agent dialog alike. A background across the bracketed region is
-    // what says "you can type here" before anyone clicks.
-    //
-    // Pushed first so the placeholder tint, the selection band and the
-    // block caret all layer over it rather than under it.
-    //
-    // `editor.current_line_bg` rather than the more obvious
-    // `ui.prompt_bg`: it is the theme's own "a subtle band lies over the
-    // editor background" colour, present in every shipped theme and
-    // correct in both polarities — it lifts on the dark themes and
-    // recesses on the light one. `ui.prompt_bg` is set to a foreground
-    // colour in several themes (bright green on dracula, olive on nord,
-    // yellow on solarized), so a field painted with it would have been
-    // luminous.
-    overlays.push(InlineOverlay {
-        start: bracket_open_byte,
-        end: bracket_close_byte,
-        style: OverlayOptions {
-            bg: Some(OverlayColorSpec::theme_key(KEY_FIELD_BG)),
-            ..Default::default()
-        },
-        properties: Default::default(),
-        unit: OffsetUnit::Byte,
-    });
-
     if show_placeholder {
         overlays.push(InlineOverlay {
             start: inner_byte_start,
@@ -3305,18 +3283,25 @@ pub fn render_text_input(
         });
     }
 
-    if focused {
-        overlays.push(InlineOverlay {
-            start: bracket_open_byte,
-            end: bracket_close_byte,
-            style: OverlayOptions {
-                bg: Some(OverlayColorSpec::theme_key(KEY_INPUT_BG)),
-                ..Default::default()
-            },
-            properties: Default::default(),
-            unit: OffsetUnit::Byte,
-        });
-    }
+    // A field looks like a field whether or not it is focused.
+    //
+    // This overlay used to be gated on `focused`, which meant an input
+    // nobody had clicked yet was drawn on the panel's own background —
+    // and brackets alone are a weak signal, plenty of read-only labels
+    // carry them. So the welcome screen's finder, Settings (Terminal ->
+    // Command) and the New Agent dialog all opened showing fields that
+    // gave no sign they could be typed into. Focus is already marked by
+    // the caret and, when there is one, the selection band.
+    overlays.push(InlineOverlay {
+        start: bracket_open_byte,
+        end: bracket_close_byte,
+        style: OverlayOptions {
+            bg: Some(OverlayColorSpec::theme_key(KEY_INPUT_BG)),
+            ..Default::default()
+        },
+        properties: Default::default(),
+        unit: OffsetUnit::Byte,
+    });
 
     // Selection overlay: paint `ui.text_input_selection_bg` over the
     // selected range. Only emitted when focused (matches the cursor
@@ -5167,7 +5152,12 @@ pub(crate) mod tests {
     fn text_input_renders_value_in_brackets() {
         let entry = render_text_input("hello", -1, None, false, "", None, 0, 0, false, 0).entry;
         assert_eq!(entry.text, "[hello]");
-        assert!(entry.inline_overlays.is_empty());
+        // Unfocused still carries the field background — that is the
+        // whole point of it: an input has to look editable before
+        // anyone has clicked it. The only overlay is that background.
+        assert_eq!(entry.inline_overlays.len(), 1);
+        let bg = entry.inline_overlays[0].style.bg.as_ref().unwrap();
+        assert_eq!(bg.as_theme_key(), Some("editor.current_line_bg"));
     }
 
     #[test]
@@ -5178,12 +5168,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn text_input_focused_adds_input_bg_overlay() {
-        let entry = render_text_input("x", -1, None, true, "", None, 0, 0, false, 0).entry;
-        // Focused → input-bg overlay (no cursor since cursor_byte < 0).
-        assert_eq!(entry.inline_overlays.len(), 1);
-        let bg = entry.inline_overlays[0].style.bg.as_ref().unwrap();
-        assert_eq!(bg.as_theme_key(), Some("ui.prompt_bg"));
+    fn text_input_adds_input_bg_overlay_regardless_of_focus() {
+        // The field background is not a focus indicator — focus is
+        // marked by the caret and the selection band — so it is present
+        // either way. It was focus-gated, which left every unfocused
+        // input looking like inert text.
+        for focused in [true, false] {
+            let entry = render_text_input("x", -1, None, focused, "", None, 0, 0, false, 0).entry;
+            assert_eq!(entry.inline_overlays.len(), 1, "focused={focused}");
+            let bg = entry.inline_overlays[0].style.bg.as_ref().unwrap();
+            assert_eq!(bg.as_theme_key(), Some("editor.current_line_bg"));
+        }
     }
 
     #[test]
@@ -6374,7 +6369,7 @@ pub(crate) mod tests {
                     .bg
                     .as_ref()
                     .and_then(|c| c.as_theme_key())
-                    .map(|k| k == "ui.prompt_bg")
+                    .map(|k| k == "editor.current_line_bg")
                     .unwrap_or(false)
             });
             assert!(has_bg, "every focused row gets input-bg");
