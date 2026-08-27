@@ -338,15 +338,23 @@ impl Editor {
         let editor_content_area = region(HostRegion::Body);
         // Presence is app state, not geometry: a hidden sidebar still has a
         // (zero-width) rectangle, and callers distinguish the two by `Option`.
-        let file_explorer_area = shell.explorer.map(|_| region(HostRegion::Explorer));
+        let file_explorer_area = shell
+            .explorer
+            .as_ref()
+            .map(|_| region(HostRegion::Explorer));
         self.active_layout_mut().file_explorer_area = file_explorer_area;
 
-        // Where the sidebar wants the hardware caret (its selected row) when
-        // it owns the keyboard. Committed at the very end of this draw, with
-        // the editor's caret, so overlays painted after the sidebar can
-        // suppress it instead of having it blink through them.
-        let explorer_hardware_cursor = file_explorer_area
-            .and_then(|file_explorer_area| self.render_file_explorer(frame, file_explorer_area));
+        // Where the sidebar wants the hardware caret (its selected row) when it
+        // owns the keyboard. The panel is native now, so this is a *layout*
+        // query rather than something a painter hands back: the caret sits on
+        // the left edge of the row the description marked. Committed at the
+        // very end of this draw, with the editor's caret, so overlays painted
+        // after the sidebar can suppress it instead of having it blink through
+        // them.
+        let explorer_hardware_cursor = file_explorer_area.and_then(|area| {
+            let row = shell.explorer.as_ref()?.caret_row?;
+            Some((area.x + 1, area.y + 1 + row as u16))
+        });
 
         // Note: Tabs are now rendered within each split by SplitRenderer
 
@@ -1914,20 +1922,33 @@ impl Editor {
     ///
     /// A *decision*, not a layout: the shell turns this into rectangles (see
     /// the frame layout at the top of `render`). Splitting the two is what let
-    /// the geometry move to `fresh-ui` without moving the policy with it.
-    fn file_explorer_layout_request(&self, chrome_width: u16) -> Option<(u16, bool)> {
+
+    /// The sidebar's content THIS instant: its chrome, and one row per visible
+    /// tree node.
+    ///
+    /// This is `FileExplorerRenderer::render` and `build_node_line` with the
+    /// geometry taken out. What is left is what the panel *says* — the title,
+    /// each row's runs and the theme name each run paints in — and layout
+    /// decides every column from it. `content_width`, `left_side_width`,
+    /// `padding`, `trailing_slot_screen_bounds`: all gone, replaced by a flex
+    /// spacer with a floor.
+    ///
+    /// `height` is the panel's, which the caller derives from the same rule
+    /// `Frame::fixed_rows` states — the viewport's row count is model state
+    /// (`set_viewport_height` drives scrolling and the web projection), so it
+    /// has to be known before the description exists.
+    fn explorer_content(
+        &mut self,
+        chrome_width: u16,
+        height: u16,
+    ) -> Option<crate::view::shell::file_explorer::Explorer> {
+        use crate::view::shell::file_explorer as fe;
         let should_show = self.file_explorer_visible()
             && (self.file_explorer().is_some()
                 || self.active_window().file_explorer_sync_in_progress);
         if !should_show {
             return None;
         }
-        tracing::trace!(
-            "render: file explorer layout active (present={}, sync_in_progress={}, side={:?})",
-            self.file_explorer().is_some(),
-            self.active_window().file_explorer_sync_in_progress,
-            self.active_window().file_explorer_side
-        );
         let cols = self
             .active_window()
             .file_explorer_width
@@ -1936,19 +1957,166 @@ impl Editor {
             self.active_window().file_explorer_side,
             FileExplorerSide::Left
         );
-        Some((cols, on_left))
+        // The explorer reads as focused only when it actually owns the
+        // keyboard — not when a focused orchestrator dock has stolen it out
+        // from under the (still-FileExplorer) window context.
+        let focused = self.active_window().key_context == KeyContext::FileExplorer
+            && !self.dock.as_ref().is_some_and(|d| d.focused);
+        let remote = self.connection_display_string();
+        let disconnected = remote
+            .as_deref()
+            .map(|c| c.contains("(Disconnected)"))
+            .unwrap_or(false);
+        let (title_theme, border_theme) = fe::chrome_themes(disconnected, focused);
+        let close_hovered = matches!(self.shell_hover, Some(HoverTarget::FileExplorerCloseButton));
+        let title = self.explorer_title(remote.as_deref());
+        let body = self.explorer_body(height, focused);
+        let caret_row = focused.then(|| self.explorer_caret_row()).flatten();
+        Some(fe::Explorer {
+            cols,
+            on_left,
+            title,
+            title_theme,
+            border_theme,
+            close_theme: fe::close_theme(close_hovered),
+            body,
+            caret_row,
+        })
     }
 
-    /// Paint the file-explorer sidebar into `area`. Composable: it draws only
-    /// into the given rect and makes no layout decisions. A no-op when the
-    /// explorer isn't materialised (mid-sync the rect stays reserved but
-    /// blank).
-    /// Placeholder page for a dormant remote session's shell: the workspace
-    /// cannot show (or edit) anything until its backend connects, so instead
-    /// of a tab bar + empty scratch buffer the content area is a blank page
-    /// with the session's backend identity and live connection state —
-    /// Connecting… while the dive's connect is in flight, the failure reason
-    /// once it failed. The dock stays the way to switch away or retry.
+    /// The panel's title: the search query while an incremental search is
+    /// open, otherwise the name plus the focus keybinding, or the remote host.
+    fn explorer_title(&self, remote: Option<&str>) -> String {
+        if let Some(view) = self.file_explorer() {
+            if view.is_search_active() {
+                return format!(" /{} ", view.search_query());
+            }
+        }
+        let suffix = self
+            .keybindings
+            .read()
+            .unwrap()
+            .get_keybinding_for_action(
+                &crate::input::keybindings::Action::FocusFileExplorer,
+                self.active_window().key_context.clone(),
+            )
+            .map(|kb| format!(" ({})", kb))
+            .unwrap_or_default();
+        match remote {
+            Some(host) => {
+                // Just the hostname out of "user@host" or "user@host:port".
+                let name = host
+                    .split('@')
+                    .next_back()
+                    .unwrap_or(host)
+                    .split(':')
+                    .next()
+                    .unwrap_or(host);
+                format!(" [{}]{} ", name, suffix)
+            }
+            None => format!(" File Explorer{} ", suffix),
+        }
+    }
+
+    /// Which viewport row the caret sits on, when the panel owns the keyboard.
+    fn explorer_caret_row(&self) -> Option<usize> {
+        let view = self.file_explorer()?;
+        let selected = view.get_selected_index()?;
+        view.viewport_display_indices()
+            .iter()
+            .position(|&i| i == selected)
+    }
+
+    /// One row per visible tree node — or the loading placeholder while the
+    /// tree is still being built.
+    ///
+    /// The viewport height is set here because it is model state: scrolling and
+    /// the web projection both read it, and it must be current whether or not
+    /// anything paints.
+    fn explorer_body(
+        &mut self,
+        height: u16,
+        focused: bool,
+    ) -> crate::view::shell::file_explorer::Body {
+        use crate::view::shell::file_explorer as fe;
+        // Borders top and bottom, as the panel has always reserved.
+        let viewport_rows = height.saturating_sub(2) as usize;
+        if let Some(view) = self.file_explorer_mut() {
+            view.set_viewport_height(viewport_rows);
+        }
+        if self.file_explorer().is_none() {
+            return fe::Body::Loading(rust_i18n::t!("explorer.loading").to_string());
+        }
+        let unsaved = self.explorer_unsaved_paths();
+        let cut: Vec<std::path::PathBuf> = self
+            .active_window()
+            .file_explorer_clipboard
+            .as_ref()
+            .filter(|cb| cb.is_cut)
+            .map(|cb| cb.paths.clone())
+            .unwrap_or_default();
+        let indicators = (
+            self.config.file_explorer.tree_indicator_collapsed.clone(),
+            self.config.file_explorer.tree_indicator_expanded.clone(),
+        );
+        let slot_resolver = self.file_explorer_slot_resolver();
+        let theme = self.theme.read().unwrap().clone();
+        let win = self.active_window();
+        let view = win.file_explorer.as_ref().expect("checked above");
+        let display = view.get_display_nodes();
+        let indices = view.viewport_display_indices();
+        let selected = view.get_selected_index();
+        let multi = view.multi_selection();
+        let search = view.is_search_active();
+        let rows: Vec<fe::Row> = indices
+            .iter()
+            .enumerate()
+            .filter_map(|(row, &actual)| {
+                let &(node_id, indent) = display.get(actual)?;
+                let matched = search.then(|| view.get_match_for_node(node_id)).flatten();
+                crate::view::ui::file_explorer::describe_row(
+                    crate::view::ui::file_explorer::RowDesc {
+                        view,
+                        node_id,
+                        indent,
+                        row,
+                        is_cursor: selected == Some(actual),
+                        is_multi: multi.contains(&node_id),
+                        focused,
+                        unsaved: &unsaved,
+                        cut: &cut,
+                        fuzzy: matched.as_ref(),
+                        decorations: &win.file_explorer_decoration_cache,
+                        slot_overrides: &win.file_explorer_slot_override_cache,
+                        slot_resolver: &slot_resolver,
+                        theme: &theme,
+                        collapsed: &indicators.0,
+                        expanded: &indicators.1,
+                    },
+                )
+            })
+            .collect();
+        fe::Body::Rows(rows)
+    }
+
+    /// Paths with unsaved changes, which a row's status slot reads.
+    fn explorer_unsaved_paths(&self) -> std::collections::HashSet<std::path::PathBuf> {
+        let win = self.active_window();
+        let mut out = std::collections::HashSet::new();
+        for (buffer_id, state) in &win.buffers {
+            if state.buffer.is_modified() {
+                if let Some(p) = win
+                    .buffer_metadata
+                    .get(buffer_id)
+                    .and_then(|m| m.file_path())
+                {
+                    out.insert(p.clone());
+                }
+            }
+        }
+        out
+    }
+
     fn render_dormant_shell_page(&mut self, frame: &mut Frame, area: ratatui::layout::Rect) {
         let active_id = self.active_window;
         let window = self.windows.get(&active_id).expect("active window exists");
@@ -2103,119 +2271,6 @@ impl Editor {
     /// Returns the cell the sidebar wants the hardware caret parked on (its
     /// selected row) when it owns the keyboard, for the caller to commit at
     /// the end of the draw. See [`FileExplorerRenderer::render`].
-    fn render_file_explorer(
-        &mut self,
-        frame: &mut Frame,
-        area: ratatui::layout::Rect,
-    ) -> Option<(u16, u16)> {
-        // Get connection string before mutable borrow of file_explorer.
-        let remote_connection = self.connection_display_string();
-
-        // Render file explorer (only if we have it - during sync we just keep the area reserved).
-        // Uses direct `self.windows.get_mut(...)` (not `file_explorer_mut()`) so the body
-        // can keep reading other Editor fields (buffers, theme, keybindings, …) — Rust
-        // splits the borrow on `self.windows` from the borrows on those other fields.
-        let active_id = self.active_window;
-        // Read window-state inputs before taking the &mut borrow on the
-        // window for the explorer/buffer access below.
-        // The explorer reads as focused only when it actually owns the
-        // keyboard — not when a focused orchestrator dock has stolen it
-        // out from under the (still-FileExplorer) window context. Without
-        // this guard the explorer keeps its accent border while the dock
-        // is driving, making it ambiguous which panel is focused.
-        let is_focused = self.active_window().key_context == KeyContext::FileExplorer
-            && !self.dock.as_ref().is_some_and(|d| d.focused);
-        let key_context_clone = self.active_window().key_context.clone();
-        let close_button_hovered = matches!(
-            &self.active_window().mouse_state.hover_target,
-            Some(HoverTarget::FileExplorerCloseButton)
-        );
-        let slot_resolver = self.file_explorer_slot_resolver();
-        // Theme-key runs the explorer records as it paints; applied to the
-        // chrome cell map after the window borrow is released.
-        let mut fe_runs: Vec<crate::app::types::ThemeRun> = Vec::new();
-        // Web renders the sidebar natively from `file_explorer_view`; skip
-        // its cell drawing (layout/viewport still applied).
-        let fe_draw = !self.suppress_chrome_cells;
-        // Take one &mut on the active window; the explorer + buffers
-        // come from disjoint sub-fields so they can coexist.
-        let __win = self
-            .windows
-            .get_mut(&active_id)
-            .expect("active window must exist");
-        let __buffers_ref: &crate::app::window::WindowBuffers = &__win.buffers;
-        // Set by the materialised panel below; the loading placeholder has no
-        // selected row and so never asks for the caret.
-        let mut explorer_cursor = None;
-        if let Some(explorer) = __win.file_explorer.as_mut() {
-            // Build set of files with unsaved changes
-            let mut files_with_unsaved_changes = std::collections::HashSet::new();
-            for (buffer_id, state) in __buffers_ref {
-                if state.buffer.is_modified() {
-                    if let Some(metadata) = __win.buffer_metadata.get(buffer_id) {
-                        if let Some(file_path) = metadata.file_path() {
-                            files_with_unsaved_changes.insert(file_path.clone());
-                        }
-                    }
-                }
-            }
-
-            let keybindings = self.keybindings.read().unwrap();
-            let empty: Vec<std::path::PathBuf> = Vec::new();
-            let cut_paths = __win
-                .file_explorer_clipboard
-                .as_ref()
-                .filter(|cb| cb.is_cut)
-                .map(|cb| cb.paths.as_slice())
-                .unwrap_or(empty.as_slice());
-            let deco = ExplorerDecorations {
-                slot_resolver,
-                decorations: &__win.file_explorer_decoration_cache,
-                slot_overrides: &__win.file_explorer_slot_override_cache,
-            };
-            explorer_cursor = FileExplorerRenderer::render(
-                explorer,
-                frame,
-                area,
-                deco,
-                is_focused,
-                &files_with_unsaved_changes,
-                &keybindings,
-                key_context_clone,
-                &self.theme.read().unwrap(),
-                close_button_hovered,
-                remote_connection.as_deref(),
-                cut_paths,
-                &self.config.file_explorer,
-                &mut crate::app::types::CellThemeRecorder::new(&mut fe_runs),
-                fe_draw,
-            );
-        } else if fe_draw {
-            // The tree isn't materialised yet but the column is reserved
-            // (initial build or expand-to-path sync in progress). Paint the
-            // panel's FINAL chrome — same title, borders, and close button as
-            // the loaded panel — with a "Loading…" body, so the explorer
-            // *visibly* appears the instant its window does and the tree
-            // landing later changes nothing but the list content. The window
-            // therefore never paints in two stages around the (always async,
-            // local and remote alike) tree build: the layout and chrome of
-            // the first frame are already final.
-            let keybindings = self.keybindings.read().unwrap();
-            FileExplorerRenderer::render_loading(
-                frame,
-                area,
-                is_focused,
-                &keybindings,
-                key_context_clone,
-                &self.theme.read().unwrap(),
-                close_button_hovered,
-                remote_connection.as_deref(),
-            );
-        }
-        self.active_chrome_mut().apply_theme_runs(&fe_runs);
-        explorer_cursor
-    }
-
     /// Render the status bar into `area`, unless it's toggled off or a
     /// suggestions / file-browser popup is occupying the bottom row. The
     /// bar's inputs are gathered by [`Self::with_status_bar_ctx`], shared
@@ -2585,6 +2640,8 @@ impl Editor {
         // layout — the rectangle it would read is one frame stale, and asking
         // for it at all is the loop the library refuses. It needs no layout:
         // the bar is the chrome column's top row.
+        let win_status_bar = self.active_window().status_bar_visible;
+        let search_options = self.search_options_content();
         let menu_layout = menu_bar_visible.then(|| ratatui::layout::Rect {
             x: chrome_area.x,
             y: chrome_area.y,
@@ -2599,14 +2656,24 @@ impl Editor {
         // that release compiles out.
         let menu_layout = menu_layout.and_then(|bar| self.menu_layout_in(bar));
         self.menu_layout_frame = menu_layout.clone();
-        let win = self.active_window();
+        // The sidebar's content. Its height is the chrome column minus the
+        // fixed rows — the rule `Frame::fixed_rows` states, applied here
+        // because the panel's viewport row count is model state that has to be
+        // current before the description is built, not a rectangle read back
+        // afterwards.
+        let fixed = menu_bar_visible as u16
+            + (win_status_bar && !has_suggestions && !has_file_browser) as u16
+            + search_options.is_some() as u16
+            + prompt_row_visible as u16;
+        let explorer_h = chrome_area.height.saturating_sub(fixed);
+        let explorer = self.explorer_content(chrome_area.width, explorer_h);
         crate::view::shell::frame::Frame {
             menu_bar: menu_bar_visible,
-            status_bar: win.status_bar_visible && !has_suggestions && !has_file_browser,
-            search_options: self.search_options_content(),
+            status_bar: win_status_bar && !has_suggestions && !has_file_browser,
+            search_options,
             prompt_line: prompt_row_visible,
             dock: dock_area.map(|d| d.width),
-            explorer: self.file_explorer_layout_request(chrome_area.width),
+            explorer,
             menu: self.open_context_menu_for_shell(),
             menu_bar_items: menu_layout
                 .as_ref()

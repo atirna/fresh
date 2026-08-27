@@ -1710,7 +1710,16 @@ list.
    (issue #2362 pinned exactly that), so nothing regressed; it simply did not
    improve. The menu bar is the exception only because its legacy walk still
    runs to produce runs.
-14. **Wheel-semantics parity** (M4/M5). Today's wheel walk has no dedup and no
+14. **A bordered box does not clip its children** (found by the explorer).
+   `.border()` insets what is inside it but nothing clips, and only a
+   `Viewport` clips at all — so a row wider than the panel paints straight
+   over the panel's own right border. The ratatui painter got this for free by
+   rendering into `Block::inner()`. Pinned as current behaviour in
+   `shell::file_explorer`'s tests. The fix is a clip flag on `Box` (or making
+   `border()` imply one), which is the fourth item in the family that produced
+   the base PR: `pointer_mode` on any node, `min_w`/`min_h`, `Event::clicks`.
+
+15. **Wheel-semantics parity** (M4/M5). Today's wheel walk has no dedup and no
    opacity gate *by ruling*; `fresh-ui` chains wheels by "a `Viewport` claims
    only if its offset changed." Close but not identical — e.g. a
    scrolled-to-bound popup over the buffer. Land an explicit parity test

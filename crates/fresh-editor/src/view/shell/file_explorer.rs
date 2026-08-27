@@ -99,8 +99,16 @@ pub enum Body {
     Rows(Vec<Row>),
 }
 
+impl Default for Body {
+    fn default() -> Body {
+        // Not an empty row list: a panel with no tree yet is *loading*, and the
+        // two look different on purpose.
+        Body::Loading(String::new())
+    }
+}
+
 /// The sidebar.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Explorer {
     /// Width in columns, already resolved against the frame.
     pub cols: u16,
@@ -332,13 +340,16 @@ fn node_row(e: &Explorer, r: &Row) -> Node<UiMsg> {
 /// The title line: the title text at the left of the top border, and the close
 /// button's three cells at its right.
 fn title_strip(e: &Explorer) -> Node<UiMsg> {
+    // Three cells of *hit area*, one cell of paint. The old close button was a
+    // one-cell `Paragraph` at `area.width - 3` whose hit test claimed three
+    // columns, and the two cells beside it kept showing the border — including
+    // the `┐` corner. A themed node three cells wide fills all three, which
+    // erases the corner; the theme goes on the glyph and the region around it
+    // stays transparent.
     let close = gesture(
-        text("×")
-            .theme(e.close_theme.clone())
-            // Three cells, matching the region the old hit test claimed
-            // (`close_button_x .. area.x + width`); the glyph is drawn at the
-            // first of them, exactly where `render_close_button` put it.
-            .w(Sizing::Cells(3)),
+        row()
+            .w(Sizing::Cells(3))
+            .child(text("×").theme(e.close_theme.clone())),
     )
     .key(close_key())
     .on(
@@ -484,4 +495,265 @@ pub fn slot_rect(
     size: ratatui::layout::Rect,
 ) -> Option<ratatui::layout::Rect> {
     rect_of(ui, &slot_key(index), size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::view::shell::fold::{fold_native, Band};
+    use crate::view::shell::frame::{frame_tree, Frame};
+    use fresh_ui::{Input, Mods, MouseButton, Point, Size, Ui};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    fn row_of(index: usize, name: &str, trailing: Option<&str>) -> Row {
+        Row {
+            index,
+            theme: Explorer::panel(),
+            left: vec![
+                ("  ".to_string(), Explorer::panel()),
+                (name.to_string(), Explorer::panel()),
+            ],
+            trailing: trailing.map(|t| Slot {
+                text: t.to_string(),
+                theme: pair("diagnostic.warning_fg", "editor.bg"),
+                path: std::path::PathBuf::from(name),
+            }),
+            error: None,
+        }
+    }
+
+    fn panel_of(rows: Vec<Row>, cols: u16) -> Explorer {
+        let (title_theme, border_theme) = chrome_themes(false, false);
+        Explorer {
+            cols,
+            on_left: true,
+            title: " Files ".to_string(),
+            title_theme,
+            border_theme,
+            close_theme: close_theme(false),
+            body: Body::Rows(rows),
+            caret_row: None,
+        }
+    }
+
+    fn laid_out(e: Explorer, w: u16, h: u16) -> Ui<UiMsg> {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            frame_tree(Frame {
+                menu_bar: false,
+                status_bar: false,
+                explorer: Some(e),
+                ..Frame::default()
+            }),
+            Size::new(w, h),
+        );
+        ui
+    }
+
+    fn lines(e: Explorer, w: u16, h: u16) -> Vec<String> {
+        let ui = laid_out(e, w, h);
+        let spec = ui.spec().clone();
+        let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+        let palette = |k: &fresh_ui::ThemeKey| super::super::fold::test_palette::of(k.as_str());
+        fold_native(&spec, &mut buf, &palette, Band::Background);
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The panel's chrome: a bordered box, the title on the top border where a
+    /// ratatui `Block` drew it, and the close button three cells from the right.
+    #[test]
+    fn the_panel_draws_its_border_title_and_close_button() {
+        let got = lines(panel_of(vec![row_of(0, "src", None)], 20), 20, 5);
+        assert_eq!(got[0], "┌ Files ─────────×─┐", "title line");
+        assert_eq!(got[1], "│  src             │", "first row");
+        assert_eq!(got[4], "└──────────────────┘", "bottom border");
+    }
+
+    /// A row's status slot is pushed to the right edge by layout, and the gap
+    /// before it never closes — `min_w(1)` is the old walk's `min_gap`.
+    #[test]
+    fn the_status_slot_is_pushed_right_and_keeps_its_gap() {
+        let got = lines(panel_of(vec![row_of(0, "a-file", Some("M"))], 20), 20, 4);
+        assert_eq!(got[1], "│  a-file         M│");
+        // Squeezed until the row no longer fits, the gap still holds its cell
+        // — which is what `min_w` is for — and the row overflows.
+        //
+        // **It overflows over the panel's own right border**, and that is a
+        // difference from the ratatui painter, which rendered the row into the
+        // `Block`'s `inner()` and so clipped it. `.border()` insets its
+        // children but does not clip them, and only a `Viewport` clips at all.
+        // Pinned here as the behaviour, not endorsed as the design: see the
+        // migration doc's open list.
+        let got = lines(
+            panel_of(vec![row_of(0, "a-long-name", Some("M"))], 16),
+            16,
+            4,
+        );
+        assert_eq!(
+            got[1], "│  a-long-name M",
+            "the gap holds; the border does not"
+        );
+    }
+
+    /// The slot's rectangle is read back off the tree — this is what replaced
+    /// `trailing_slot_screen_bounds`, which re-derived the same column from the
+    /// indicator width, the leading slot, the chain and the padding rule.
+    #[test]
+    fn the_slot_rect_comes_from_layout() {
+        let ui = laid_out(panel_of(vec![row_of(0, "a-file", Some("M"))], 20), 20, 4);
+        let size = Rect::new(0, 0, 20, 4);
+        let slot = slot_rect(&ui, 0, size).expect("the slot");
+        assert_eq!((slot.x, slot.y, slot.width), (18, 1, 1));
+        // A row without a slot reports none, rather than a zero-width sliver
+        // that would hit-test.
+        let ui = laid_out(panel_of(vec![row_of(0, "a-file", None)], 20), 20, 4);
+        assert!(slot_rect(&ui, 0, size).is_none());
+    }
+
+    /// A press on a row names the row and carries the run count the host
+    /// reported — one fact where the old walk had a single-click route and a
+    /// double-click route that derived the row separately.
+    #[test]
+    fn a_row_press_names_the_row_and_the_run() {
+        let mut ui = laid_out(
+            panel_of(vec![row_of(0, "a", None), row_of(1, "b", None)], 20),
+            20,
+            6,
+        );
+        let e = ui.find_by_key(&row_key(1)).expect("the row");
+        let r = ui.rect_of(e);
+        let got = ui.dispatch(Input::press_n(
+            Point::new(r.x + 2, r.y),
+            MouseButton::Left,
+            Mods::default(),
+            2,
+        ));
+        assert!(got.claimed);
+        assert!(
+            matches!(
+                got.msgs.as_slice(),
+                [UiMsg::Ui(UiFact::ExplorerRowPress {
+                    index: 1,
+                    clicks: 2
+                })]
+            ),
+            "got {:?}",
+            got.msgs
+        );
+    }
+
+    /// **The title line is not a row.** Pressing it used to select the panel's
+    /// first row, because `row - (area.y + 1)` clamps to zero there, while the
+    /// right-click and double-click paths guarded it out explicitly. Now it is
+    /// decoration and all three agree.
+    #[test]
+    fn the_title_line_selects_nothing() {
+        let mut ui = laid_out(panel_of(vec![row_of(0, "a", None)], 20), 20, 5);
+        let got = ui.dispatch(Input::press(
+            Point::new(4, 0),
+            MouseButton::Left,
+            Mods::default(),
+        ));
+        assert!(!got.claimed, "the title is not a target");
+        assert!(got.msgs.is_empty(), "got {:?}", got.msgs);
+    }
+
+    /// The close button absorbs its own three cells, and the grip absorbs the
+    /// right edge below the title — but the strip carrying them passes
+    /// everything else through to the rows beneath.
+    #[test]
+    fn the_overlay_absorbs_only_its_controls() {
+        let mut ui = laid_out(panel_of(vec![row_of(0, "a", None)], 20), 20, 5);
+        let close = ui.rect_of(ui.find_by_key(&close_key()).expect("close"));
+        let got = ui.dispatch(Input::press(
+            Point::new(close.x, close.y),
+            MouseButton::Left,
+            Mods::default(),
+        ));
+        assert!(
+            matches!(got.msgs.as_slice(), [UiMsg::Ui(UiFact::ExplorerClose)]),
+            "got {:?}",
+            got.msgs
+        );
+
+        let grip = ui.rect_of(ui.find_by_key(&grip_key()).expect("grip"));
+        assert_eq!(grip.w, 1, "one column");
+        assert!(grip.y > close.y, "below the title line");
+        let got = ui.dispatch(Input::press(
+            Point::new(grip.x, grip.y),
+            MouseButton::Left,
+            Mods::default(),
+        ));
+        assert!(
+            matches!(
+                got.msgs.as_slice(),
+                [UiMsg::Ui(UiFact::ExplorerResizeBegin { .. })]
+            ),
+            "got {:?}",
+            got.msgs
+        );
+
+        // …and the strip between them is not a target: a press on the row
+        // underneath the title strip's empty middle reaches the row.
+        let row = ui.rect_of(ui.find_by_key(&row_key(0)).expect("row"));
+        let got = ui.dispatch(Input::press(
+            Point::new(row.x + 1, row.y),
+            MouseButton::Left,
+            Mods::default(),
+        ));
+        assert!(
+            matches!(
+                got.msgs.as_slice(),
+                [UiMsg::Ui(UiFact::ExplorerRowPress { index: 0, .. })]
+            ),
+            "got {:?}",
+            got.msgs
+        );
+    }
+
+    /// Every name this panel paints in resolves against the real theme table.
+    #[test]
+    fn every_name_resolves() {
+        let theme = crate::view::theme::Theme::from_json(r#"{"name":"test"}"#)
+            .expect("a theme of nothing but defaults");
+        let mut names = vec![
+            Explorer::panel(),
+            close_theme(true),
+            close_theme(false),
+            row_theme(true, false, true),
+            row_theme(true, false, false),
+            row_theme(false, true, true),
+            pair("diagnostic.warning_fg", "editor.bg"),
+            pair("diagnostic.error_fg", "editor.bg"),
+            pair("search.match_fg", "search.match_bg"),
+            pair("editor.line_number_fg", "editor.bg"),
+        ];
+        for disconnected in [true, false] {
+            for focused in [true, false] {
+                let (t, b) = chrome_themes(disconnected, focused);
+                names.push(t);
+                names.push(b);
+            }
+        }
+        for k in [true, false] {
+            for s in [true, false] {
+                for d in [true, false] {
+                    names.push(pair(neutral_key(k, s, d), "editor.bg"));
+                }
+            }
+        }
+        for name in names {
+            let pair_part = name.split('+').next().unwrap_or(&name);
+            let (fg, bg) = pair_part.split_once('/').expect("a pair");
+            assert!(theme.resolve_theme_key(fg).is_some(), "unknown fg {fg:?}");
+            assert!(theme.resolve_theme_key(bg).is_some(), "unknown bg {bg:?}");
+        }
+    }
 }

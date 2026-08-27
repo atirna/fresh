@@ -75,8 +75,10 @@ pub struct Frame {
     pub prompt_line: bool,
     /// Column width, already resolved against the frame width.
     pub dock: Option<u16>,
-    /// (columns, on_left)
-    pub explorer: Option<(u16, bool)>,
+    /// The sidebar's content, or `None` when it is hidden. Like the
+    /// search-options row, content rather than a flag: the tree measures the
+    /// panel's rows and reads their rectangles back.
+    pub explorer: Option<super::file_explorer::Explorer>,
     /// The open context menu, if any. An overlay is an ordinary child of the
     /// tree rather than a separately-ranked surface — which is the whole point
     /// of moving them here.
@@ -146,15 +148,19 @@ impl Frame {
 /// whatever hangs off it.
 pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     let cells = |on: bool| Sizing::Cells(on as u16);
-    let body: Node<UiMsg> = match f.explorer {
-        Some((cols, true)) => row().flex(1).children([
-            region(HostRegion::Explorer).w(Sizing::Cells(cols)),
-            region(HostRegion::Body).flex(1),
-        ]),
-        Some((cols, false)) => row().flex(1).children([
-            region(HostRegion::Body).flex(1),
-            region(HostRegion::Explorer).w(Sizing::Cells(cols)),
-        ]),
+    // Native: the panel paints itself and answers its own pointer. It keeps
+    // the region key, so every caller that asks for `HostRegion::Explorer`'s
+    // rectangle still gets one.
+    let sidebar = |e: &super::file_explorer::Explorer| {
+        named(HostRegion::Explorer, super::file_explorer::explorer(e)).w(Sizing::Cells(e.cols))
+    };
+    let body: Node<UiMsg> = match &f.explorer {
+        Some(e) if e.on_left => row()
+            .flex(1)
+            .children([sidebar(e), region(HostRegion::Body).flex(1)]),
+        Some(e) => row()
+            .flex(1)
+            .children([region(HostRegion::Body).flex(1), sidebar(e)]),
         // No sidebar: the explorer is still in the tree taking nothing, so it
         // has a rectangle to report and the body's own is unaffected.
         None => row().flex(1).children([
