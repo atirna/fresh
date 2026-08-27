@@ -379,9 +379,13 @@ function verbs(): WidgetSpec[] {
  *  gap between a label and its value — and unlike a flex spacer it can
  *  be computed exactly, so the hint never drifts a hundred columns from
  *  the thing it describes. Narrow: the hint goes first, then the rule. */
-function heading(id: string, title: string, hint: string): WidgetSpec {
+function heading(id: string, title: string, hint: string, framed = false): WidgetSpec {
   const open = !folded.has(id);
-  const M = measure();
+  // A framed card's heading rules to the width of its own box. Ruling
+  // to the page instead left the leader running sixteen columns past
+  // the frame below it, so the heading and the card it names looked
+  // like two unrelated things.
+  const M = framed ? cardMeasure() : measure();
   const segs: StyledSegment[] = [{ text: title, style: { fg: C.accent, bold: true } }];
   const gap = M - 2 - title.length - hint.length - 2;
   if (gap >= 4) {
@@ -416,11 +420,31 @@ function card(
   body: () => WidgetSpec[],
   framed = false,
 ): WidgetSpec {
-  const head = heading(id, title, hint);
-  if (folded.has(id)) return head;
-  // No internal divider: the heading above the box already separates.
-  if (framed) return col(head, toMeasure(col(...body())));
-  return col(head, ...body());
+  const head = heading(id, title, hint, framed);
+  // Air before every section, not one blank row. Below the fold the
+  // page was a stack of headings and boxes at single-row spacing, which
+  // reads as one dense column however well each part is set — the first
+  // viewport got its rhythm and the rest of the document did not.
+  if (folded.has(id)) return col(...air(2), head);
+  if (framed) return col(...air(2), head, toCardWidth(col(...body())));
+  return col(...air(2), head, ...body());
+}
+
+/** Constrain a framed card to the card measure rather than the page's.
+ *
+ *  A box drawn to the full measure is mostly empty: the finder's paths,
+ *  the git card's file names and the workspace rows are all short, so
+ *  the frame ran forty columns past its own content and the card read
+ *  as a room rather than a card. Prose still sets to the full measure —
+ *  it is the *frames* that were too wide, not the page. */
+function toCardWidth(child: WidgetSpec): WidgetSpec {
+  return row(labeledSection({ child, widthPct: pct(cardMeasure()) }));
+}
+
+/** Framed cards sit inside the page's measure by a margin on each side,
+ *  capped so a wide terminal doesn't stretch one into a room. */
+function cardMeasure(): number {
+  return Math.max(24, Math.min(measure() - 8, 72));
 }
 
 /** A centred heading with a short rule out either side.
@@ -782,10 +806,17 @@ function finderCard(): WidgetSpec {
       }
     }
     rows.push(blank());
-    rows.push(
-      plain("  Fresh remembers your cursor position in every file. Hot Exit restores", C.body),
-    );
-    rows.push(plain("  unsaved buffers after a crash — even unnamed scratch ones.", C.body));
+    // Wrapped to the card, not hand-broken to the page: these two lines
+    // were split by hand at the old full-measure width, so narrowing the
+    // frame clipped the first one mid-word.
+    for (
+      const l of wrap(
+        "Fresh remembers your cursor position in every file. Hot Exit restores unsaved buffers after a crash — even unnamed scratch ones.",
+        Math.max(20, cardMeasure() - 6),
+      )
+    ) {
+      rows.push(plain("  " + l, C.body));
+    }
     rows.push(blank());
     return rows;
   }, true);
