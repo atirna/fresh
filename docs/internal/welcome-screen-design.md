@@ -748,6 +748,36 @@ Eleven things the wireframes did not know:
     misalignment rather than as composition; below two columns of gap the page
     stays flush left.
 
+18. **Two scroll paths is one too many.** The `0` / `Home` jump called
+    `scrollBufferToLine` directly while everything else went through the
+    tracked helper, so the plugin's model of the top line was left
+    wherever the reader had been before — and the next `Down` computed
+    from there, jumping to the end of the document. Everything scrolls
+    through the one helper now.
+
+19. **A focus event can arrive before the viewport catches up**, so
+    `revealLine` reading `getViewport().topLine` judged an on-screen row
+    off-screen and yanked the page to it. It reads the tracked line.
+
+20. **Repainting a panel that holds a text widget can pull the pane to
+    that widget.** Folding a card *by click* never moved the page;
+    folding the same card *by keyboard* dropped the reader two cards
+    away, at the finder field. With the finder card folded — no text
+    widget in the panel — the keyboard fold held its place exactly,
+    which named the cause. A fold now re-asserts the line it happened
+    on.
+
+21. **`labeledSection` emits no hit of its own**, so a `key` on one is
+    inert: clicking a door's frame could not be routed. Its headline is
+    a full-width bare button instead, which is also what gives the card
+    a hover.
+
+22. **`widthPct` applies only to a Block child of a Row.** The stacked
+    doors filled their column for free while they were children of a
+    `Col`; wrapping each in a `row` to carry the page margin switched
+    `widthPct` back on and shrank them to a third of the pane. The
+    percentage has to name the layout it is in.
+
 ### Still aspirational
 
 - **The LSP card** shows a real syntax-highlighted Rust sample (a markdown

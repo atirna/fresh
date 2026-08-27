@@ -501,17 +501,30 @@ function doorTextWidth(): number {
   const wide = viewportWidth() >= 96;
   return wide
     ? Math.max(12, Math.floor(measure() / 3) - 5)
-    : Math.max(12, measure() - 6);
+    : Math.max(12, measure() - 8);
 }
 
 function doorCard(d: Door, rows: number): WidgetSpec {
   const body = wrap(d.body, doorTextWidth());
   return inFrame(() => labeledSection({
     label: d.head,
-    widthPct: pct(measure() / 3),
+    // Stacked, each door is wrapped in its own `row` to carry the page
+    // margin — which is also what makes `widthPct` apply at all, so it
+    // has to name the whole measure there rather than a third of it.
+    widthPct: pct(viewportWidth() >= 96 ? measure() / 3 : measure()),
     key: `door:${d.n}`,
     child: col(
-      plain(d.sub, C.body),
+      // `labeledSection` emits no hit of its own, so clicking a card's
+      // frame does nothing the host can route. Its headline is a
+      // full-width bare button instead: the line the eye lands on
+      // answers the pointer, and the `jump ↓` verb below repeats it.
+      row(button(d.sub, {
+        key: `jump:${d.n}`,
+        bare: true,
+        fullWidth: true,
+        focusable: false,
+        hoverStyle: HOVER,
+      })),
       blank(),
       ...body.map((b) => plain(b, C.muted)),
       // `labeledSection` sizes to its own child, so an uneven row of
@@ -541,7 +554,12 @@ function doors(): WidgetSpec[] {
     blank(),
     line([{ text: "  WHAT BRINGS YOU HERE?", style: { fg: C.muted } }]),
     blank(),
-    wide ? row(...margin(), ...cards) : col(...cards),
+    // Stacked, each card still carries the margin: a `spacer` beside a
+    // block child offsets the block, and without it the doors sat flush
+    // left under prose that was indented.
+    wide
+      ? row(...margin(), ...cards)
+      : col(...cards.map((c) => row(...margin(), c))),
   ];
 }
 
@@ -1303,22 +1321,48 @@ registerHandler("welcome_jump_2", () => void jumpTo("2"));
 registerHandler("welcome_jump_3", () => void jumpTo("3"));
 registerHandler("welcome_jump_top", () => {
   engaged = true;
-  if (bufferId !== null) editor.scrollBufferToLine(bufferId, 0);
+  // Through `scrollTopTo`, not a raw `scrollBufferToLine`: the plugin's
+  // own model of the top line is what relative scrolling reads, and a
+  // scroll that moved the pane without telling it left the next `Down`
+  // computing from wherever the reader had been before.
+  scrollTopTo(0);
 });
 registerHandler("welcome_tab", () => dispatch(widgetKey("Tab")));
 registerHandler("welcome_shift_tab", () => dispatch(widgetKey("Shift+Tab")));
-registerHandler("welcome_enter", () => {
-  engaged = true;
-  // A single-line Text widget treats Enter as advance-focus, so a
-  // finder that only forwarded the key would move on rather than open
-  // what the reader picked. Opening is this field's whole purpose.
+/** Activate whatever has focus.
+ *
+ *  Two keys are handled here rather than forwarded to the panel:
+ *
+ *  - the finder field, because a single-line `Text` widget treats Enter
+ *    as advance-focus, and opening the pick is this field's whole
+ *    purpose;
+ *  - a fold arrow, because the host's own activation advances focus
+ *    afterwards, and if that lands on a text widget the host scrolls the
+ *    pane to it. Folding a card by keyboard therefore worked and then
+ *    dropped the reader two cards away. Folding by *click* never did,
+ *    which is what named the culprit. */
+function activateFocused(): boolean {
   if (finderFocused()) {
     openFinderHit(finderIndex);
-    return;
+    return true;
   }
+  if (lastFocusedWidget.startsWith("fold:")) {
+    activateKey(lastFocusedWidget);
+    return true;
+  }
+  return false;
+}
+
+registerHandler("welcome_enter", () => {
+  engaged = true;
+  if (activateFocused()) return;
   dispatch(widgetKey("Enter"));
 });
-registerHandler("welcome_space", () => dispatch(widgetKey("Space")));
+registerHandler("welcome_space", () => {
+  engaged = true;
+  if (activateFocused()) return;
+  dispatch(widgetKey("Space"));
+});
 function moveFinder(delta: number): void {
   if (finderHits.length === 0) return;
   finderIndex = (finderIndex + delta + finderHits.length) % finderHits.length;
@@ -1454,7 +1498,15 @@ function activateKey(k: string): void {
     const id = k.slice(5);
     if (folded.has(id)) folded.delete(id);
     else folded.add(id);
+    // A fold is the one action where the reader's line matters and the
+    // host may move it: repainting a panel that holds a focused-capable
+    // text widget (the finder field) can pull the pane to that widget.
+    // Folding by click never showed it; folding by keyboard did, and
+    // dropped the reader two cards away from the card they just folded.
+    // Re-assert the line the fold happened on.
+    const top = trackedTop();
     render();
+    scrollTopTo(top);
     return;
   }
   if (k.startsWith("hit:")) {
@@ -1525,7 +1577,12 @@ function activateKey(k: string): void {
 function revealLine(line: number): void {
   const vp = editor.getViewport();
   if (!vp) return;
-  const top = typeof vp.topLine === "number" ? vp.topLine : 0;
+  // `trackedTop`, not `vp.topLine`: the raw value lags our own scrolls,
+  // so a focus event arriving just after one judged an on-screen row to
+  // be off-screen and yanked the page to it. Folding a card by keyboard
+  // did exactly that — the fold worked, and then the reader was
+  // somewhere else.
+  const top = trackedTop();
   if (line >= top && line < top + vp.height - 2) return;
   scrollTopTo(Math.max(0, line - 1));
 }
