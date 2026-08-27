@@ -931,14 +931,15 @@ impl Editor {
             // This is also the path a hover change re-renders through, so
             // the panel's tracked hover key has to reach the renderer here
             // — otherwise entering a `×` would repaint it unhighlighted.
-            let hover_key = panel_slot
-                .and_then(|slot| self.panel(slot))
-                .map(|f| f.hovered_widget_key.clone())
-                .unwrap_or_default();
-            let hover_item_key = panel_slot
-                .and_then(|slot| self.panel(slot))
-                .map(|f| f.hovered_item_key.clone())
-                .unwrap_or_default();
+            // A buffer-mounted panel has no `FloatingWidgetPanel` to
+            // carry this, so it keeps its hover on its registry state.
+            let (hover_key, hover_item_key) = match panel_slot {
+                Some(slot) => self
+                    .panel(slot)
+                    .map(|f| (f.hovered_widget_key.clone(), f.hovered_item_key.clone()))
+                    .unwrap_or_default(),
+                None => self.widget_registry.hover_keys(panel_key),
+            };
             // Row budget for auto-sized lists/trees: the floating
             // panel's inner height when this is a floating/dock slot,
             // else the split viewport height of the panel's buffer.
@@ -2981,6 +2982,129 @@ impl Editor {
             changed = true;
         }
         changed
+    }
+
+    /// Track what the pointer is over inside panels mounted into a
+    /// BUFFER — the welcome screen, Settings, Search & Replace — and
+    /// re-render the ones whose answer changed.
+    ///
+    /// `update_widget_hover` is the same job for the dock and floating
+    /// slots; it walks those two `PanelSlot`s and cannot see a mounted
+    /// panel, which is why every clickable thing in one used to stay
+    /// dark under the pointer. Resolution goes through the same
+    /// `screen_to_buffer_position` → `hit_test_row_aware` pair the
+    /// mounted click path uses, so hover and click can never disagree
+    /// about what the pointer is on.
+    pub(super) fn update_mounted_widget_hover(&mut self, col: u16, row: u16) -> bool {
+        // Which mounted panel is under the pointer, and on what.
+        let mut hit_for: Option<(BufferId, String, String)> = None;
+        let areas = self.active_layout().split_areas.clone();
+        for (split_id, buffer_id, content_rect, _sb, _ts, _te) in &areas {
+            if col < content_rect.x
+                || col >= content_rect.x + content_rect.width
+                || row < content_rect.y
+                || row >= content_rect.y + content_rect.height
+            {
+                continue;
+            }
+            if self
+                .widget_registry
+                .panels_for_buffer(*buffer_id)
+                .is_empty()
+            {
+                continue;
+            }
+            let cached_mappings = self
+                .active_layout()
+                .view_line_mappings
+                .get(split_id)
+                .cloned();
+            let splits = self
+                .windows
+                .get(&self.active_window)
+                .and_then(|w| w.buffers.splits())
+                .map(|(_, vs)| vs);
+            let fallback = splits
+                .and_then(|vs| vs.get(split_id))
+                .map(|vs| vs.viewport.top_byte())
+                .unwrap_or(0);
+            let compose_width = splits
+                .and_then(|vs| vs.get(split_id))
+                .and_then(|vs| vs.compose_width);
+            let gutter_width = self
+                .buffers()
+                .get(buffer_id)
+                .map(|s| s.margins.left_total_width() as u16)
+                .unwrap_or(0);
+            let Some(byte_pos) = super::click_geometry::screen_to_buffer_position(
+                col,
+                row,
+                *content_rect,
+                gutter_width,
+                &cached_mappings,
+                fallback,
+                true,
+                compose_width,
+            ) else {
+                break;
+            };
+            let Some(state) = self
+                .windows
+                .get(&self.active_window)
+                .map(|w| &w.buffers)
+                .and_then(|b| b.get(buffer_id))
+            else {
+                break;
+            };
+            let (brow, bcol) = state.buffer.position_to_line_col(byte_pos);
+            // `on_overlay = false`: a mounted panel drops the overlay and
+            // popup channels at mount, so there is no covering surface.
+            if let Some((_, hit)) = self.widget_registry.hit_test_row_aware(
+                *buffer_id,
+                brow.min(u32::MAX as usize) as u32,
+                bcol.min(u32::MAX as usize) as u32,
+                false,
+            ) {
+                let item = hit
+                    .payload
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                hit_for = Some((*buffer_id, hit.widget_key.clone(), item));
+            }
+            break;
+        }
+        // Every other mounted panel resolves to "nothing hovered", which
+        // is what clears a highlight the pointer has left.
+        let mut changed = Vec::new();
+        for panel_key in self.widget_registry.panel_keys() {
+            let Some(buffer_id) = self
+                .widget_registry
+                .buffer_and_spec_ref(&panel_key)
+                .map(|(b, _)| b)
+            else {
+                continue;
+            };
+            if Self::slot_for_panel_buffer(buffer_id).is_some() {
+                continue;
+            }
+            let (widget, item) = match &hit_for {
+                Some((b, w, i)) if *b == buffer_id => (w.clone(), i.clone()),
+                _ => (String::new(), String::new()),
+            };
+            if self
+                .widget_registry
+                .set_hover_keys(&panel_key, widget, item)
+            {
+                changed.push(panel_key);
+            }
+        }
+        let any = !changed.is_empty();
+        for panel_key in changed {
+            self.rerender_widget_panel(&panel_key);
+        }
+        any
     }
 
     pub(super) fn handle_floating_widget_click(

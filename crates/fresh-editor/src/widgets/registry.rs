@@ -310,6 +310,16 @@ pub struct WidgetPanelState {
     /// Structure + panel-relative geometry for hit-tested dispatch
     /// and the derived focus ring.
     pub boxes: Vec<crate::widgets::LayoutBox>,
+    /// Widget the pointer is over, `""` for none.
+    ///
+    /// Floating and dock panels keep this on their `FloatingWidgetPanel`
+    /// instead; it lives here for panels mounted into a BUFFER, which
+    /// have no such struct — and which, until this field existed, could
+    /// not light anything under the pointer at all.
+    pub hovered_widget_key: String,
+    /// The hovered ROW's own key, for kinds whose rows share one widget
+    /// key (`List`, `Tree`). Empty for everything else.
+    pub hovered_item_key: String,
 }
 
 impl WidgetPanelState {
@@ -420,6 +430,13 @@ impl WidgetRegistry {
         effective_rows: HashMap<String, u32>,
         boxes: Vec<crate::widgets::LayoutBox>,
     ) -> Option<WidgetPanelState> {
+        // A re-mount under a stationary pointer keeps its highlight:
+        // the pointer has not moved, so neither should what it lights.
+        let (hovered_widget_key, hovered_item_key) = self
+            .panels
+            .get(&panel_key)
+            .map(|p| (p.hovered_widget_key.clone(), p.hovered_item_key.clone()))
+            .unwrap_or_default();
         self.panels.insert(
             panel_key,
             WidgetPanelState {
@@ -431,8 +448,33 @@ impl WidgetRegistry {
                 tabbable,
                 effective_rows,
                 boxes,
+                hovered_widget_key,
+                hovered_item_key,
             },
         )
+    }
+
+    /// What the pointer is over in this panel: `(widget key, row key)`,
+    /// both empty when nothing is.
+    pub fn hover_keys(&self, panel_key: &PanelKey) -> (String, String) {
+        self.panels
+            .get(panel_key)
+            .map(|p| (p.hovered_widget_key.clone(), p.hovered_item_key.clone()))
+            .unwrap_or_default()
+    }
+
+    /// Record what the pointer is over. Returns true when that changed —
+    /// the caller re-renders only on the enter/leave transition, so
+    /// pointer movement across a panel costs a hit-test and nothing else.
+    pub fn set_hover_keys(&mut self, panel_key: &PanelKey, widget: String, item: String) -> bool {
+        match self.panels.get_mut(panel_key) {
+            Some(p) if p.hovered_widget_key != widget || p.hovered_item_key != item => {
+                p.hovered_widget_key = widget;
+                p.hovered_item_key = item;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Replace the spec and rendered metadata on an already-mounted

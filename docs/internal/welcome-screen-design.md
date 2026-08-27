@@ -299,7 +299,7 @@ screen:
  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**5 — The end of the buffer.** Links, the startup toggle, and the closing line. Below it, the buffer's own `~` filler: the page ends the way every file in Fresh ends.
+**5 — The end of the buffer.** Links and the closing line. Below it, the buffer's own `~` filler: the page ends the way every file in Fresh ends.
 
 ```text
  ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -510,14 +510,17 @@ without needing the Dashboard's blunt "close on any file open".
 was the thing you just closed leaves the plain placeholder for the rest of the
 session. There is no loop, and no way to get trapped.
 
-**The startup toggle.** `[x] Show this screen on startup` sits at the top
-right of the first viewport, on the chips line. A control for "I don't want
-this screen" belongs where someone who doesn't want the screen will actually
-look — the first thing they see — not at the bottom of a page they were never
-going to scroll. Below the two-column fold it drops to its own line rather
-than being pushed off the edge. The panel auto-focuses its first widget, so
-the initial focus is moved to the first door explicitly: a stray `Enter` on
-open must not switch the screen off.
+**The startup toggle.** `[✓] Show this screen on startup` sits on its own
+line directly under the chips, at the head of the first viewport. A control
+for "I don't want this screen" belongs where someone who doesn't want the
+screen will actually look — the first thing they see — not at the bottom of a
+page they were never going to scroll. It was flushed right on the chips line
+for one revision; on a 150-column terminal that put it sixty columns from
+anything it related to, which is the same mistake the verb keys made (§13.13).
+It is a bare button rather than a `toggle` widget: the two draw the same box,
+but a button can say what it does under the pointer. The panel auto-focuses
+its first widget, so the initial focus is moved to the first door explicitly:
+a stray `Enter` on open must not switch the screen off.
 
 **Neighbouring surfaces.**
 
@@ -706,6 +709,44 @@ Eleven things the wireframes did not know:
     stayed a 22-column column inside a 57-column box — the one place on the
     page that looked broken at the narrow breakpoint. They are single
     sentences now, wrapped at render time to whichever width is in force.
+
+13. **Nothing right-aligned reads as connected across a wide measure.** The
+    verb keys sat at the right edge of the column and the startup toggle at
+    the right edge of the chips line; at 150 columns neither looked like it
+    belonged to the thing it named. The keys are a column of their own four
+    spaces past the longest label now, and the toggle has its own line. The
+    surviving right-aligned things all have a rule or a box connecting them
+    to their label — a card heading's hint, a workspace row's branch.
+
+14. **A panel repaint keeps the pane's scroll position.** The plugin had a
+    save-and-restore around `panel.set()`, on the belief that a repaint parks
+    the viewport at line 0. It does not — and the restore, which travels
+    through the host's *reveal* path, lands a line off, so every keystroke in
+    the finder walked the page up the screen. Deleting it fixed the drift.
+
+15. **A relative scroll needs its own ceiling.** `getViewport().topLine` does
+    not refresh between the plugin's own scrolls, so the plugin's model of the
+    top line is the authority — and at the bottom of the document, where the
+    pane stops moving, that model kept climbing. Holding `Down` past the end
+    bought as many dead `Up` presses. The model is clamped to the painted line
+    count now.
+
+16. **Buffer-mounted widget panels had no hover at all** — the one finding
+    that could not be fixed from the plugin side. `update_widget_hover` walks
+    the `Dock` and `Floating` panel slots; a panel mounted into a *buffer* has
+    no `FloatingWidgetPanel` to hold a hovered key, so `hoverStyle` on any of
+    its widgets was dead spec. The fix is small and belongs to the runtime
+    rather than to this page: the hovered keys live on the panel's registry
+    state, and a second tracker resolves the pointer through the same
+    `screen_to_buffer_position` → `hit_test_row_aware` pair the mounted click
+    path already uses, so hover and click can never disagree. Settings and
+    Search & Replace get it too.
+
+17. **A one-column margin is a wobble, not a margin.** The measure is capped
+    at 88 columns and centred in the pane, page-view style. Between 88 and 92
+    columns the arithmetic yields a one-column indent, which reads as a
+    misalignment rather than as composition; below two columns of gap the page
+    stays flush left.
 
 ### Still aspirational
 

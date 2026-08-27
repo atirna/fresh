@@ -7542,6 +7542,8 @@ pub(crate) mod tests {
             tabbable: out.tabbable,
             effective_rows: out.effective_rows,
             boxes: out.boxes,
+            hovered_widget_key: String::new(),
+            hovered_item_key: String::new(),
         }
     }
 

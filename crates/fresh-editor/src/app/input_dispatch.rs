@@ -588,6 +588,8 @@ impl Editor {
             tabbable: Vec::new(),
             effective_rows: std::collections::HashMap::new(),
             boxes: Vec::new(),
+            hovered_widget_key: String::new(),
+            hovered_item_key: String::new(),
         };
         // Every trigger converges on the kind's activation key; Toggle and
         // Button treat Space and Enter identically.

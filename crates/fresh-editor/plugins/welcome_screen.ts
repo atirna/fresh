@@ -2,7 +2,6 @@
 import {
   button,
   col,
-  divider,
   flexSpacer,
   labeledSection,
   raw,
@@ -13,7 +12,6 @@ import {
   text,
   textInput,
   textInputChar,
-  toggle,
   type WidgetSpec,
   WidgetPanel,
   key as widgetKey,
@@ -65,6 +63,11 @@ const C = {
    *  it made the chrome the brightest ink on the page. This is the
    *  editor's own "rule between regions" colour. */
   frame: "ui.split_separator_fg",
+  /** The editor's own "item under the pointer" pair — what the menu
+   *  bar and the file explorer paint. A clickable thing that does not
+   *  light up under the mouse does not read as clickable. */
+  hoverFg: "ui.menu_hover_fg",
+  hoverBg: "ui.menu_hover_bg",
   ok: "ui.file_status_added_fg",
   err: "diagnostic.error_fg",
 };
@@ -72,6 +75,9 @@ const C = {
 /** Per-porcelain-code colour, matching the file explorer and git gutter.
  *  Themes that leave these unset fall back to the `diagnostic.*` family,
  *  so they stay theme-derived rather than a hardcoded grey. */
+/** What every clickable thing on the page does under the pointer. */
+const HOVER = { fg: C.hoverFg, bg: C.hoverBg };
+
 function statusFg(xy: string): string {
   const c = xy.trim();
   if (c === "??") return "ui.file_status_untracked_fg";
@@ -188,8 +194,53 @@ const LEVEL_MARK: Record<string, string> = {
 
 // ── Small helpers ────────────────────────────────────────────────────
 
+/** Columns of left margin, so the measure sits centred in a wide pane
+ *  instead of hugging the left edge — the same page-view treatment the
+ *  markdown compose mode gives a document. Zero once the pane is no
+ *  wider than the measure. */
+function indent(): number {
+  const gap = Math.floor((viewportWidth() - measure()) / 2);
+  // A one-column margin is not a margin, it is a wobble: below the cap
+  // the measure already fills the pane, so leave the page flush left.
+  return gap >= 2 ? gap : 0;
+}
+
+/** Nesting depth inside a framed card. A card is already laid out at
+ *  the margin, so its contents must not be indented a second time;
+ *  everything else on the page is a top-level row and must be. */
+let insideFrame = 0;
+
+/** Build rows that live inside a box the caller has already placed at
+ *  the margin, so `line` does not indent them a second time. */
+function inFrame<T>(fn: () => T): T {
+  insideFrame++;
+  try {
+    return fn();
+  } finally {
+    insideFrame--;
+  }
+}
+
+/** A row of the page: indented to the margin unless we are inside a
+ *  card, which carries the margin itself. */
 function line(segments: StyledSegment[]): WidgetSpec {
+  const ind = insideFrame > 0 ? 0 : indent();
+  return raw([
+    styledRow(ind > 0 ? [{ text: " ".repeat(ind) }, ...segments] : segments),
+  ]);
+}
+
+/** A row fragment used *inside* a `row(...)`, where the enclosing row
+ *  already placed the margin. */
+function lineAt(segments: StyledSegment[]): WidgetSpec {
   return raw([styledRow(segments)]);
+}
+
+/** `spacer(0)` is still a widget; this keeps empty margins out of the
+ *  layout entirely. */
+function margin(extra = 0): WidgetSpec[] {
+  const n = indent() + extra;
+  return n > 0 ? [spacer(n)] : [];
 }
 
 function plain(t: string, fg?: string): WidgetSpec {
@@ -215,30 +266,37 @@ function accel(action: string): string {
     editor.getKeybindingLabel(action, "global") ?? "";
 }
 
-/** A keybinding hint, or nothing at all when the action is unbound —
- *  never a stale hardcoded key. */
-function accelSpec(action: string): WidgetSpec[] {
-  const label = accel(action);
-  if (!label) return [];
-  return [flexSpacer(), line([{ text: label, style: { fg: C.key } }]), spacer(2)];
-}
+const VERBS: [string, string, string][] = [
+  ["act_open", "Open file", "open"],
+  ["act_recent", "Find a recent file", "quick_open"],
+  ["act_new", "New buffer", "new"],
+];
 
-/** One clickable verb: `▸ Label` at the prose edge, its key at the
- *  right of the measure. The gap is computed rather than flexed — a
- *  `flexSpacer` here stretched `Ctrl+O` 125 columns away from the thing
- *  it belonged to. */
-function verb(key: string, label: string, action: string): WidgetSpec {
-  const shown = `▸ ${label}`;
-  const acc = accel(action);
-  const gap = Math.max(2, measure() - 2 - shown.length - acc.length);
-  const parts: WidgetSpec[] = [
-    spacer(2),
-    button(shown, { key, bare: true, hoverStyle: { fg: C.accent } }),
-  ];
-  if (acc) {
-    parts.push(spacer(gap), line([{ text: acc, style: { fg: C.key } }]));
-  }
-  return row(...parts);
+/** The three verbs, each with its live keybinding.
+ *
+ *  The keys used to sit at the right edge of the measure, flushed there
+ *  by the width of the column rather than by anything to do with the
+ *  verb — `Ctrl+O` ended up sixty columns from `Open file` and read as
+ *  belonging to nothing. They are a column of their own now, four
+ *  spaces past the longest label, so the eye can carry a label to its
+ *  key without crossing the page. */
+function verbs(): WidgetSpec[] {
+  const shown = VERBS.map(([, label]) => `▸ ${label}`);
+  const keyCol = Math.max(...shown.map((t) => t.length)) + 4;
+  return VERBS.map(([key, , action], i) => {
+    const acc = accel(action);
+    const parts: WidgetSpec[] = [
+      ...margin(2),
+      button(shown[i], { key, bare: true, hoverStyle: HOVER }),
+    ];
+    if (acc) {
+      parts.push(
+        spacer(keyCol - shown[i].length),
+        lineAt([{ text: acc, style: { fg: C.key } }]),
+      );
+    }
+    return row(...parts);
+  });
 }
 
 /** A section heading: fold arrow at the rail, title, then a leader rule
@@ -259,13 +317,14 @@ function heading(id: string, title: string, hint: string): WidgetSpec {
     if (g >= 2) segs.push({ text: " " + "─".repeat(g), style: { fg: C.frame } });
   }
   return row(
+    ...margin(),
     button(open ? "▾" : "▸", {
       key: `fold:${id}`,
       bare: true,
-      hoverStyle: { fg: C.accent },
+      hoverStyle: HOVER,
     }),
     spacer(1),
-    line(segs),
+    lineAt(segs),
   );
 }
 
@@ -286,7 +345,7 @@ function card(
   const head = heading(id, title, hint);
   if (folded.has(id)) return head;
   // No internal divider: the heading above the box already separates.
-  if (framed) return col(head, toMeasure(col(...body())));
+  if (framed) return col(head, toMeasure(col(...inFrame(body))));
   return col(head, ...body());
 }
 
@@ -359,9 +418,16 @@ function hero(): WidgetSpec[] {
   ];
 }
 
-/** The chips line, with the startup toggle right-aligned on it when
- *  there is room. Below the two-column fold the toggle drops to its own
- *  line rather than being pushed off the edge. */
+/** The chips line, with the startup control on the line below it.
+ *
+ *  It used to be flushed to the right of the chips, which put the one
+ *  control that turns the page off at the far edge of a wide terminal,
+ *  connected to nothing. Its own line at the margin is where a reader
+ *  scanning the top of the page actually looks.
+ *
+ *  A bare button rather than a `toggle`: it draws the same `[✓]` box,
+ *  but a button can say what it does under the pointer and a toggle
+ *  cannot. */
 function startupRow(): WidgetSpec[] {
   const chips = line([
     { text: "  single static binary", style: { fg: C.muted } },
@@ -370,13 +436,19 @@ function startupRow(): WidgetSpec[] {
     { text: "  ·  ", style: { fg: C.gutter } },
     { text: "open source", style: { fg: C.muted } },
   ]);
-  const sw = toggle(showOnStartup(), "Show this screen on startup", {
-    key: "startupToggle",
-  });
-  if (viewportWidth() >= 96) {
-    return [row(chips, flexSpacer(), sw, spacer(2))];
-  }
-  return [chips, blank(), row(spacer(2), sw)];
+  const on = showOnStartup();
+  return [
+    chips,
+    blank(),
+    row(
+      ...margin(2),
+      button(`${on ? "[✓]" : "[ ]"} Show this screen on startup`, {
+        key: "startupToggle",
+        bare: true,
+        hoverStyle: HOVER,
+      }),
+    ),
+  ];
 }
 
 // ── The three doors ──────────────────────────────────────────────────
@@ -434,7 +506,7 @@ function doorTextWidth(): number {
 
 function doorCard(d: Door, rows: number): WidgetSpec {
   const body = wrap(d.body, doorTextWidth());
-  return labeledSection({
+  return inFrame(() => labeledSection({
     label: d.head,
     widthPct: pct(measure() / 3),
     key: `door:${d.n}`,
@@ -451,13 +523,13 @@ function doorCard(d: Door, rows: number): WidgetSpec {
         button("jump ↓", {
           key: `jump:${d.n}`,
           bare: true,
-          hoverStyle: { fg: C.accent },
+          hoverStyle: HOVER,
         }),
         flexSpacer(),
-        line([{ text: d.n, style: { fg: C.key } }]),
+        lineAt([{ text: d.n, style: { fg: C.key } }]),
       ),
     ),
-  });
+  }));
 }
 
 function doors(): WidgetSpec[] {
@@ -469,7 +541,7 @@ function doors(): WidgetSpec[] {
     blank(),
     line([{ text: "  WHAT BRINGS YOU HERE?", style: { fg: C.muted } }]),
     blank(),
-    wide ? row(...cards) : col(...cards),
+    wide ? row(...margin(), ...cards) : col(...cards),
   ];
 }
 
@@ -526,11 +598,20 @@ function finderCard(): WidgetSpec {
       for (let i = 0; i < Math.min(finderHits.length, 6); i++) {
         const h = finderHits[i];
         const on = i === finderIndex;
+        // A result you can see is a result you should be able to click.
+        // `fullWidth` so the hover paints the whole row rather than the
+        // path's own cells; `focusable: false` so Tab still makes one
+        // stop at this card instead of six.
         rows.push(
-          line([
-            { text: on ? "  ▸ " : "    ", style: { fg: C.accent } },
-            { text: h.path, style: { fg: on ? C.value : C.muted } },
-          ]),
+          row(
+            button(`${on ? "  ▸ " : "    "}${h.path}`, {
+              key: `hit:${i}`,
+              bare: true,
+              fullWidth: true,
+              focusable: false,
+              hoverStyle: HOVER,
+            }),
+          ),
         );
       }
       if (finderHits.length > 6) {
@@ -666,9 +747,9 @@ function gitCard(): WidgetSpec {
     rows.push(
       row(
         spacer(2),
-        button("Review the branch diff", { key: "act_review", hoverStyle: { fg: C.accent } }),
+        button("Review the branch diff", { key: "act_review", hoverStyle: HOVER }),
         spacer(2),
-        button("Git log", { key: "act_gitlog", hoverStyle: { fg: C.accent } }),
+        button("Git log", { key: "act_gitlog", hoverStyle: HOVER }),
       ),
     );
     rows.push(blank());
@@ -687,7 +768,7 @@ function themeCard(): WidgetSpec {
         button(name === activeTheme ? `● ${name}` : `  ${name}`, {
           key: `theme:${name}`,
           bare: true,
-          hoverStyle: { fg: C.accent },
+          hoverStyle: HOVER,
         }),
         spacer(2),
       );
@@ -729,7 +810,7 @@ function orchestratorCard(): WidgetSpec {
             button(w.name, {
               key: `ws:${w.windowId}`,
               bare: true,
-              hoverStyle: { fg: C.accent },
+              hoverStyle: HOVER,
             }),
             flexSpacer(),
             line([{ text: w.branch, style: { fg: C.muted } }]),
@@ -756,13 +837,13 @@ function orchestratorCard(): WidgetSpec {
     const actions: WidgetSpec[] = [spacer(2)];
     if (orchLoaded) {
       actions.push(
-        button("New workspace…", { key: "act_ws_new", hoverStyle: { fg: C.accent } }),
+        button("New workspace…", { key: "act_ws_new", hoverStyle: HOVER }),
         spacer(2),
-        button("Run agent here…", { key: "act_ws_agent", hoverStyle: { fg: C.accent } }),
+        button("Run agent here…", { key: "act_ws_agent", hoverStyle: HOVER }),
         spacer(2),
       );
     }
-    actions.push(button("Open the dock", { key: "act_ws_dock", hoverStyle: { fg: C.accent } }));
+    actions.push(button("Open the dock", { key: "act_ws_dock", hoverStyle: HOVER }));
     rows.push(row(...actions));
     rows.push(blank());
     rows.push(plain("  One workspace per git worktree, each with its own terminals and", C.body));
@@ -794,7 +875,9 @@ function level3(): WidgetSpec[] {
 function footer(): WidgetSpec[] {
   return [
     blank(),
-    divider({ style: { fg: C.frame } }),
+    // Not `divider`, which rules the whole pane: at this width the page
+    // ended with a line twice as long as anything above it.
+    line([{ text: "  " + "─".repeat(Math.max(4, measure() - 4)), style: { fg: C.frame } }]),
     blank(),
     plain("  That's the whole ladder. Most days you'll live on rung one — the rest", C.value),
     plain("  keeps up when you climb.", C.value),
@@ -828,7 +911,7 @@ function pct(cols: number): number {
  *  `widthPct`, and an inline `spacer` beside a block child would indent
  *  only the first row, so this is the one available route. */
 function toMeasure(child: WidgetSpec): WidgetSpec {
-  return row(labeledSection({ child, widthPct: pct(measure()) }));
+  return row(...margin(), labeledSection({ child, widthPct: pct(measure()) }));
 }
 
 function viewportWidth(): number {
@@ -841,9 +924,7 @@ function buildSpec(): WidgetSpec {
     ...hero(),
     ...doors(),
     blank(),
-    verb("act_open", "Open file", "open"),
-    verb("act_recent", "Find a recent file", "quick_open"),
-    verb("act_new", "New buffer", "new"),
+    ...verbs(),
     blank(),
     // It teaches keybindings, so the keys should look like keys — the
     // verbs two lines above already paint theirs in `ui.help_key_fg`.
@@ -875,17 +956,16 @@ function buildSpec(): WidgetSpec {
 
 /** Re-paint the page.
  *
- *  A widget-panel repaint replaces the whole buffer, which parks the
- *  viewport back at line 0 — fine on a panel that fits its pane, wrong
- *  on a document you scroll. So the scroll line is captured and
- *  restored around the repaint. Folding only removes rows *below* a
- *  card's header, so every line above the viewport top is unchanged
- *  and the restore is exact rather than approximate. */
+ *  A panel repaint keeps the pane's scroll position, so there is
+ *  nothing to save and restore here. There used to be: a capture of
+ *  the top line and a `scrollTopTo` after the repaint. It was not only
+ *  unnecessary, it was the one thing on the page that scrolled by
+ *  itself — the restore travels through the host's *reveal* path,
+ *  which lands a line off, so every keystroke in the finder walked the
+ *  whole document up the screen. */
 function render(): void {
   if (!panel) return;
-  const top = trackedTop();
   panel.set(buildSpec());
-  if (top > 0) scrollTopTo(top);
   void resolveLevelLines();
 }
 
@@ -899,6 +979,20 @@ function render(): void {
  *  anything else that moves the view) gets picked up. */
 let desiredTop = 0;
 let lastObserved = 0;
+/** Rows in the painted page, refreshed after each render. */
+let totalLines = 0;
+
+/** The furthest down the page can go.
+ *
+ *  Without this, holding Down past the end kept incrementing our own
+ *  model of the top line while the pane stayed put — so coming back up
+ *  did nothing for as many presses as had been wasted going down. */
+function maxTop(): number {
+  if (totalLines === 0) return Number.MAX_SAFE_INTEGER;
+  const vp = editor.getViewport();
+  const h = vp && vp.height > 0 ? vp.height : 30;
+  return Math.max(0, totalLines - Math.max(4, h - 2));
+}
 
 function trackedTop(): number {
   const vp = editor.getViewport();
@@ -920,7 +1014,8 @@ function trackedTop(): number {
  *  behaviour intact rather than asking for a second scroll verb. */
 function scrollTopTo(line: number): void {
   if (bufferId === null) return;
-  desiredTop = Math.max(0, line);
+  desiredTop = Math.min(Math.max(0, line), maxTop());
+  line = desiredTop;
   const vp = editor.getViewport();
   const h = vp && vp.height > 0 ? vp.height : 30;
   editor.scrollBufferToLine(bufferId, line + Math.floor(h / 3));
@@ -934,6 +1029,7 @@ async function resolveLevelLines(): Promise<void> {
   try {
     const t = await editor.getBufferText(bufferId);
     const lines = t.split("\n");
+    totalLines = lines.length;
     for (const k of Object.keys(LEVEL_MARK)) {
       const idx = lines.findIndex((l) => l.includes(LEVEL_MARK[k]));
       if (idx >= 0) levelLines[k] = idx;
@@ -1351,6 +1447,14 @@ function activateKey(k: string): void {
     render();
     return;
   }
+  if (k.startsWith("hit:")) {
+    const i = Number(k.slice(4));
+    if (Number.isFinite(i)) {
+      finderIndex = i;
+      openFinderHit(i);
+    }
+    return;
+  }
   if (k.startsWith("jump:")) {
     void jumpTo(k.slice(5));
     return;
@@ -1398,6 +1502,8 @@ function activateKey(k: string): void {
       editor.executeAction("toggle_dock_focus");
       return;
     case "startupToggle":
+      editor.setGlobalState("showOnStartup", !showOnStartup());
+      render();
       return;
     default:
       return;
@@ -1443,14 +1549,6 @@ editor.on("widget_event", (args) => {
     finderQuery = payload.value;
     finderCursor = typeof payload.cursorByte === "number" ? payload.cursorByte : finderQuery.length;
     recomputeHits();
-    render();
-    return;
-  }
-
-  if (args.event_type === "toggle" && k === "startupToggle") {
-    const payload = args.payload as { checked?: boolean } | undefined;
-    const next = payload?.checked === true;
-    editor.setGlobalState("showOnStartup", next);
     render();
     return;
   }

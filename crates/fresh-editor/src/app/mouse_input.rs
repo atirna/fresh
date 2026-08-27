@@ -339,6 +339,11 @@ impl Editor {
                 // scrollbar reveal (`Dock::on_hover_change`), and likewise
                 // re-rendering only on the enter/leave transition.
                 needs_render = self.update_widget_hover(col, row, None) || needs_render;
+                // The same, for panels mounted into a buffer rather than
+                // floating over one — the welcome screen, Settings,
+                // Search & Replace. They resolve through the buffer's own
+                // geometry, so they get their own tracker.
+                needs_render = self.update_mounted_widget_hover(col, row) || needs_render;
             }
             MouseEventKind::ScrollUp => {
                 self.handle_vertical_scroll(&tree, col, row, mouse_event.modifiers, -3)?;
