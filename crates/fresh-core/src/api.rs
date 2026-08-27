@@ -2705,6 +2705,17 @@ pub enum WidgetSpec {
         /// equal-split path.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         width_pct: Option<u32>,
+        /// When this section is a Block child of a Row, request exactly
+        /// this many columns. Takes precedence over `width_pct`.
+        ///
+        /// A percent cannot express "a third of the row": the integer
+        /// rounding does not divide, so three equal siblings either
+        /// overflow the panel — and the host wraps the last one onto a
+        /// line of its own — or leave a ragged remainder that all lands
+        /// on one side. Columns are what a caller with a measure in mind
+        /// actually has, and asking in them is exact.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width_cols: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<String>,
         /// How the section's own chrome — its border and its legend —

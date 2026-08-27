@@ -418,7 +418,7 @@ function card(
  *  as a room rather than a card. Prose still sets to the full measure —
  *  it is the *frames* that were too wide, not the page. */
 function toCardWidth(child: WidgetSpec): WidgetSpec {
-  return row(labeledSection({ child, widthPct: pct(cardMeasure()) }));
+  return row(labeledSection({ child, widthCols: cardMeasure() }));
 }
 
 /** Framed cards sit inside the page's measure by a margin on each side,
@@ -671,9 +671,14 @@ function doorCard(d: Door, rows: number): WidgetSpec {
     // to fill a `Col` takes the whole PANEL width, which on a pane a
     // little wider than the measure is wider than the compose area the
     // host clips to — and the card's top border wrapped.
-    widthPct: pct(
-      viewportWidth() >= 96 ? (measure() - DOOR_GAP * 2) / 3 : measure(),
-    ),
+    // Exact columns, so three doors and two gutters add up to the
+    // measure. As an integer percent this did not divide: rounding up
+    // overflowed the panel and the host wrapped the third card onto a
+    // line of its own, rounding down left three columns of slack that
+    // all landed on the right.
+    widthCols: viewportWidth() >= 96
+      ? Math.floor((measure() - DOOR_GAP * 2) / 3)
+      : measure(),
     child: col(
       doorRow(d, d.sub),
       doorRow(d, " "),
@@ -913,7 +918,7 @@ function level2(): WidgetSpec[] {
         spacer(2),
         labeledSection({
           label: "src/store.rs",
-          widthPct: pct(measure() - 4),
+          widthCols: measure() - 4,
           child: text({
             value: sample(),
             rows: sampleLines().length,
@@ -1147,24 +1152,12 @@ function measure(): number {
   return Math.min(Math.max(20, viewportWidth() - 2), MEASURE);
 }
 
-/** `widthPct` is an integer percent, so this wobbles a column on
- *  resize — close enough for a text column, and it keeps the host as
- *  the one that owns layout.
- *
- *  Percent *of the panel*, which is the compose column, not the split:
- *  the host applies the percentage to the width it lays widgets out
- *  in. Dividing by the viewport was right only while those two were
- *  the same number, and the moment they diverged the doors came out a
- *  third too narrow and clipped their own headings. */
-function pct(cols: number): number {
-  return Math.max(1, Math.min(100, Math.round((cols * 100) / measure())));
-}
 
 /** Constrain a block to the measure. Only `labeledSection` reads
  *  `widthPct`, and an inline `spacer` beside a block child would indent
  *  only the first row, so this is the one available route. */
 function toMeasure(child: WidgetSpec): WidgetSpec {
-  return row(labeledSection({ child, widthPct: pct(measure()) }));
+  return row(labeledSection({ child, widthCols: measure() }));
 }
 
 /** Hand the page's column to the host's own page-view machinery.

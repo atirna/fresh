@@ -138,11 +138,28 @@ impl WidgetImpl for Overlay {
 /// multi-line Text, Raw) participate in the equal-split path.
 /// Out-of-range (0, > 100, or unset) collapses to `None` so
 /// callers don't have to re-check.
-fn labeled_section_width_pct(spec: &WidgetSpec) -> Option<u32> {
-    let WidgetSpec::LabeledSection { width_pct, .. } = spec else {
+/// The explicit width a section asks for, in columns, resolved against
+/// the row's `panel_width`.
+///
+/// `width_cols` wins over `width_pct`: it is exact, where a percent
+/// rounds — three equal siblings cannot be expressed as integer
+/// percents, and rounding up overflows the panel so the host wraps the
+/// last one onto its own line.
+fn labeled_section_width(spec: &WidgetSpec, panel_width: u32) -> Option<u32> {
+    let WidgetSpec::LabeledSection {
+        width_pct,
+        width_cols,
+        ..
+    } = spec
+    else {
         return None;
     };
-    width_pct.filter(|pct| (1..=100).contains(pct))
+    if let Some(cols) = width_cols.filter(|c| *c > 0) {
+        return Some(cols.min(panel_width.max(1)));
+    }
+    width_pct
+        .filter(|pct| (1..=100).contains(pct))
+        .map(|pct| (panel_width as u64 * pct as u64 / 100) as u32)
 }
 
 fn predicts_block(spec: &WidgetSpec) -> bool {
@@ -383,8 +400,7 @@ fn allocate_row_child_widths(children: &[WidgetSpec], panel_width: u32) -> Vec<u
     let mut explicit_total: u32 = 0;
     let mut explicit_count: u32 = 0;
     for &idx in &block_indices {
-        if let Some(pct) = labeled_section_width_pct(&children[idx]) {
-            let w = (panel_width as u64 * pct as u64 / 100) as u32;
+        if let Some(w) = labeled_section_width(&children[idx], panel_width) {
             per_child_width[idx] = w.max(1);
             explicit_total = explicit_total.saturating_add(w);
             explicit_count += 1;
@@ -394,7 +410,7 @@ fn allocate_row_child_widths(children: &[WidgetSpec], panel_width: u32) -> Vec<u
     let implicit_count = (block_count as u32).saturating_sub(explicit_count).max(1);
     let each_implicit = (remaining / implicit_count).max(1);
     for &idx in &block_indices {
-        if labeled_section_width_pct(&children[idx]).is_none() {
+        if labeled_section_width(&children[idx], panel_width).is_none() {
             per_child_width[idx] = each_implicit;
         }
     }

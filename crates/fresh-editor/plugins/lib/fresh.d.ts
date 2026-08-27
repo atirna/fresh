@@ -2027,6 +2027,18 @@ type WidgetSpec = {
 	* equal-split path.
 	*/
 	widthPct?: number | null;
+	/**
+	* When this section is a Block child of a Row, request exactly
+	* this many columns. Takes precedence over `width_pct`.
+	*
+	* A percent cannot express "a third of the row": the integer
+	* rounding does not divide, so three equal siblings either
+	* overflow the panel — and the host wraps the last one onto a
+	* line of its own — or leave a ragged remainder that all lands
+	* on one side. Columns are what a caller with a measure in mind
+	* actually has, and asking in them is exact.
+	*/
+	widthCols?: number | null;
 	key?: string | null;
 	/**
 	* How the section's own chrome — its border and its legend —

@@ -785,6 +785,13 @@ export function labeledSection(options: {
    * Useful for picker-style layouts: a narrow list pane next to
    * a wide preview pane. */
   widthPct?: number;
+  /** When this section is a Block child of a Row, request exactly this
+   * many columns. Takes precedence over `widthPct`, and is what you
+   * want whenever you have a measure in mind: a percent is an integer,
+   * so "a third of the row" does not divide — three equal siblings
+   * either overflow the panel, and the host wraps the last onto its own
+   * line, or leave a remainder that all lands on one side. */
+  widthCols?: number;
   key?: string;
 }): WidgetSpec {
   const spec: WidgetSpec = {
@@ -794,6 +801,7 @@ export function labeledSection(options: {
     widthPct: options.widthPct,
     key: options.key,
   };
+  if (options.widthCols !== undefined) spec.widthCols = options.widthCols;
   if (options.hoverStyle !== undefined) spec.hoverStyle = options.hoverStyle;
   return spec;
 }
