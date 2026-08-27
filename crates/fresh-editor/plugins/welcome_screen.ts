@@ -1726,7 +1726,13 @@ editor.defineMode(
     ["3", "welcome_jump_3"],
     ["0", "welcome_jump_top"],
     ["Tab", "welcome_tab"],
-    ["S-Tab", "welcome_shift_tab"],
+    // Shift+Tab is its own key code, not Tab carrying a modifier: the
+    // terminal sends CSI Z and the parser yields `BackTab`. `S-Tab`
+    // parses to Tab+Shift and matched nothing, so back-tab was dead on
+    // this page. Both spellings are bound because the event does still
+    // carry SHIFT alongside the BackTab code.
+    ["BackTab", "welcome_shift_tab"],
+    ["S-BackTab", "welcome_shift_tab"],
     ["Return", "welcome_enter"],
     ["Space", "welcome_space"],
     ["Up", "welcome_up"],
