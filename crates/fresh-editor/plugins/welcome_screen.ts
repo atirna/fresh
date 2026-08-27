@@ -668,7 +668,13 @@ const SAMPLE = [
   "      }",
   "  }",
   "```",
-].join("\n");
+];
+
+/** The sample at the page margin. */
+function sample(): string {
+  const pad = " ".repeat(indent());
+  return SAMPLE.map((l) => (l.startsWith("```") ? l : pad + l)).join("\n");
+}
 
 function level2(): WidgetSpec[] {
   return [
@@ -677,12 +683,15 @@ function level2(): WidgetSpec[] {
       blank(),
       line([{ text: "  src/store.rs", style: { fg: C.value } }]),
       blank(),
+      // The markdown widget paints its own rows, so the page margin has
+      // to be inside the sample rather than around it: a `spacer` beside
+      // a block child would indent only the block's first row.
       text({
-        value: SAMPLE,
+        value: sample(),
         rows: 9,
         markdown: true,
         readOnly: true,
-        fieldWidth: measure() - 2,
+        fieldWidth: indent() + measure() - 2,
         // Deliberately keyless: a keyed widget joins the Tab cycle, and
         // a read-only sample is something to look at, not a stop on the
         // way to the next control.
@@ -877,7 +886,8 @@ function footer(): WidgetSpec[] {
     blank(),
     // Not `divider`, which rules the whole pane: at this width the page
     // ended with a line twice as long as anything above it.
-    line([{ text: "  " + "─".repeat(Math.max(4, measure() - 4)), style: { fg: C.frame } }]),
+    // Ruled to the cards' own edges, not inset from them.
+    line([{ text: "─".repeat(Math.max(4, measure() - 2)), style: { fg: C.frame } }]),
     blank(),
     plain("  That's the whole ladder. Most days you'll live on rung one — the rest", C.value),
     plain("  keeps up when you climb.", C.value),
