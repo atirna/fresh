@@ -1320,6 +1320,7 @@ mod tests {
         let left = WidgetSpec::LabeledSection {
             label: "alpha/beta · this project (2)".into(),
             child: Box::new(make_text_input("x", -1, false, false, 4, Some("a"))),
+            width_cols: None,
             width_pct: Some(40),
             key: None,
             hover_style: None,
@@ -1327,6 +1328,7 @@ mod tests {
         let right = WidgetSpec::LabeledSection {
             label: "preview".into(),
             child: Box::new(make_text_input("y", -1, false, false, 4, Some("b"))),
+            width_cols: None,
             width_pct: None,
             key: None,
             hover_style: None,
@@ -1367,6 +1369,7 @@ mod tests {
         let left = WidgetSpec::LabeledSection {
             label: "Steps".into(),
             child: Box::new(make_list(0, 3, 10, Some("rail"))),
+            width_cols: None,
             width_pct: Some(30),
             key: None,
             hover_style: None,
@@ -1374,6 +1377,7 @@ mod tests {
         let right = WidgetSpec::LabeledSection {
             label: "Prose".into(),
             child: Box::new(make_list(-1, 3, 10, Some("prose"))),
+            width_cols: None,
             width_pct: Some(70),
             key: None,
             hover_style: None,

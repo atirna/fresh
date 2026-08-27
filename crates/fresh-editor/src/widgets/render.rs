@@ -4738,6 +4738,7 @@ pub(crate) mod tests {
                 entries: vec![TextPropertyEntry::text(body)],
                 key: None,
             }),
+            width_cols: None,
             width_pct: None,
             key: None,
             hover_style: None,
@@ -4816,6 +4817,7 @@ pub(crate) mod tests {
                 entries: vec![TextPropertyEntry::text(body)],
                 key: None,
             }),
+            width_cols: None,
             width_pct: None,
             key: None,
             hover_style: None,
@@ -6630,6 +6632,7 @@ pub(crate) mod tests {
         let spec = WidgetSpec::LabeledSection {
             label: "Name".into(),
             child: Box::new(make_text_input("hi", -1, false, false, 4, Some("n"))),
+            width_cols: None,
             width_pct: None,
             key: None,
             hover_style: None,
@@ -6782,6 +6785,7 @@ pub(crate) mod tests {
                 entries: vec![wide, narrow],
                 key: None,
             }),
+            width_cols: None,
             width_pct: None,
             key: None,
             hover_style: None,
@@ -6803,6 +6807,7 @@ pub(crate) mod tests {
         let spec = WidgetSpec::LabeledSection {
             label: "".into(),
             child: Box::new(make_text_input("hi", -1, false, false, 4, Some("n"))),
+            width_cols: None,
             width_pct: None,
             key: None,
             hover_style: None,
@@ -6826,6 +6831,7 @@ pub(crate) mod tests {
         let spec = WidgetSpec::LabeledSection {
             label: "".into(),
             child: Box::new(make_text_input("ab", -1, false, true, 0, Some("n"))),
+            width_cols: None,
             width_pct: None,
             key: None,
             hover_style: None,
@@ -6849,6 +6855,7 @@ pub(crate) mod tests {
         let spec = WidgetSpec::LabeledSection {
             label: "".into(),
             child: Box::new(make_text_input("abc", 3, true, false, 4, Some("n"))),
+            width_cols: None,
             width_pct: None,
             key: None,
             hover_style: None,
@@ -6872,6 +6879,7 @@ pub(crate) mod tests {
                 WidgetSpec::LabeledSection {
                     label: "Name".into(),
                     child: Box::new(make_text_input("", -1, false, false, 0, Some("n"))),
+                    width_cols: None,
                     width_pct: None,
                     key: None,
                     hover_style: None,
@@ -6879,6 +6887,7 @@ pub(crate) mod tests {
                 WidgetSpec::LabeledSection {
                     label: "Cmd".into(),
                     child: Box::new(make_text_input("", -1, false, false, 0, Some("c"))),
+                    width_cols: None,
                     width_pct: None,
                     key: None,
                     hover_style: None,
@@ -7469,6 +7478,7 @@ pub(crate) mod tests {
                 WidgetSpec::LabeledSection {
                     label: "Files".into(),
                     child: Box::new(boxed_list("l", 3, 5)),
+                    width_cols: None,
                     width_pct: None,
                     key: None,
                     hover_style: None,
