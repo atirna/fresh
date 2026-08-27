@@ -441,26 +441,32 @@ mod tests {
     /// builds `Ui::new()` and frames once, so none of them exercises that.
     ///
     /// A changed message must reach the cells on the second frame. It does
-    /// not, but **only when a layer that was open in frame 1 is gone in frame
-    /// 2** — which is the shape of every remaining e2e failure: a context menu
-    /// is open, the click both runs the item and closes the menu, and the
-    /// assertion then checks the screen changed.
+    /// not, **whenever a layer is present in the tree**. Drop the layer from
+    /// this test and it passes; keep it — open in both frames, or open in the
+    /// first and gone in the second, either way — and the status bar keeps
+    /// painting the first frame's row.
+    ///
+    /// That is the shape of every remaining e2e failure: a context menu is
+    /// open, a click both runs the item and closes the menu, and the assertion
+    /// checks the screen changed.
     ///
     /// Traced end to end in the real editor: the action runs, the clipboard is
     /// written, `status_message` is set, `status_bar_description` is built with
     /// the new text, that description reaches `ui.frame(..)` — and the
     /// `fold_native(ui.spec())` immediately after paints the *previous*
     /// frame's row. `Ui::frame` calls `flush_paint` unconditionally and
-    /// `flush_paint` clears and rebuilds, so the stale content is not a skipped
-    /// paint: the render tree itself still holds frame 1's status bar. The
-    /// reconciler is not updating sibling subtrees across a layer's removal.
+    /// `flush_paint` clears the spec and repaints from the render tree, and the
+    /// rebuilt spec *still* carries the old runs — dumped mid-debug as
+    /// `[" Trusted ", " Opened rel.txt "]` after frame 2. So this is not a
+    /// skipped paint and not the fold: the render tree itself was never
+    /// updated. A layer's presence is stopping its siblings from reconciling.
     ///
     /// Drop the layer from this test and it passes, which is why nothing
     /// caught it: every other shell test builds `Ui::new()` and frames once,
     /// so none of them reconciles at all, let alone across a closing overlay.
     #[test]
-    #[ignore = "reproduces an unfixed fresh-ui reconciliation bug: removing a \
-                layer leaves sibling subtrees painting the previous frame. \
+    #[ignore = "reproduces an unfixed fresh-ui reconciliation bug: a layer in \
+                the tree leaves sibling subtrees painting the previous frame. \
                 Un-ignore when the library fix lands — this test is its \
                 acceptance criterion."]
     fn a_second_frame_repaints_a_changed_message() {
