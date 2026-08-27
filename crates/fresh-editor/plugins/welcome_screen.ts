@@ -274,19 +274,47 @@ function blank(): WidgetSpec {
   return raw([styledRow([{ text: "" }])]);
 }
 
-/** Leading pad that centres `width` columns inside the measure.
+/** `n` blank rows on a terminal with the height to spend them, one when
+ *  there isn't.
  *
- *  The page's own margin is two columns, so a centred row starts from
- *  there rather than from zero — a row centred against the full measure
- *  and then indented sits two columns right of true centre. */
-function centrePad(width: number): number {
-  return Math.max(2, Math.floor((measure() - width) / 2));
+ *  Air between blocks is most of what separates a composed page from a
+ *  dense one, and single blank rows everywhere packed the first
+ *  viewport into a slab. But that viewport also has to *be* one
+ *  viewport — the doors, the verbs and the scroll hint all land above
+ *  the fold — so on a short terminal the air is the first thing to go.
+ *  The rhythm is a function of the height available, not a constant. */
+function air(n: number): WidgetSpec[] {
+  const rows = viewportHeight() >= 38 ? n : 1;
+  return Array.from({ length: rows }, () => blank());
 }
 
-/** Centre a run of segments by measuring their combined text. */
+function viewportHeight(): number {
+  const vp = editor.getViewport();
+  return vp && vp.height > 0 ? vp.height : 40;
+}
+
+/** Centre a run of styled text by letting the host do it.
+ *
+ *  Two flex spacers split the leftover width evenly, so the row lands
+ *  on the axis of whatever the panel's content width actually is —
+ *  after the compose column is centred in the pane, after the gutter
+ *  and scrollbar take their columns, after a dock drag resizes the
+ *  split. The plugin never learns any of those numbers.
+ *
+ *  This replaced a pad computed from `measure()`, which was wrong by
+ *  two columns in a way worth recording: the widget layout was sizing
+ *  rows to the *split* while the renderer painted them into the
+ *  narrower compose column, so a flex spacer overfilled and the host
+ *  wrapped the row. That is fixed in the host (`widget_panel_width`
+ *  now honours `compose_width`), and with the two widths agreeing the
+ *  page can simply ask to be centred. */
 function centred(segs: StyledSegment[]): WidgetSpec {
-  const w = segs.reduce((n, s) => n + s.text.length, 0);
-  return line([{ text: " ".repeat(centrePad(w)) }, ...segs]);
+  return centredRow(line(segs));
+}
+
+/** The same, for a row of widgets rather than styled text. */
+function centredRow(...parts: WidgetSpec[]): WidgetSpec {
+  return row(flexSpacer(), ...parts, flexSpacer());
 }
 
 function accel(action: string): string {
@@ -338,7 +366,8 @@ function verbs(): WidgetSpec[] {
       width += 1 + acc.length;
     }
   });
-  return [row(spacer(centrePad(width)), ...parts)];
+  void width;
+  return [centredRow(...parts)];
 }
 
 /** A section heading: fold arrow at the rail, title, then a leader rule
@@ -390,11 +419,17 @@ function card(
   return col(head, ...body());
 }
 
-/** A centred heading with a rule running out either side of it. */
+/** A centred heading with a short rule out either side.
+ *
+ *  Short on purpose: run out to the measure and the rule stops marking
+ *  a heading and becomes a divider across the page — heavier than the
+ *  words it sets off, and at 87 of 88 columns too wide to centre at
+ *  all, so the whole heading sat two columns right of the page. */
+const RULE_ARM = 6;
+
 function rule(label: string): WidgetSpec {
-  const arm = Math.max(3, Math.floor((measure() - label.length - 4) / 2));
-  return line([
-    { text: " ".repeat(centrePad(arm * 2 + label.length + 4)) },
+  const arm = Math.max(2, Math.min(RULE_ARM, Math.floor((measure() - label.length - 6) / 2)));
+  return centred([
     { text: "─".repeat(arm) + "  ", style: { fg: C.frame } },
     { text: label, style: { fg: C.body, bold: true } },
     { text: "  " + "─".repeat(arm), style: { fg: C.frame } },
@@ -450,8 +485,8 @@ const ART = [
  *  it went teal → navy → magenta, which is a stripe, not a light. */
 const ART_W = Math.max(...ART.map((l) => l.length));
 
-function artLine(l: string, pad: number): WidgetSpec {
-  const segs: StyledSegment[] = [{ text: " ".repeat(pad) }];
+function artLine(l: string): WidgetSpec {
+  const segs: StyledSegment[] = [];
   let i = 0;
   while (i < l.length) {
     const face = l[i] === "█";
@@ -463,14 +498,15 @@ function artLine(l: string, pad: number): WidgetSpec {
     });
     i = j;
   }
-  return line(segs);
+  // Every row of the mark is the same width, so centring each row
+  // independently keeps the mark rigid.
+  return centred(segs);
 }
 
 function hero(): WidgetSpec[] {
   const wide = viewportWidth() >= 60;
-  const pad = centrePad(ART_W);
   const art = wide
-    ? ART.map((l) => artLine(l, pad))
+    ? ART.map((l) => artLine(l))
     : [centred([{ text: "fresh", style: { fg: C.art, bold: true } }])];
   const tag = viewportWidth() >= 70
     ? "A terminal text editor and IDE.  It grows when your work does."
@@ -483,7 +519,7 @@ function hero(): WidgetSpec[] {
     ...startupRow(),
     blank(),
     ...art,
-    blank(),
+    ...air(2),
     centred([{ text: tag, style: { fg: C.muted, italic: true } }]),
     blank(),
     chipsRow(),
@@ -516,7 +552,7 @@ function startupRow(): WidgetSpec[] {
   const label = `${on ? "[✓]" : "[ ]"} Show this screen on startup`;
   return [
     row(
-      spacer(Math.max(2, measure() - label.length - 1)),
+      flexSpacer(),
       button(label, {
         key: "startupToggle",
         bare: true,
@@ -616,7 +652,9 @@ function doorCard(d: Door, rows: number): WidgetSpec {
     // to fill a `Col` takes the whole PANEL width, which on a pane a
     // little wider than the measure is wider than the compose area the
     // host clips to — and the card's top border wrapped.
-    widthPct: pct(viewportWidth() >= 96 ? measure() / 3 : measure()),
+    widthPct: pct(
+      viewportWidth() >= 96 ? (measure() - DOOR_GAP * 2) / 3 : measure(),
+    ),
     child: col(
       doorRow(d, d.sub),
       doorRow(d, " "),
@@ -635,19 +673,27 @@ function doorCard(d: Door, rows: number): WidgetSpec {
   });
 }
 
+/** Columns between the doors, taken out of the cards rather than added
+ *  to the row: the three still have to add up to the measure. Three
+ *  boxes sharing a wall read as one grid; separated they read as three
+ *  peers, which is what they are. */
+const DOOR_GAP = 2;
+
 function doors(): WidgetSpec[] {
   const wide = viewportWidth() >= 96;
   const w = doorTextWidth();
   const rows = Math.max(...DOORS.map((d) => wrap(d.body, w).length));
   const cards = DOORS.map((d) => doorCard(d, rows));
   return [
-    blank(),
+    ...air(3),
     // A heading between two rules, centred. The words alone, dim and at
     // the margin, read as one more line of prose; a rule through them is
     // what makes the page break here.
     rule("WHAT BRINGS YOU HERE?"),
     blank(),
-    wide ? row(...cards) : col(...cards.map((c) => row(c))),
+    wide
+      ? centredRow(cards[0], spacer(DOOR_GAP), cards[1], spacer(DOOR_GAP), cards[2])
+      : col(...cards.map((c) => centredRow(c))),
   ];
 }
 
@@ -1077,9 +1123,15 @@ function measure(): number {
 
 /** `widthPct` is an integer percent, so this wobbles a column on
  *  resize — close enough for a text column, and it keeps the host as
- *  the one that owns layout. */
+ *  the one that owns layout.
+ *
+ *  Percent *of the panel*, which is the compose column, not the split:
+ *  the host applies the percentage to the width it lays widgets out
+ *  in. Dividing by the viewport was right only while those two were
+ *  the same number, and the moment they diverged the doors came out a
+ *  third too narrow and clipped their own headings. */
 function pct(cols: number): number {
-  return Math.max(1, Math.min(100, Math.round((cols * 100) / viewportWidth())));
+  return Math.max(1, Math.min(100, Math.round((cols * 100) / measure())));
 }
 
 /** Constrain a block to the measure. Only `labeledSection` reads
@@ -1126,9 +1178,9 @@ function buildSpec(): WidgetSpec {
   return col(
     ...hero(),
     ...doors(),
-    blank(),
+    ...air(2),
     ...verbs(),
-    blank(),
+    ...air(2),
     // It teaches keybindings, so the keys should look like keys — the
     // verbs two lines above already paint theirs in `ui.help_key_fg`.
     // And no box: a frame is an alert shape, which is the wrong shape
@@ -1147,7 +1199,7 @@ function buildSpec(): WidgetSpec {
       { text: " copy-paste — and the mouse just works.", style: { fg: C.body } },
     ]),
     centred([{ text: "Click, drag, scroll, select.", style: { fg: C.body } }]),
-    blank(),
+    ...air(2),
     centred([
       { text: "▼ ", style: { fg: C.mark } },
       { text: "scroll — the rest is here when you need it", style: { fg: C.muted } },

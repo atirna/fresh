@@ -775,7 +775,18 @@ impl Editor {
             .expect("active window must have a populated split layout")
             .values()
             .find(|vs| vs.buffer_state(buffer_id).is_some() && vs.viewport.width > 0)
-            .map(|vs| vs.viewport.width as u32)
+            // A composed buffer is painted into a narrower column than
+            // its split: `compose_width` is what the renderer clips to,
+            // so it is also what the widget layout has to size rows to.
+            // Laying out against the split width instead let the two
+            // disagree, and every consequence of that disagreement
+            // looked like a widget bug rather than a width bug — a
+            // `flexSpacer` filled to the split and pushed its row past
+            // the column, so the host wrapped a centred row in half,
+            // and a `divider` ruled across the pane instead of the
+            // page. Plugins were left computing their own pads from a
+            // width the host already knew.
+            .map(|vs| vs.compose_width.unwrap_or(vs.viewport.width) as u32)
             .unwrap_or_else(|| self.terminal_width.max(1) as u32);
         // Reserve 2 cols for gutter/scrollbar/border. Saturate to
         // avoid 0 width on tiny panels.
