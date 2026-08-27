@@ -1018,8 +1018,39 @@ fn zip_row_blocks(
     out_boxes: &mut Vec<LayoutBox>,
 ) {
     let starting_row = out_entries.len() as u32;
-    let _ = panel_width;
 
+    // Flex sizing, the block-row counterpart of `assemble_inline_row`.
+    //
+    // These used to be skipped outright, which made `flexSpacer()` a
+    // no-op in any row holding a block — so `row(flexSpacer(), card,
+    // flexSpacer())` rendered the card hard against the left edge and
+    // there was no declarative way to centre a block at all. Callers
+    // worked around it by computing pads from widths the host already
+    // knew, and got them wrong.
+    //
+    // Leftover counts block columns as well as inline text: a block
+    // occupies its full `column_width` in the merged row, so charging
+    // only the inline pieces would hand each flex slot the whole panel
+    // a second time and push the row past its column.
+    let used: usize = pieces
+        .iter()
+        .map(|p| match p {
+            RowPiece::Inline { entry, .. } => {
+                crate::primitives::display_width::str_width(&entry.text)
+            }
+            RowPiece::Block { column_width, .. } => *column_width as usize,
+            RowPiece::Flex => 0,
+        })
+        .sum();
+    let flex_count = pieces
+        .iter()
+        .filter(|p| matches!(p, RowPiece::Flex))
+        .count();
+    let flex_total = (panel_width as usize).saturating_sub(used);
+    let (flex_each, flex_extra) = match flex_total.checked_div(flex_count) {
+        Some(each) => (each, flex_total % flex_count),
+        None => (0, 0),
+    };
     // Compute the merged height = max(block.entries.len()).
     let max_height = pieces
         .iter()
@@ -1036,6 +1067,7 @@ fn zip_row_blocks(
     for row_idx in 0..max_height {
         let mut text = String::new();
         let mut overlays: Vec<InlineOverlay> = Vec::new();
+        let mut flex_seen = 0usize;
         for piece in &pieces {
             match piece {
                 RowPiece::Inline {
@@ -1100,7 +1132,13 @@ fn zip_row_blocks(
                     }
                 }
                 RowPiece::Flex => {
-                    // Skipped — see fn doc.
+                    // Materialize as spaces on *every* row, so the
+                    // columns either side stay in line down the block.
+                    let n = flex_each + if flex_seen < flex_extra { 1 } else { 0 };
+                    flex_seen += 1;
+                    for _ in 0..n {
+                        text.push(' ');
+                    }
                 }
                 RowPiece::Block {
                     column_width,

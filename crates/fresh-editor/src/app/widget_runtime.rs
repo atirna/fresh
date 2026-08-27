@@ -786,11 +786,23 @@ impl Editor {
             // and a `divider` ruled across the pane instead of the
             // page. Plugins were left computing their own pads from a
             // width the host already knew.
-            .map(|vs| vs.compose_width.unwrap_or(vs.viewport.width) as u32)
-            .unwrap_or_else(|| self.terminal_width.max(1) as u32);
-        // Reserve 2 cols for gutter/scrollbar/border. Saturate to
-        // avoid 0 width on tiny panels.
-        raw.saturating_sub(2).max(10)
+            .map(|vs| (vs.compose_width, vs.viewport.width))
+            .unwrap_or((None, self.terminal_width.max(1) as u16));
+        match raw {
+            // Composing, the compose layout has already flanked the
+            // column with real margins, so the panel *is* the column.
+            // Taking the full gutter here as well left two unused
+            // columns inside the render area, and because both fell on
+            // its right the page rode left of the column it was
+            // supposedly centred in — measured on the welcome screen at
+            // 100, 120 and 150 columns, a left margin four short of the
+            // right one. One column is still held back: a row that
+            // fills the area exactly wraps.
+            (Some(cw), _) => (cw as u32).saturating_sub(1).max(10),
+            // Not composing: reserve 2 cols for gutter/scrollbar/border.
+            // Saturate to avoid 0 width on tiny panels.
+            (None, vw) => (vw as u32).saturating_sub(2).max(10),
+        }
     }
 
     /// Height sibling of [`Self::widget_panel_width`]: the viewport
