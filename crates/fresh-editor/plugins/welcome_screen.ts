@@ -153,6 +153,7 @@ const levelLines: Record<string, number> = {};
  *  focus event bring its card into view. */
 const cardLines: Record<string, number> = {};
 
+
 /** Card title text, by card id — the string searched for above, and
  *  the one rendered in the card header, so the two cannot drift. */
 const CARD_TITLE: Record<string, string> = {
@@ -853,11 +854,31 @@ function buildSpec(): WidgetSpec {
  *  and the restore is exact rather than approximate. */
 function render(): void {
   if (!panel) return;
-  const before = editor.getViewport();
-  const top = before && typeof before.topLine === "number" ? before.topLine : 0;
+  const top = trackedTop();
   panel.set(buildSpec());
   if (top > 0) scrollTopTo(top);
   void resolveLevelLines();
+}
+
+/** Where we believe the top of the pane is.
+ *
+ *  `getViewport().topLine` does not refresh between our own scrolls — a
+ *  run of Down presses each recomputed from the same stale zero and
+ *  re-issued the same target, so eight presses moved one line. Our own
+ *  intent is the authority for relative scrolling; the observed value is
+ *  adopted only when it changes, which is how a mouse-wheel scroll (or
+ *  anything else that moves the view) gets picked up. */
+let desiredTop = 0;
+let lastObserved = 0;
+
+function trackedTop(): number {
+  const vp = editor.getViewport();
+  const t = vp && typeof vp.topLine === "number" ? vp.topLine : null;
+  if (t !== null && t !== lastObserved) {
+    lastObserved = t;
+    desiredTop = t;
+  }
+  return desiredTop;
 }
 
 /** Put `line` at the TOP of the pane.
@@ -870,6 +891,7 @@ function render(): void {
  *  behaviour intact rather than asking for a second scroll verb. */
 function scrollTopTo(line: number): void {
   if (bufferId === null) return;
+  desiredTop = Math.max(0, line);
   const vp = editor.getViewport();
   const h = vp && vp.height > 0 ? vp.height : 30;
   editor.scrollBufferToLine(bufferId, line + Math.floor(h / 3));
@@ -1170,25 +1192,32 @@ function moveFinder(delta: number): void {
 registerHandler("welcome_up", () => {
   engaged = true;
   if (finderFocused()) moveFinder(-1);
-  else editor.executeAction("scroll_up");
+  else scrollLine(false);
 });
 registerHandler("welcome_down", () => {
   engaged = true;
   if (finderFocused()) moveFinder(1);
-  else editor.executeAction("scroll_down");
+  else scrollLine(true);
 });
-/** Page keys scroll the view, they do not move a cursor. `move_page_*`
- *  would page the *cursor*, and this buffer's cursor is parked wherever
- *  the widget runtime last put it — paging from there jumps somewhere
- *  the reader never was. */
+/** One line, on the editor's own scroll path — the same one the mouse
+ *  wheel takes. `scrollTopTo` is absolute and right for a jump, but its
+ *  reveal arithmetic saturates to no movement for a delta this small. */
+/** Three lines a press: enough to read by, and the mouse wheel is there
+ *  for finer work. */
+function scrollLine(down: boolean): void {
+  engaged = true;
+  scrollTopTo(Math.max(0, trackedTop() + (down ? 3 : -3)));
+}
+
+/** A page, computed: the reveal offset is immaterial at this size, and
+ *  `move_page_*` would page the cursor rather than the view. */
 function pageBy(sign: number): void {
   engaged = true;
   const vp = editor.getViewport();
-  if (!vp) return;
-  const top = typeof vp.topLine === "number" ? vp.topLine : 0;
-  const step = Math.max(1, vp.height - 2);
-  scrollTopTo(Math.max(0, top + sign * step));
+  const h = vp && vp.height > 0 ? vp.height : 24;
+  scrollTopTo(Math.max(0, trackedTop() + sign * Math.max(1, h - 2)));
 }
+
 registerHandler("welcome_page_up", () => pageBy(-1));
 registerHandler("welcome_page_down", () => pageBy(1));
 registerHandler("welcome_left", () => dispatch(widgetKey("Left")));
