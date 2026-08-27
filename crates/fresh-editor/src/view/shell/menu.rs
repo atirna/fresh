@@ -340,7 +340,25 @@ fn dropdown(
     })
     // An inert cell of the box — its border — closes the menu, which is what a
     // click inside the dropdown that hit no item always did.
-    .on_click(|_| UiMsg::Ui(UiFact::CloseMenu));
+    //
+    // On the **press**, like the rows it sits behind. It has to be the same
+    // gesture as theirs: a row `stop()`s what it answers, and a stop only
+    // reaches handlers of the gesture that was stopped. With the rows on
+    // `Press` and this on `Click`, activating a row said
+    // `[MenuItemClick, CloseMenu]` — the item ran and the menu shut on the way
+    // into its own submenu.
+    //
+    // Every button but Right, which is what `Click` was derived for; a right
+    // press is the context menu's.
+    .on(
+        GestureKind::Press,
+        Rc::new(|e: &Event| {
+            if e.button == fresh_ui::MouseButton::Right {
+                return None;
+            }
+            Some(UiMsg::Ui(UiFact::CloseMenu))
+        }),
+    );
 
     // The chain's keyboard, on the level that is always present. Focus
     // properties belong to a `Focusable`, and the whole chain is one surface —
