@@ -440,35 +440,26 @@ mod tests {
     /// previous tree. Every other test in this file — and in the whole shell —
     /// builds `Ui::new()` and frames once, so none of them exercises that.
     ///
-    /// A changed message must reach the cells on the second frame. It does
-    /// not, **whenever a layer is present in the tree**. Drop the layer from
-    /// this test and it passes; keep it — open in both frames, or open in the
-    /// first and gone in the second, either way — and the status bar keeps
-    /// painting the first frame's row.
+    /// A changed message must reach the cells on the second frame. It did not,
+    /// **whenever a layer was present in the tree** — open in both frames, or
+    /// open in the first and gone in the second, either way the status bar
+    /// kept painting the first frame's row. Without a layer it passed, which
+    /// is why nothing caught it.
     ///
-    /// That is the shape of every remaining e2e failure: a context menu is
+    /// That was the shape of every remaining e2e failure: a context menu is
     /// open, a click both runs the item and closes the menu, and the assertion
     /// checks the screen changed.
     ///
-    /// Traced end to end in the real editor: the action runs, the clipboard is
-    /// written, `status_message` is set, `status_bar_description` is built with
-    /// the new text, that description reaches `ui.frame(..)` — and the
-    /// `fold_native(ui.spec())` immediately after paints the *previous*
-    /// frame's row. `Ui::frame` calls `flush_paint` unconditionally and
-    /// `flush_paint` clears the spec and repaints from the render tree, and the
-    /// rebuilt spec *still* carries the old runs — dumped mid-debug as
-    /// `[" Trusted ", " Opened rel.txt "]` after frame 2. So this is not a
-    /// skipped paint and not the fold: the render tree itself was never
-    /// updated. A layer's presence is stopping its siblings from reconciling.
-    ///
-    /// Drop the layer from this test and it passes, which is why nothing
-    /// caught it: every other shell test builds `Ui::new()` and frames once,
-    /// so none of them reconciles at all, let alone across a closing overlay.
+    /// The cause was in `fresh-ui`'s layout drain, not in this crate:
+    /// `drain_layout` gave up on the rest of its dirty list the moment one
+    /// boundary had no cached constraints to re-enter on. Reconciliation was
+    /// fine all along — `update_render` pushed the new runs into the text
+    /// object — but `TextRender` shapes its rows at *measure* time and paints
+    /// from them, so a boundary that never re-measured painted last frame's
+    /// rows. The layer is what made the difference: it dirties the root, the
+    /// root sorts first and has no cache, and the status bar's boundary was
+    /// dropped behind it. See `fresh-ui/src/render/layout.rs`.
     #[test]
-    #[ignore = "reproduces an unfixed fresh-ui reconciliation bug: a layer in \
-                the tree leaves sibling subtrees painting the previous frame. \
-                Un-ignore when the library fix lands — this test is its \
-                acceptance criterion."]
     fn a_second_frame_repaints_a_changed_message() {
         let mk = |msg: &str| {
             bar_of(
