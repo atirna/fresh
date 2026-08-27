@@ -1284,6 +1284,41 @@ impl Editor {
             .set_buffer_cursor_in_splits(buffer_id, position, &splits);
     }
 
+    /// Handle ScrollToWidget: put the keyed widget at the top of its
+    /// split, with the cursor on it.
+    ///
+    /// The row comes from the panel's own hit areas, so this asks where
+    /// the widget actually landed rather than deriving it. Scrolling and
+    /// the cursor move together because they answer the same request:
+    /// "take me to this", not "reveal this somewhere on screen" — the
+    /// reveal path deliberately leaves the target just inside an edge,
+    /// which is right for a search match and wrong for a jump.
+    pub(super) fn handle_scroll_to_widget(&mut self, buffer_id: BufferId, key: &str) {
+        let Some(row) = self.widget_registry.row_of_widget(buffer_id, key) else {
+            tracing::debug!("ScrollToWidget: no widget {key:?} in buffer {buffer_id:?}");
+            return;
+        };
+        let offset = self
+            .active_window()
+            .buffers
+            .get(&buffer_id)
+            .and_then(|st| st.buffer.line_start_offset(row as usize));
+        let Some(offset) = offset else {
+            return;
+        };
+        self.handle_set_buffer_cursor(buffer_id, offset);
+        let splits = self
+            .windows
+            .get(&self.active_window)
+            .and_then(|w| w.buffers.splits())
+            .map(|(mgr, _)| mgr)
+            .expect("active window must have a populated split layout")
+            .splits_for_buffer(buffer_id);
+        for leaf in splits {
+            self.handle_set_split_scroll(leaf.0, offset);
+        }
+    }
+
     /// Handle SetSplitScroll command
     pub(super) fn handle_set_split_scroll(&mut self, split_id: SplitId, top_byte: usize) {
         // Plugin sends arbitrary SplitId — convert to LeafId at the boundary

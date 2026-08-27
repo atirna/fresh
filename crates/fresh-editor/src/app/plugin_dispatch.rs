@@ -718,6 +718,9 @@ impl Editor {
             PluginCommand::SetSplitScroll { split_id, top_byte } => {
                 self.handle_set_split_scroll(split_id, top_byte);
             }
+            PluginCommand::ScrollToWidget { buffer_id, key } => {
+                self.handle_scroll_to_widget(buffer_id, &key);
+            }
             PluginCommand::RequestHighlights {
                 buffer_id,
                 range,

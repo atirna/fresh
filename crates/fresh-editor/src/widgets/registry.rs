@@ -735,6 +735,31 @@ impl WidgetRegistry {
     /// nothing and the caller swallows it, never reaching the rows
     /// the popup covers. Callers must map the click column to
     /// `col_byte` through the text of the surface they name.
+    /// The buffer row a widget landed on, by key.
+    ///
+    /// The panel already knows where every keyed widget was painted —
+    /// that is what the hit areas are. Without a way to ask, a plugin
+    /// that wants to scroll to one of its own widgets has to paint the
+    /// page, read the buffer text back, match its own captions as
+    /// strings and convert line numbers to byte offsets by hand. The
+    /// welcome screen did exactly that, and it broke twice: once when
+    /// its caption text changed, once when a byte-length helper it
+    /// relied on turned out not to exist in the plugin runtime and the
+    /// failure was swallowed by a `catch`.
+    ///
+    /// The first hit wins: a widget occupying several rows (a card
+    /// whose rows share one key) anchors at its top, which is what
+    /// "scroll to it" means.
+    pub fn row_of_widget(&self, buffer_id: BufferId, key: &str) -> Option<u32> {
+        self.panels_for_buffer(buffer_id)
+            .into_iter()
+            .filter_map(|pk| self.get(&pk))
+            .flat_map(|p| p.hits.iter())
+            .filter(|h| h.widget_key == key)
+            .map(|h| h.buffer_row)
+            .min()
+    }
+
     pub fn hit_test_row_aware(
         &self,
         buffer_id: BufferId,

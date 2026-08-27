@@ -195,33 +195,13 @@ function finderFocused(): boolean {
  *  searching the painted buffer text for the banner marker. The widget
  *  runtime owns layout, so the rows are read back rather than
  *  predicted. */
-const levelLines: Record<string, number> = {};
-/** Byte offset of each banner's line — what a jump moves the cursor to. */
-const levelBytes: Record<string, number> = {};
 
 /** Buffer line of each card's header, resolved the same way as the
  *  level banners. Tab moves widget focus but the host only scrolls the
  *  pane for a focused *text* widget — a focused button on a long
- *  document can land off-screen. Knowing each card's row lets the
- *  focus event bring its card into view. */
-const cardLines: Record<string, number> = {};
-/** Byte offset of each card's heading, for revealing a focused control. */
-const cardBytes: Record<string, number> = {};
+ *  document can land off-screen, so the focus event asks the host to
+ *  scroll to that card's own fold widget. */
 
-
-/** Card title text, by card id — the string searched for above, and
- *  the one rendered in the card header, so the two cannot drift. */
-const CARD_TITLE: Record<string, string> = {
-  finder: "Pick up where you left off",
-  ugly: "Built for the ugly files too",
-  editorvar: "Make it your $EDITOR",
-  lsp: "Language smarts, zero setup",
-  git: "Review your diff before it reviews you",
-  themes: "Make it yours",
-  power: "Power tools when your hands get fast",
-  orch: "The Orchestrator dock",
-  remote: "Your other machines are workspaces too",
-};
 
 /** Which card a widget lives in, so focusing it can reveal that card.
  *  Keys are matched by prefix first, then exactly. */
@@ -473,11 +453,22 @@ function banner(level: string, sub: string): WidgetSpec {
   return col(
     blank(),
     blank(),
-    line([
-      { text: "━━━━ ", style: { fg: C.frame } },
-      { text: mark, style: { fg: C.title, bold: true } },
-      { text: " " + "━".repeat(tail), style: { fg: C.frame } },
-    ]),
+    // The caption is a keyed button so the banner has an identity the
+    // host can find. `scrollToWidget` then answers "take me to level 2"
+    // from the panel's own hit areas — where this widget actually
+    // landed — instead of the page reading its own painted text back and
+    // matching this very caption as a string.
+    row(
+      line([{ text: "━━━━ ", style: { fg: C.frame } }]),
+      button(mark, {
+        key: `level:${level}`,
+        bare: true,
+        focusable: false,
+        style: { fg: C.title, bold: true },
+        hoverStyle: GLOW,
+      }),
+      line([{ text: " " + "━".repeat(tail), style: { fg: C.frame } }]),
+    ),
     line([{ text: "  " + sub, style: { fg: C.body } }]),
     blank(),
   );
@@ -1258,71 +1249,9 @@ function buildSpec(): WidgetSpec {
 function render(): void {
   if (!panel) return;
   panel.set(buildSpec());
-  void resolveLevelLines();
-}
-
-/** Rows in the painted page, refreshed after each render. */
-let totalLines = 0;
-
-/** UTF-8 byte length of a string.
- *
- *  Counted rather than measured with `TextEncoder`, which this runtime
- *  does not provide — and the call site is inside a `try` whose `catch`
- *  swallows everything, so reaching for it failed silently and left
- *  every jump key a no-op. The page is full of box-drawing and `·`, so
- *  a char count would be wrong by hundreds of bytes. */
-function utf8Len(s: string): number {
-  let n = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.codePointAt(i)!;
-    if (c > 0xffff) {
-      n += 4;
-      i++;
-    } else if (c > 0x7ff) n += 3;
-    else if (c > 0x7f) n += 2;
-    else n += 1;
-  }
-  return n;
 }
 
 
-/** Read the painted buffer back and record the byte offset each banner
- *  and card landed on, so a jump is a cursor move. Layout belongs to
- *  the host; this asks rather than guesses. */
-async function resolveLevelLines(): Promise<void> {
-  if (bufferId === null) return;
-  try {
-    const t = await editor.getBufferText(bufferId);
-    const lines = t.split("\n");
-    totalLines = lines.length;
-    // Byte offset of the start of each line. `setBufferCursor` takes a
-    // byte position, and moving the cursor is how this page scrolls
-    // now — the host reveals what its own cursor is on.
-    const starts: number[] = [];
-    let acc = 0;
-    for (const l of lines) {
-      starts.push(acc);
-      acc += utf8Len(l) + 1;
-    }
-    for (const k of Object.keys(LEVEL_MARK)) {
-      const idx = lines.findIndex((l) => l.includes(LEVEL_MARK[k]));
-      if (idx >= 0) {
-        levelLines[k] = idx;
-        levelBytes[k] = starts[idx];
-      }
-    }
-    for (const id of Object.keys(CARD_TITLE)) {
-      const idx = lines.findIndex((l) => l.includes(CARD_TITLE[id]));
-      if (idx >= 0) {
-        cardLines[id] = idx;
-        cardBytes[id] = starts[idx];
-      }
-    }
-  } catch (_e) {
-    // A read that fails just leaves the jump keys pointing at the last
-    // known rows; nothing here is worth an error to the user.
-  }
-}
 
 // ── Data probes ──────────────────────────────────────────────────────
 
@@ -1600,39 +1529,21 @@ function dispatch(action: ReturnType<typeof widgetKey>): void {
   panel?.command(action);
 }
 
-async function jumpTo(level: string): Promise<void> {
+function jumpTo(level: string): void {
   engaged = true;
   if (bufferId === null) return;
-  // The banner rows are read back from the painted buffer, which is
-  // async: a jump key pressed in the first moments after the page
-  // opens would otherwise be a silent no-op. Resolve on demand.
-  if (typeof levelBytes[level] !== "number") await resolveLevelLines();
-  const target = levelBytes[level];
-  if (typeof target !== "number") return;
-  scrollToTop(target);
+  editor.scrollToWidget(bufferId, `level:${level}`);
 }
 
-/** Put `byte` at the top of the pane, and the cursor on it.
- *
- *  `setBufferCursor` alone is not a jump. It reveals, and revealing is
- *  deliberately minimal — the target is scraped just inside the bottom
- *  edge, which is right for "show me this match" and wrong for "take me
- *  to this level", where the banner belongs at the top with its section
- *  under it. `setSplitScroll` is the host's own verb for exactly that,
- *  so the arithmetic this file used to carry (reveal offset, a model of
- *  the top line, a ceiling) stays deleted. */
-function scrollToTop(byte: number): void {
-  if (bufferId === null) return;
-  editor.setBufferCursor(bufferId, byte);
-  editor.setSplitScroll(editor.getActiveSplitId(), byte);
-}
-
-registerHandler("welcome_jump_1", () => void jumpTo("1"));
-registerHandler("welcome_jump_2", () => void jumpTo("2"));
-registerHandler("welcome_jump_3", () => void jumpTo("3"));
+registerHandler("welcome_jump_1", () => jumpTo("1"));
+registerHandler("welcome_jump_2", () => jumpTo("2"));
+registerHandler("welcome_jump_3", () => jumpTo("3"));
 registerHandler("welcome_jump_top", () => {
   engaged = true;
-  scrollToTop(0);
+  if (bufferId === null) return;
+  // The startup switch is the first widget on the page, so "go to the
+  // top" is the same request as every other jump.
+  editor.scrollToWidget(bufferId, "startupToggle");
 });
 registerHandler("welcome_tab", () => dispatch(widgetKey("Tab")));
 registerHandler("welcome_shift_tab", () => dispatch(widgetKey("Shift+Tab")));
@@ -1747,7 +1658,7 @@ registerHandler("welcome_focus_find", () => {
   }
   lastFocusedWidget = "finderField";
   panel.setFocusKey("finderField");
-  void jumpTo("1");
+  jumpTo("1");
 });
 
 registerHandler("mode_text_input", (args: { text: string }) => {
@@ -1814,7 +1725,7 @@ function activateKey(k: string): void {
     return;
   }
   if (k.startsWith("jump:")) {
-    void jumpTo(k.slice(5));
+    jumpTo(k.slice(5));
     return;
   }
   if (k.startsWith("theme:")) {
@@ -1892,9 +1803,8 @@ editor.on("widget_event", (args) => {
     // thing they had just focused off screen. Which is what a focus
     // move must never do.
     const id = cardForWidget(k);
-    const at = id !== null ? cardBytes[id] : undefined;
-    if (bufferId !== null && typeof at === "number") {
-      editor.setBufferCursor(bufferId, at);
+    if (bufferId !== null && id !== null) {
+      editor.scrollToWidget(bufferId, `fold:${id}`);
     }
     return;
   }

@@ -4169,6 +4169,24 @@ interface EditorAPI {
 	*/
 	activeWindow(): number;
 	/**
+	* Scroll a widget-panel buffer so the widget with `key` sits at the
+	* top of its split, with the cursor on it.
+	* 
+	* The panel already knows where it painted every keyed widget, so
+	* a page navigating to its own content asks rather than derives.
+	* Deriving means painting, reading the buffer text back, matching
+	* your own captions as strings and converting line numbers to byte
+	* offsets — which is what this replaces, and which broke twice in
+	* the welcome screen before it did.
+	* 
+	* A widget spanning several rows (a card whose rows share one key)
+	* anchors at its top. Unknown keys are a no-op.
+	* 
+	* Queued like every layout mutation: `await editor.flush()` before
+	* reading back.
+	*/
+	scrollToWidget(bufferId: number, key: string): boolean;
+	/**
 	* Set the scroll position of a split.
 	* 
 	* Queued, like every layout mutation: the returned bool only reports that

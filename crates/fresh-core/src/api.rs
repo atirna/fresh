@@ -4488,6 +4488,14 @@ pub enum PluginCommand {
     /// Set the scroll position of a specific split
     SetSplitScroll { split_id: SplitId, top_byte: usize },
 
+    /// Scroll a widget-panel buffer so the widget with this key is at
+    /// the top of its split, and put the cursor on it.
+    ///
+    /// The panel already knows where it painted every keyed widget.
+    /// Without this, a plugin scrolling to its own content has to read
+    /// the painted buffer back and match its own text as strings.
+    ScrollToWidget { buffer_id: BufferId, key: String },
+
     /// Request syntax highlights for a buffer range
     RequestHighlights {
         buffer_id: BufferId,
@@ -7134,6 +7142,11 @@ impl PluginApi {
     /// Switch the current split to display a buffer
     pub fn show_buffer(&self, buffer_id: BufferId) -> Result<(), String> {
         self.send_command(PluginCommand::ShowBuffer { buffer_id })
+    }
+
+    /// Scroll so the keyed widget sits at the top of its split.
+    pub fn scroll_to_widget(&self, buffer_id: BufferId, key: String) -> Result<(), String> {
+        self.send_command(PluginCommand::ScrollToWidget { buffer_id, key })
     }
 
     /// Set the scroll position of a specific split

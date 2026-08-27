@@ -1527,6 +1527,7 @@ mod tests {
             "setSplitBuffer",
             "focusSplit",
             "setSplitScroll",
+            "scrollToWidget",
             "setSplitRatio",
             "setSplitLabel",
             "clearSplitLabel",
