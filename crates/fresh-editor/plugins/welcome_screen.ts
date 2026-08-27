@@ -1570,9 +1570,22 @@ async function jumpTo(level: string): Promise<void> {
   if (typeof levelBytes[level] !== "number") await resolveLevelLines();
   const target = levelBytes[level];
   if (typeof target !== "number") return;
-  // Move the cursor; the host scrolls to it. That is the whole of what
-  // this page's jump keys have to do now.
-  editor.setBufferCursor(bufferId, target);
+  scrollToTop(target);
+}
+
+/** Put `byte` at the top of the pane, and the cursor on it.
+ *
+ *  `setBufferCursor` alone is not a jump. It reveals, and revealing is
+ *  deliberately minimal — the target is scraped just inside the bottom
+ *  edge, which is right for "show me this match" and wrong for "take me
+ *  to this level", where the banner belongs at the top with its section
+ *  under it. `setSplitScroll` is the host's own verb for exactly that,
+ *  so the arithmetic this file used to carry (reveal offset, a model of
+ *  the top line, a ceiling) stays deleted. */
+function scrollToTop(byte: number): void {
+  if (bufferId === null) return;
+  editor.setBufferCursor(bufferId, byte);
+  editor.setSplitScroll(editor.getActiveSplitId(), byte);
 }
 
 registerHandler("welcome_jump_1", () => void jumpTo("1"));
@@ -1580,7 +1593,7 @@ registerHandler("welcome_jump_2", () => void jumpTo("2"));
 registerHandler("welcome_jump_3", () => void jumpTo("3"));
 registerHandler("welcome_jump_top", () => {
   engaged = true;
-  if (bufferId !== null) editor.setBufferCursor(bufferId, 0);
+  scrollToTop(0);
 });
 registerHandler("welcome_tab", () => dispatch(widgetKey("Tab")));
 registerHandler("welcome_shift_tab", () => dispatch(widgetKey("Shift+Tab")));

@@ -142,6 +142,9 @@ pub(crate) const KEY_TEXT_INPUT_SELECTION_BG: &str = "ui.text_input_selection_bg
 // vs ~RGB(100,100,100) for disabled menu items), so hint copy
 // reads as background guidance rather than a half-active value.
 pub(crate) const KEY_PLACEHOLDER_FG: &str = "editor.whitespace_indicator_fg";
+/// Background of a single-line input's bracketed region — what makes it
+/// look editable. See the overlay in `render_text_input`.
+pub(crate) const KEY_FIELD_BG: &str = "editor.current_line_bg";
 // Section-legend tint. `ui.help_key_fg` is the same key the
 // hint-bar uses to highlight keys against panel bg, so we know
 // it's tuned for readability against the same surface a
@@ -3258,6 +3261,35 @@ pub fn render_text_input(
     let bracket_close_byte = text.len();
 
     let mut overlays = Vec::new();
+
+    // The field reads as a field. Brackets alone are a weak signal —
+    // plenty of read-only labels carry them — so an input rendered on
+    // the panel's own background looked like inert text, in the welcome
+    // screen's finder, in Settings (Terminal -> Command) and in the New
+    // Agent dialog alike. A background across the bracketed region is
+    // what says "you can type here" before anyone clicks.
+    //
+    // Pushed first so the placeholder tint, the selection band and the
+    // block caret all layer over it rather than under it.
+    //
+    // `editor.current_line_bg` rather than the more obvious
+    // `ui.prompt_bg`: it is the theme's own "a subtle band lies over the
+    // editor background" colour, present in every shipped theme and
+    // correct in both polarities — it lifts on the dark themes and
+    // recesses on the light one. `ui.prompt_bg` is set to a foreground
+    // colour in several themes (bright green on dracula, olive on nord,
+    // yellow on solarized), so a field painted with it would have been
+    // luminous.
+    overlays.push(InlineOverlay {
+        start: bracket_open_byte,
+        end: bracket_close_byte,
+        style: OverlayOptions {
+            bg: Some(OverlayColorSpec::theme_key(KEY_FIELD_BG)),
+            ..Default::default()
+        },
+        properties: Default::default(),
+        unit: OffsetUnit::Byte,
+    });
 
     if show_placeholder {
         overlays.push(InlineOverlay {
