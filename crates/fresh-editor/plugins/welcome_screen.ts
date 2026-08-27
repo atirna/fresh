@@ -1477,6 +1477,14 @@ async function openWelcome(force: boolean): Promise<void> {
     });
     bufferId = res.bufferId;
     panel = new WidgetPanel(bufferId);
+    // Re-assert the caret *after* the panel exists. `createVirtualBuffer`
+    // took `showCursors: true` and mounting a widget panel then cleared
+    // it — panel buffers default to no caret — so the page ran with
+    // movement actions enabled and nothing on screen to show where the
+    // cursor was. `Down` moved it and the reader saw nothing until the
+    // cursor reached the viewport edge and the page finally scrolled.
+    // This is the order `setBufferShowCursors`'s own docs prescribe.
+    editor.setBufferShowCursors(bufferId, true);
     // Fresh seeds an empty untitled buffer when it has nothing else to
     // show. The welcome screen is what that seed was standing in for, so
     // retire it rather than leaving a `[No Name]` tab beside this one.
@@ -1682,6 +1690,28 @@ registerHandler("welcome_down", () => {
 });
 
 
+/** Document keys the mode was swallowing.
+ *
+ *  A mode with `allowTextInput` owns the keyboard, so every key it does
+ *  not name is dropped — and these were not named. On a page you read
+ *  by scrolling, Home and End are how you get to either end of it. */
+registerHandler("welcome_doc_start", () => {
+  engaged = true;
+  if (finderFocused()) {
+    dispatch(widgetKey("Home"));
+    return;
+  }
+  scrollToTop(0);
+});
+registerHandler("welcome_doc_end", () => {
+  engaged = true;
+  if (finderFocused()) {
+    dispatch(widgetKey("End"));
+    return;
+  }
+  editor.executeAction("move_document_end");
+});
+
 registerHandler("welcome_page_up", () => {
   engaged = true;
   editor.executeAction("move_page_up");
@@ -1773,6 +1803,10 @@ editor.defineMode(
     ["Space", "welcome_space"],
     ["Up", "welcome_up"],
     ["Down", "welcome_down"],
+    ["Home", "welcome_doc_start"],
+    ["End", "welcome_doc_end"],
+    ["C-Home", "welcome_doc_start"],
+    ["C-End", "welcome_doc_end"],
     ["PageUp", "welcome_page_up"],
     ["PageDown", "welcome_page_down"],
     ["Left", "welcome_left"],
