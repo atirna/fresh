@@ -698,20 +698,25 @@ mod tests {
         // Squeezed until the row no longer fits, the gap still holds its cell
         // — which is what `min_w` is for — and the row overflows.
         //
-        // **It overflows over the panel's own right border**, and that is a
-        // difference from the ratatui painter, which rendered the row into the
-        // `Block`'s `inner()` and so clipped it. `.border()` insets its
-        // children but does not clip them, and only a `Viewport` clips at all.
-        // Pinned here as the behaviour, not endorsed as the design: see the
-        // migration doc's open list.
+        // **The border holds and the overflow is clipped** — the same as the
+        // ratatui painter, which rendered into the `Block`'s `inner()`.
+        //
+        // This used to assert the opposite. `.border()` inset its children
+        // without clipping them, so a row wider than the panel painted over
+        // the frame and turned the right border into a letter; the assertion
+        // pinned that as "the behaviour, not endorsed as the design". #3095
+        // made `border()` imply `clip`, and its motivating example is this
+        // exact shape: a name, a gap that will not close below one cell, and a
+        // status slot. So the workaround this test recorded is gone, and the
+        // expectation is the painter's again.
         let got = lines(
             panel_of(vec![row_of(0, "a-long-name", Some("M"))], 16),
             16,
             4,
         );
         assert_eq!(
-            got[1], "│  a-long-name M",
-            "the gap holds; the border does not"
+            got[1], "│  a-long-name │",
+            "the gap holds and so does the border"
         );
     }
 
