@@ -432,6 +432,90 @@ mod tests {
         ui
     }
 
+    /// **Reconciliation, not first paint.**
+    ///
+    /// The editor keeps ONE `Ui` for the life of the window and calls `frame`
+    /// again every render (`render.rs`: `shell_ui.take()` … `ui.frame(..)` …
+    /// put back), so every frame after the first is a *reconcile* against the
+    /// previous tree. Every other test in this file — and in the whole shell —
+    /// builds `Ui::new()` and frames once, so none of them exercises that.
+    ///
+    /// A changed message must reach the cells on the second frame. It does
+    /// not, but **only when a layer that was open in frame 1 is gone in frame
+    /// 2** — which is the shape of every remaining e2e failure: a context menu
+    /// is open, the click both runs the item and closes the menu, and the
+    /// assertion then checks the screen changed.
+    ///
+    /// Traced end to end in the real editor: the action runs, the clipboard is
+    /// written, `status_message` is set, `status_bar_description` is built with
+    /// the new text, that description reaches `ui.frame(..)` — and the
+    /// `fold_native(ui.spec())` immediately after paints the *previous*
+    /// frame's row. `Ui::frame` calls `flush_paint` unconditionally and
+    /// `flush_paint` clears and rebuilds, so the stale content is not a skipped
+    /// paint: the render tree itself still holds frame 1's status bar. The
+    /// reconciler is not updating sibling subtrees across a layer's removal.
+    ///
+    /// Drop the layer from this test and it passes, which is why nothing
+    /// caught it: every other shell test builds `Ui::new()` and frames once,
+    /// so none of them reconciles at all, let alone across a closing overlay.
+    #[test]
+    #[ignore = "reproduces an unfixed fresh-ui reconciliation bug: removing a \
+                layer leaves sibling subtrees painting the previous frame. \
+                Un-ignore when the library fix lands — this test is its \
+                acceptance criterion."]
+    fn a_second_frame_repaints_a_changed_message() {
+        let mk = |msg: &str| {
+            bar_of(
+                vec![plain(" Trusted ", "trusted"), plain(msg, "message")],
+                Vec::new(),
+            )
+        };
+        let (w, h) = (60u16, 4u16);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        // The real transition: a context menu is OPEN when the item is
+        // clicked, and the click both closes it and changes the message. So
+        // frame 1 carries the layer and frame 2 does not.
+        let frame_of = |bar: StatusBar, menu: bool| {
+            frame_tree(Frame {
+                status_bar: true,
+                status_bar_items: Some(bar),
+                menu: menu.then(|| crate::view::shell::context_menu::Menu {
+                    x: 4,
+                    y: 1,
+                    width: 20,
+                    highlighted: 0,
+                    items: vec!["Copy".into(), "Paste".into()],
+                }),
+                ..Frame::default()
+            })
+        };
+        let palette = |k: &fresh_ui::ThemeKey| super::super::fold::test_palette::of(k.as_str());
+        // **frame → fold → frame → fold**, which is the editor's real cycle
+        // (`render.rs` folds `ui.spec()` every draw). Framing twice and
+        // folding once does not exercise it.
+        ui.frame(frame_of(mk(" Opened rel.txt "), true), Size::new(w, h));
+        let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+        fold_native(ui.spec(), &mut buf, &palette, Band::Background);
+
+        ui.frame(
+            frame_of(mk(" Copied path: rel.txt "), false),
+            Size::new(w, h),
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+        fold_native(ui.spec(), &mut buf, &palette, Band::Background);
+        let y = {
+            let e = ui
+                .find_by_key(&region_key(HostRegion::StatusBar))
+                .expect("the bar");
+            ui.rect_of(e).y as u16
+        };
+        let row: String = (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        assert!(
+            row.contains("Copied path: rel.txt"),
+            "the second frame's message must reach the cells, got {row:?}"
+        );
+    }
+
     fn row_text(bar: StatusBar, w: u16, h: u16) -> String {
         let ui = laid_out(bar, w, h);
         let spec = ui.spec().clone();
