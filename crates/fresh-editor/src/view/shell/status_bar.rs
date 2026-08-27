@@ -121,8 +121,15 @@ fn element(bar: &StatusBar, it: &Item, key: Key) -> Node<UiMsg> {
     };
     let hover = it.clickable.map(HoverTarget::StatusBarClickable);
     gesture(runs)
+        // **Press, not `Click`.** The old `chrome::StatusBar::on_pointer` fired
+        // on `PointerPress::Left` — a mouse-*down* — and every other migrated
+        // surface kept that (the explorer's rows, the menu bar's labels, the
+        // search-options row). A terminal sends a press and a release, so
+        // `Click` looked equivalent there; the web frontend synthesises the
+        // press alone at the segment's cell, so a `Click` handler never fired
+        // and the Remote/LSP/read-only menus stopped opening in the browser.
         .on(
-            GestureKind::Click,
+            GestureKind::Press,
             Rc::new(move |e: &Event| {
                 if e.button != fresh_ui::MouseButton::Left {
                     return None;
@@ -510,6 +517,44 @@ mod tests {
         assert!(
             row.contains("Copied path: rel.txt"),
             "the second frame's message must reach the cells, got {row:?}"
+        );
+    }
+
+    /// **A press alone activates a segment — no release needed.**
+    ///
+    /// The web frontend forwards a chrome click as a synthetic mouse-*down* at
+    /// the segment's cell and never sends the matching up (`web-ui/js` —
+    /// every chrome surface does this, and the document-level `mouseup`
+    /// handler skips chrome). The old `chrome::StatusBar::on_pointer` fired on
+    /// `PointerPress::Left`, so that worked; a `GestureKind::Click` handler
+    /// needs the release and silently did nothing, which took out the browser's
+    /// Remote / LSP / read-only menus while every terminal test still passed.
+    #[test]
+    fn a_press_with_no_release_activates_a_segment() {
+        use fresh_ui::{Input, Mods, MouseButton, Point};
+        let bar = bar_of(
+            vec![clicky(" Remote ", StatusBarClickable::RemoteIndicator)],
+            Vec::new(),
+        );
+        let mut ui = laid_out(bar, 40, 3);
+        let r = ui.rect_of(
+            ui.find_by_key(&item_key(Side::Left, 0))
+                .expect("the segment"),
+        );
+        let got = ui.dispatch(Input::press(
+            Point::new(r.x + 1, r.y),
+            MouseButton::Left,
+            Mods::NONE,
+        ));
+        assert!(
+            got.msgs.iter().any(|m| matches!(
+                m,
+                UiMsg::Ui(UiFact::StatusBarClicked(
+                    StatusBarClickable::RemoteIndicator
+                ))
+            )),
+            "a press alone must activate, got {:?}",
+            got.msgs
         );
     }
 
