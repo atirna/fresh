@@ -196,6 +196,8 @@ function finderFocused(): boolean {
  *  runtime owns layout, so the rows are read back rather than
  *  predicted. */
 const levelLines: Record<string, number> = {};
+/** Byte offset of each banner's line — what a jump moves the cursor to. */
+const levelBytes: Record<string, number> = {};
 
 /** Buffer line of each card's header, resolved the same way as the
  *  level banners. Tab moves widget focus but the host only scrolls the
@@ -203,6 +205,8 @@ const levelLines: Record<string, number> = {};
  *  document can land off-screen. Knowing each card's row lets the
  *  focus event bring its card into view. */
 const cardLines: Record<string, number> = {};
+/** Byte offset of each card's heading, for revealing a focused control. */
+const cardBytes: Record<string, number> = {};
 
 
 /** Card title text, by card id — the string searched for above, and
@@ -1226,74 +1230,62 @@ function render(): void {
   void resolveLevelLines();
 }
 
-/** Where we believe the top of the pane is.
- *
- *  `getViewport().topLine` does not refresh between our own scrolls — a
- *  run of Down presses each recomputed from the same stale zero and
- *  re-issued the same target, so eight presses moved one line. Our own
- *  intent is the authority for relative scrolling; the observed value is
- *  adopted only when it changes, which is how a mouse-wheel scroll (or
- *  anything else that moves the view) gets picked up. */
-let desiredTop = 0;
-let lastObserved = 0;
 /** Rows in the painted page, refreshed after each render. */
 let totalLines = 0;
 
-/** The furthest down the page can go.
+/** UTF-8 byte length of a string.
  *
- *  Without this, holding Down past the end kept incrementing our own
- *  model of the top line while the pane stayed put — so coming back up
- *  did nothing for as many presses as had been wasted going down. */
-function maxTop(): number {
-  if (totalLines === 0) return Number.MAX_SAFE_INTEGER;
-  const vp = editor.getViewport();
-  const h = vp && vp.height > 0 ? vp.height : 30;
-  return Math.max(0, totalLines - Math.max(4, h - 2));
-}
-
-function trackedTop(): number {
-  const vp = editor.getViewport();
-  const t = vp && typeof vp.topLine === "number" ? vp.topLine : null;
-  if (t !== null && t !== lastObserved) {
-    lastObserved = t;
-    desiredTop = t;
+ *  Counted rather than measured with `TextEncoder`, which this runtime
+ *  does not provide — and the call site is inside a `try` whose `catch`
+ *  swallows everything, so reaching for it failed silently and left
+ *  every jump key a no-op. The page is full of box-drawing and `·`, so
+ *  a char count would be wrong by hundreds of bytes. */
+function utf8Len(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.codePointAt(i)!;
+    if (c > 0xffff) {
+      n += 4;
+      i++;
+    } else if (c > 0x7ff) n += 3;
+    else if (c > 0x7f) n += 2;
+    else n += 1;
   }
-  return desiredTop;
+  return n;
 }
 
-/** Put `line` at the TOP of the pane.
- *
- *  `scrollBufferToLine` is a *reveal*: it deliberately leaves a third
- *  of the viewport as context above its target, which is right for
- *  "show me this match" and wrong for both of this page's uses — a
- *  level jump wants the banner at the top, and a repaint wants the
- *  reader's exact line back. Compensating here keeps that host
- *  behaviour intact rather than asking for a second scroll verb. */
-function scrollTopTo(line: number): void {
-  if (bufferId === null) return;
-  desiredTop = Math.min(Math.max(0, line), maxTop());
-  line = desiredTop;
-  const vp = editor.getViewport();
-  const h = vp && vp.height > 0 ? vp.height : 30;
-  editor.scrollBufferToLine(bufferId, line + Math.floor(h / 3));
-}
 
-/** Read the painted buffer back and record which line each banner
- *  landed on, so `1`/`2`/`3` can scroll there. Layout belongs to the
- *  host; this asks rather than guesses. */
+/** Read the painted buffer back and record the byte offset each banner
+ *  and card landed on, so a jump is a cursor move. Layout belongs to
+ *  the host; this asks rather than guesses. */
 async function resolveLevelLines(): Promise<void> {
   if (bufferId === null) return;
   try {
     const t = await editor.getBufferText(bufferId);
     const lines = t.split("\n");
     totalLines = lines.length;
+    // Byte offset of the start of each line. `setBufferCursor` takes a
+    // byte position, and moving the cursor is how this page scrolls
+    // now — the host reveals what its own cursor is on.
+    const starts: number[] = [];
+    let acc = 0;
+    for (const l of lines) {
+      starts.push(acc);
+      acc += utf8Len(l) + 1;
+    }
     for (const k of Object.keys(LEVEL_MARK)) {
       const idx = lines.findIndex((l) => l.includes(LEVEL_MARK[k]));
-      if (idx >= 0) levelLines[k] = idx;
+      if (idx >= 0) {
+        levelLines[k] = idx;
+        levelBytes[k] = starts[idx];
+      }
     }
     for (const id of Object.keys(CARD_TITLE)) {
       const idx = lines.findIndex((l) => l.includes(CARD_TITLE[id]));
-      if (idx >= 0) cardLines[id] = idx;
+      if (idx >= 0) {
+        cardLines[id] = idx;
+        cardBytes[id] = starts[idx];
+      }
     }
   } catch (_e) {
     // A read that fails just leaves the jump keys pointing at the last
@@ -1439,7 +1431,17 @@ async function openWelcome(force: boolean): Promise<void> {
       mode: "welcome",
       readOnly: true,
       showLineNumbers: false,
-      showCursors: false,
+      // A real cursor. It used to be hidden, and hiding it cost far
+      // more than it saved: `show_cursors: false` blocks the native
+      // movement actions, so this plugin had to reimplement scrolling —
+      // its own model of the top line, a reveal that compensated for
+      // the host's, page keys computed by hand, and a ceiling so
+      // holding Down past the end didn't buy dead Up presses. All of
+      // that is the host's job, and it does it correctly. The caret
+      // also answers a question the page was posing without meaning
+      // to: clicks still seated an invisible cursor, so clicking a word
+      // lit its occurrences and the reader could see no reason why.
+      showCursors: true,
       editingDisabled: true,
     });
     bufferId = res.bufferId;
@@ -1565,10 +1567,12 @@ async function jumpTo(level: string): Promise<void> {
   // The banner rows are read back from the painted buffer, which is
   // async: a jump key pressed in the first moments after the page
   // opens would otherwise be a silent no-op. Resolve on demand.
-  if (typeof levelLines[level] !== "number") await resolveLevelLines();
-  const target = levelLines[level];
+  if (typeof levelBytes[level] !== "number") await resolveLevelLines();
+  const target = levelBytes[level];
   if (typeof target !== "number") return;
-  scrollTopTo(target);
+  // Move the cursor; the host scrolls to it. That is the whole of what
+  // this page's jump keys have to do now.
+  editor.setBufferCursor(bufferId, target);
 }
 
 registerHandler("welcome_jump_1", () => void jumpTo("1"));
@@ -1576,11 +1580,7 @@ registerHandler("welcome_jump_2", () => void jumpTo("2"));
 registerHandler("welcome_jump_3", () => void jumpTo("3"));
 registerHandler("welcome_jump_top", () => {
   engaged = true;
-  // Through `scrollTopTo`, not a raw `scrollBufferToLine`: the plugin's
-  // own model of the top line is what relative scrolling reads, and a
-  // scroll that moved the pane without telling it left the next `Down`
-  // computing from wherever the reader had been before.
-  scrollTopTo(0);
+  if (bufferId !== null) editor.setBufferCursor(bufferId, 0);
 });
 registerHandler("welcome_tab", () => dispatch(widgetKey("Tab")));
 registerHandler("welcome_shift_tab", () => dispatch(widgetKey("Shift+Tab")));
@@ -1623,37 +1623,29 @@ function moveFinder(delta: number): void {
   finderIndex = (finderIndex + delta + finderHits.length) % finderHits.length;
   render();
 }
+/** Movement keys decide only *who* moves — the focused widget, or the
+ *  editor. The moving itself is the host's, which is why none of the
+ *  scroll arithmetic that used to live here does any more. */
 registerHandler("welcome_up", () => {
   engaged = true;
   if (finderFocused()) moveFinder(-1);
-  else scrollLine(false);
+  else editor.executeAction("move_up");
 });
 registerHandler("welcome_down", () => {
   engaged = true;
   if (finderFocused()) moveFinder(1);
-  else scrollLine(true);
+  else editor.executeAction("move_down");
 });
-/** One line, on the editor's own scroll path — the same one the mouse
- *  wheel takes. `scrollTopTo` is absolute and right for a jump, but its
- *  reveal arithmetic saturates to no movement for a delta this small. */
-/** Three lines a press: enough to read by, and the mouse wheel is there
- *  for finer work. */
-function scrollLine(down: boolean): void {
-  engaged = true;
-  scrollTopTo(Math.max(0, trackedTop() + (down ? 3 : -3)));
-}
 
-/** A page, computed: the reveal offset is immaterial at this size, and
- *  `move_page_*` would page the cursor rather than the view. */
-function pageBy(sign: number): void {
-  engaged = true;
-  const vp = editor.getViewport();
-  const h = vp && vp.height > 0 ? vp.height : 24;
-  scrollTopTo(Math.max(0, trackedTop() + sign * Math.max(1, h - 2)));
-}
 
-registerHandler("welcome_page_up", () => pageBy(-1));
-registerHandler("welcome_page_down", () => pageBy(1));
+registerHandler("welcome_page_up", () => {
+  engaged = true;
+  editor.executeAction("move_page_up");
+});
+registerHandler("welcome_page_down", () => {
+  engaged = true;
+  editor.executeAction("move_page_down");
+});
 registerHandler("welcome_left", () => dispatch(widgetKey("Left")));
 registerHandler("welcome_right", () => dispatch(widgetKey("Right")));
 registerHandler("welcome_backspace", () => dispatch(widgetKey("Backspace")));
@@ -1759,15 +1751,13 @@ function activateKey(k: string): void {
     const id = k.slice(5);
     if (folded.has(id)) folded.delete(id);
     else folded.add(id);
-    // A fold is the one action where the reader's line matters and the
-    // host may move it: repainting a panel that holds a focused-capable
-    // text widget (the finder field) can pull the pane to that widget.
-    // Folding by click never showed it; folding by keyboard did, and
-    // dropped the reader two cards away from the card they just folded.
-    // Re-assert the line the fold happened on.
-    const top = trackedTop();
+    // The reader's line is the cursor's line, and the host keeps the
+    // cursor where it was across a repaint — so folding no longer needs
+    // the plugin to save and restore a scroll position. It used to:
+    // repainting a panel holding the finder field pulled the pane to
+    // that widget, and folding by keyboard dropped the reader two cards
+    // from the one they had just folded.
     render();
-    scrollTopTo(top);
     return;
   }
   if (k.startsWith("hit:")) {
@@ -1833,20 +1823,6 @@ function activateKey(k: string): void {
   }
 }
 
-/** Bring `line` into view, but only when it is not already on screen —
- *  a focus move that lands somewhere visible should not yank the page. */
-function revealLine(line: number): void {
-  const vp = editor.getViewport();
-  if (!vp) return;
-  // `trackedTop`, not `vp.topLine`: the raw value lags our own scrolls,
-  // so a focus event arriving just after one judged an on-screen row to
-  // be off-screen and yanked the page to it. Folding a card by keyboard
-  // did exactly that — the fold worked, and then the reader was
-  // somewhere else.
-  const top = trackedTop();
-  if (line >= top && line < top + vp.height - 2) return;
-  scrollTopTo(Math.max(0, line - 1));
-}
 
 function openFinderHit(index: number): void {
   const hit = finderHits[index];
@@ -1864,10 +1840,17 @@ editor.on("widget_event", (args) => {
   // focused text widget, so a focused button further down this
   // document would otherwise be invisible. Reveal its card.
   if (args.event_type === "focus") {
+    // Put the cursor on the focused control's card and let the host
+    // reveal it. The old branch scrolled to the *top* of the page for
+    // every `act_*` and `jump:` key — so tabbing onto a button far down
+    // the document threw the reader back to the wordmark, with the
+    // thing they had just focused off screen. Which is what a focus
+    // move must never do.
     const id = cardForWidget(k);
-    if (id !== null && typeof cardLines[id] === "number") revealLine(cardLines[id]);
-    else if (k.startsWith("jump:") || k.startsWith("act_")) scrollTopTo(0);
-    else if (k === "startupToggle") scrollTopTo(0);
+    const at = id !== null ? cardBytes[id] : undefined;
+    if (bufferId !== null && typeof at === "number") {
+      editor.setBufferCursor(bufferId, at);
+    }
     return;
   }
 
