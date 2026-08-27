@@ -259,14 +259,32 @@ function hero(): WidgetSpec[] {
     ...art,
     blank(),
     plain("  A terminal text editor and IDE.  It grows when your work does.", C.value),
-    line([
-      { text: "  single static binary", style: { fg: C.muted } },
-      { text: "  ·  ", style: { fg: C.frame } },
-      { text: "zero configuration", style: { fg: C.muted } },
-      { text: "  ·  ", style: { fg: C.frame } },
-      { text: "open source", style: { fg: C.muted } },
-    ]),
+    // The chips line carries the off switch on its right. A control for
+    // "I don't want this screen" belongs where someone who doesn't want
+    // the screen will actually look — the first thing they see — not at
+    // the bottom of a page they were never going to scroll.
+    ...startupRow(),
   ];
+}
+
+/** The chips line, with the startup toggle right-aligned on it when
+ *  there is room. Below the two-column fold the toggle drops to its own
+ *  line rather than being pushed off the edge. */
+function startupRow(): WidgetSpec[] {
+  const chips = line([
+    { text: "  single static binary", style: { fg: C.muted } },
+    { text: "  ·  ", style: { fg: C.frame } },
+    { text: "zero configuration", style: { fg: C.muted } },
+    { text: "  ·  ", style: { fg: C.frame } },
+    { text: "open source", style: { fg: C.muted } },
+  ]);
+  const sw = toggle(showOnStartup(), "Show this screen on startup", {
+    key: "startupToggle",
+  });
+  if (viewportWidth() >= 96) {
+    return [row(chips, flexSpacer(), sw, spacer(2))];
+  }
+  return [chips, blank(), row(spacer(2), sw)];
 }
 
 // ── The three doors ──────────────────────────────────────────────────
@@ -646,11 +664,6 @@ function footer(): WidgetSpec[] {
     plain("  That's the whole ladder. Most days you'll live on rung one — the rest", C.value),
     plain("  keeps up when you climb.", C.value),
     blank(),
-    row(
-      spacer(2),
-      toggle(showOnStartup(), "Show this screen on startup", { key: "startupToggle" }),
-    ),
-    blank(),
   ];
 }
 
@@ -884,6 +897,12 @@ async function openWelcome(force: boolean): Promise<void> {
     probeThemes();
     probeWorkspaces();
     render();
+    // The panel auto-focuses its first widget, which is now the startup
+    // toggle — a stray Enter on open would switch the screen off. Park
+    // focus on the first door instead, which is what Enter should do
+    // here anyway.
+    panel.setFocusKey("jump:1");
+    lastFocusedWidget = "jump:1";
     editor.showBuffer(bufferId);
     void probeRepoFiles();
     void probeGit();
@@ -1213,7 +1232,7 @@ editor.on("widget_event", (args) => {
     const id = cardForWidget(k);
     if (id !== null && typeof cardLines[id] === "number") revealLine(cardLines[id]);
     else if (k.startsWith("jump:") || k.startsWith("act_")) scrollTopTo(0);
-    else if (k === "startupToggle") pageBy(1);
+    else if (k === "startupToggle") scrollTopTo(0);
     return;
   }
 

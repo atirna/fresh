@@ -441,25 +441,52 @@ underline stays an honest affordance.
 
 ## 8. Lifecycle and configuration
 
+> _This section was written for the Rust-core design. The shipped
+> implementation needs no host change, so it adds no core setting: the
+> welcome screen is gated by its own plugin config, and the two older empty
+> states stay governed by the core boolean that already governed them. What
+> ships is described below; the original single-key proposal is kept after
+> it as the road not taken._
+
 ```jsonc
 {
+  "plugins": {
+    "welcome_screen": {
+      // false removes the plugin entirely, including the palette command
+      "enabled": true,
+      "settings": {
+        // false: never open on its own; `Welcome` in the palette still works
+        "showOnStartup": true
+      }
+    }
+  },
   "editor": {
-    // "welcome"      — the welcome buffer (default)
-    // "empty_buffer" — the historical [No Name] scratch buffer
-    // "blank"        — the blank pane with the one-line hint
-    "empty_workspace_screen": "welcome"
+    // what you fall back to once the welcome screen stands down
+    //   true  — the historical [No Name] scratch buffer
+    //   false — the blank pane with the one-line hint
+    "auto_create_empty_buffer_on_last_buffer_close": true
   }
 }
 ```
 
-One setting, governing **both** empty-workspace paths: launch with nothing to
-restore, and closing the last buffer. They are the same state.
+`showOnStartup` governs **both** empty-workspace paths — launch with nothing
+to restore, and closing the last buffer — because they are the same state.
+The startup toggle on the page writes a plugin *global state* override that
+wins over the config field, so flipping it in the UI persists without
+rewriting `config.json`; the config field is what the Settings UI edits and
+the fallback when no override has been set.
 
-**Migration.** `editor.auto_create_empty_buffer_on_last_buffer_close` stays,
-deprecated, and keeps working. The partial-config layer holds it as
-`Option<bool>`, so an *explicit* value is distinguishable from the default and
-maps to `empty_buffer` (`true`) or `blank` (`false`). If both are set
-explicitly, the new key wins.
+All three empty states therefore remain reachable, and turning the welcome
+screen off restores exactly the previous behaviour rather than a new one.
+
+**The road not taken.** The core design proposed folding all three into one
+tri-state `editor.empty_workspace_screen` (`"welcome"` / `"empty_buffer"` /
+`"blank"`), migrating from the boolean by treating an explicitly-set
+`Option<bool>` as the old value. That is still the tidier surface, and worth
+doing if the screen ever moves into the core. It is deliberately not done
+here: adding a core setting to gate a plugin would be the only host change in
+an otherwise plugin-only feature, and the boolean it would deprecate is
+already load-bearing across the test suite.
 
 **When it opens.**
 
@@ -483,10 +510,14 @@ without needing the Dashboard's blunt "close on any file open".
 was the thing you just closed leaves the plain placeholder for the rest of the
 session. There is no loop, and no way to get trapped.
 
-**The startup toggle.** The footer's `[x] Show this screen on startup` writes
-`empty_workspace_screen` — `"welcome"` when checked, `"blank"` when not. The
-screen carries its own off switch, at the bottom, where you arrive after
-deciding you have seen enough.
+**The startup toggle.** `[x] Show this screen on startup` sits at the top
+right of the first viewport, on the chips line. A control for "I don't want
+this screen" belongs where someone who doesn't want the screen will actually
+look — the first thing they see — not at the bottom of a page they were never
+going to scroll. Below the two-column fold it drops to its own line rather
+than being pushed off the edge. The panel auto-focuses its first widget, so
+the initial focus is moved to the first door explicitly: a stray `Enter` on
+open must not switch the screen off.
 
 **Neighbouring surfaces.**
 
@@ -577,7 +608,7 @@ naming rather than hand-waving:
 |---|---|
 | 1 | The buffer: `Welcome` virtual buffer, `welcome` mode, `empty_workspace_screen` setting with migration, open/close/get-out-of-the-way lifecycle. Static content, no widgets. |
 | 2 | The ladder: first viewport, three path cards, `1`/`2`/`3` jumps, level banners, `{scroll}` status element, depth meter. |
-| 3 | Cards as widget panels: fold arrows, the live finder, static syntax-highlighted code and diff samples, the footer toggle. |
+| 3 | Cards as widget panels: fold arrows, the live finder, static syntax-highlighted code and diff samples, the startup toggle. |
 | 4 | Live demos: theme picker, git staging, the embedded Orchestrator dock. |
 | 5 | Polish: reveal-on-scroll, narrow breakpoints, the sub-minimum fallback, locale keys. |
 | 6 | Flip the default to `"welcome"`; user docs under `docs/features/`. |
