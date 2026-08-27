@@ -65,6 +65,19 @@ const C = {
   frame: "ui.split_separator_fg",
   /** The brightest ink the theme has for "under the pointer". */
   hoverFg: "ui.menu_hover_fg",
+  /** The block behind a chip. `ui.popup_bg` is the obvious name for it
+   *  and the wrong colour: on the stock dark theme it is `editor.bg`
+   *  exactly, so the chips had no block at all. This is the theme's own
+   *  "a subtle band lies over the editor background" colour, which is
+   *  the thing a chip actually needs, and it lifts in either polarity. */
+  chipBg: "editor.current_line_bg",
+  /** Decorative markers — `▸`, `▼`, the finder's caret. An accent, not
+   *  gutter grey: they are the page's punctuation, and the eye uses
+   *  them to find the next actionable thing.
+   *
+   *  Not `ui.file_status_added_fg`, which several shipped themes leave
+   *  unset — it fell back to a grey indistinguishable from the rule. */
+  mark: "syntax.type",
   ok: "ui.file_status_added_fg",
   err: "diagnostic.error_fg",
 };
@@ -149,7 +162,17 @@ let finderHits: FinderItem[] = [];
 let finderIndex = 0;
 
 let themeNames: string[] = [];
+/** The theme the editor is actually on, so the swatch row can mark it.
+ *  Read from config at open and updated when a swatch applies a new
+ *  one; nothing about *colour* depends on it, because every colour on
+ *  this page is a key the host resolves at paint time. */
 let activeTheme = "";
+
+function readActiveTheme(): void {
+  const cfg = editor.getConfig() as { theme?: string } | null;
+  const name = cfg?.theme;
+  if (typeof name === "string" && name) activeTheme = name;
+}
 
 let gitDirty: string[] = [];
 let gitBranch = "";
@@ -251,6 +274,21 @@ function blank(): WidgetSpec {
   return raw([styledRow([{ text: "" }])]);
 }
 
+/** Leading pad that centres `width` columns inside the measure.
+ *
+ *  The page's own margin is two columns, so a centred row starts from
+ *  there rather than from zero — a row centred against the full measure
+ *  and then indented sits two columns right of true centre. */
+function centrePad(width: number): number {
+  return Math.max(2, Math.floor((measure() - width) / 2));
+}
+
+/** Centre a run of segments by measuring their combined text. */
+function centred(segs: StyledSegment[]): WidgetSpec {
+  const w = segs.reduce((n, s) => n + s.text.length, 0);
+  return line([{ text: " ".repeat(centrePad(w)) }, ...segs]);
+}
+
 function accel(action: string): string {
   return editor.getKeybindingLabel(action, "normal") ??
     editor.getKeybindingLabel(action, "global") ?? "";
@@ -270,27 +308,37 @@ const VERBS: [string, string, string][] = [
  *  belonging to nothing. They are a column of their own now, four
  *  spaces past the longest label, so the eye can carry a label to its
  *  key without crossing the page. */
+/** The three verbs on one centred line, each key beside its own label.
+ *
+ *  They used to be a stacked list with the keys in a column of their
+ *  own, which was an answer to the keys having drifted sixty columns
+ *  from their labels. Sitting them side by side answers the same thing
+ *  more directly — a key one space after the verb it belongs to can't
+ *  drift at all — and it costs two rows of the first viewport, which is
+ *  the scarcest space on the page. */
 function verbs(): WidgetSpec[] {
-  const labels = VERBS.map(([, label]) => label);
-  const keyCol = Math.max(...labels.map((t) => t.length)) + 4;
-  return VERBS.map(([key, label, action], i) => {
+  const parts: WidgetSpec[] = [];
+  let width = 0;
+  VERBS.forEach(([key, label, action], i) => {
     const acc = accel(action);
-    const parts: WidgetSpec[] = [
-      spacer(2),
-      // The marker is outside the button: an underline that includes it
-      // starts two columns before the word it marks.
-      line([{ text: "▸ ", style: { fg: C.gutter } }]),
-      button(labels[i], { key, bare: true, style: LINK, hoverStyle: HOVER_LINK }),
-    ];
-    if (acc) {
-      parts.push(
-        spacer(keyCol - labels[i].length),
-        line([{ text: acc, style: { fg: C.key } }]),
-      );
+    if (i > 0) {
+      parts.push(line([{ text: "    " }]));
+      width += 4;
     }
-    void label;
-    return row(...parts);
+    // The marker is outside the button: an underline that includes it
+    // starts two columns before the word it marks.
+    parts.push(line([{ text: "▸ ", style: { fg: C.mark } }]));
+    parts.push(button(label, { key, bare: true, style: LINK, hoverStyle: HOVER_LINK }));
+    width += 2 + label.length;
+    if (acc) {
+      parts.push(line([
+        { text: " " },
+        { text: acc, style: { fg: C.key, bold: true } },
+      ]));
+      width += 1 + acc.length;
+    }
   });
+  return [row(spacer(centrePad(width)), ...parts)];
 }
 
 /** A section heading: fold arrow at the rail, title, then a leader rule
@@ -342,6 +390,17 @@ function card(
   return col(head, ...body());
 }
 
+/** A centred heading with a rule running out either side of it. */
+function rule(label: string): WidgetSpec {
+  const arm = Math.max(3, Math.floor((measure() - label.length - 4) / 2));
+  return line([
+    { text: " ".repeat(centrePad(arm * 2 + label.length + 4)) },
+    { text: "─".repeat(arm) + "  ", style: { fg: C.frame } },
+    { text: label, style: { fg: C.body, bold: true } },
+    { text: "  " + "─".repeat(arm), style: { fg: C.frame } },
+  ]);
+}
+
 function banner(level: string, sub: string): WidgetSpec {
   const mark = LEVEL_MARK[level];
   // Computed, not a hardcoded 40: the rule used to stop at column 64 on
@@ -374,15 +433,34 @@ const ART = [
 
 /** ANSI-Shadow is a two-material face: `█` block faces and a `╔╗╚╝║═`
  *  bevel. Painting both in one colour flattened the mark into a slab;
- *  recessing the bevel gives it the depth the glyph set was drawn for. */
-function artLine(l: string): WidgetSpec {
-  const segs: StyledSegment[] = [{ text: "  " }];
+ *  recessing the bevel gives it the depth the glyph set was drawn for.
+ *
+ *  One key for the face, one for the bevel — both resolved by the host
+ *  at paint time, so switching theme repaints the mark with no help
+ *  from this plugin, like every other colour on the page.
+ *
+ *  Two richer versions were tried and both were wrong. Interpolating a
+ *  true gradient means reading the theme's JSON and emitting literal
+ *  RGB: baked values stop tracking the theme, and themes like
+ *  `terminal` store colour *names* rather than triplets, so there is
+ *  nothing to interpolate. Banding across several accent keys keeps the
+ *  host resolving them, but a ramp of *independent semantic* keys is
+ *  only a ramp when a theme happens to make them hue-adjacent — on
+ *  `dark` (teal → light blue → blue) it read beautifully and on `light`
+ *  it went teal → navy → magenta, which is a stripe, not a light. */
+const ART_W = Math.max(...ART.map((l) => l.length));
+
+function artLine(l: string, pad: number): WidgetSpec {
+  const segs: StyledSegment[] = [{ text: " ".repeat(pad) }];
   let i = 0;
   while (i < l.length) {
     const face = l[i] === "█";
     let j = i;
     while (j < l.length && (l[j] === "█") === face) j++;
-    segs.push({ text: l.slice(i, j), style: { fg: face ? C.art : C.frame } });
+    segs.push({
+      text: l.slice(i, j),
+      style: { fg: face ? C.art : C.frame, bold: face },
+    });
     i = j;
   }
   return line(segs);
@@ -390,52 +468,56 @@ function artLine(l: string): WidgetSpec {
 
 function hero(): WidgetSpec[] {
   const wide = viewportWidth() >= 60;
+  const pad = centrePad(ART_W);
   const art = wide
-    ? ART.map(artLine)
-    : [line([{ text: "  fresh", style: { fg: C.art, bold: true } }])];
+    ? ART.map((l) => artLine(l, pad))
+    : [centred([{ text: "fresh", style: { fg: C.art, bold: true } }])];
+  const tag = viewportWidth() >= 70
+    ? "A terminal text editor and IDE.  It grows when your work does."
+    : "It grows when your work does.";
   return [
+    // The off switch rides the top edge, right-aligned, clear of the
+    // mark: a control for "I don't want this screen" belongs where
+    // someone who doesn't want the screen looks first, and putting it
+    // above the wordmark keeps the mark the first thing *read*.
+    ...startupRow(),
     blank(),
     ...art,
     blank(),
-    plain(
-      viewportWidth() >= 70
-        ? "  A terminal text editor and IDE.  It grows when your work does."
-        : "  It grows when your work does.",
-      C.body,
-    ),
-    // The chips line carries the off switch on its right. A control for
-    // "I don't want this screen" belongs where someone who doesn't want
-    // the screen will actually look — the first thing they see — not at
-    // the bottom of a page they were never going to scroll.
-    ...startupRow(),
+    centred([{ text: tag, style: { fg: C.muted, italic: true } }]),
+    blank(),
+    chipsRow(),
   ];
 }
 
-/** The chips line, with the startup control on the line below it.
+/** The three chips, centred, each on its own background block.
  *
- *  It used to be flushed to the right of the chips, which put the one
- *  control that turns the page off at the far edge of a wide terminal,
- *  connected to nothing. Its own line at the margin is where a reader
- *  scanning the top of the page actually looks.
+ *  A chip is a claim about the product, and a block behind it is what
+ *  makes it read as a chip rather than as three more words of prose —
+ *  the same job a pill does on a web page, done with the one thing a
+ *  cell grid has: a background. */
+function chipsRow(): WidgetSpec {
+  const chips = ["single static binary", "zero configuration", "open source"];
+  const segs: StyledSegment[] = [];
+  chips.forEach((c, i) => {
+    if (i > 0) segs.push({ text: "  ·  ", style: { fg: C.gutter } });
+    segs.push({ text: ` ${c} `, style: { fg: C.mark, bg: C.chipBg } });
+  });
+  return centred(segs);
+}
+
+/** The startup switch, right-aligned on the page's top edge.
  *
  *  A bare button rather than a `toggle`: it draws the same `[✓]` box,
  *  but a button can say what it does under the pointer and a toggle
  *  cannot. */
 function startupRow(): WidgetSpec[] {
-  const chips = line([
-    { text: "  single static binary", style: { fg: C.muted } },
-    { text: "  ·  ", style: { fg: C.gutter } },
-    { text: "zero configuration", style: { fg: C.muted } },
-    { text: "  ·  ", style: { fg: C.gutter } },
-    { text: "open source", style: { fg: C.muted } },
-  ]);
   const on = showOnStartup();
+  const label = `${on ? "[✓]" : "[ ]"} Show this screen on startup`;
   return [
-    chips,
-    blank(),
     row(
-      spacer(2),
-      button(`${on ? "[✓]" : "[ ]"} Show this screen on startup`, {
+      spacer(Math.max(2, measure() - label.length - 1)),
+      button(label, {
         key: "startupToggle",
         bare: true,
         style: LINK,
@@ -560,7 +642,10 @@ function doors(): WidgetSpec[] {
   const cards = DOORS.map((d) => doorCard(d, rows));
   return [
     blank(),
-    line([{ text: "  WHAT BRINGS YOU HERE?", style: { fg: C.muted } }]),
+    // A heading between two rules, centred. The words alone, dim and at
+    // the margin, read as one more line of prose; a rule through them is
+    // what makes the page break here.
+    rule("WHAT BRINGS YOU HERE?"),
     blank(),
     wide ? row(...cards) : col(...cards.map((c) => row(c))),
   ];
@@ -1048,23 +1133,25 @@ function buildSpec(): WidgetSpec {
     // verbs two lines above already paint theirs in `ui.help_key_fg`.
     // And no box: a frame is an alert shape, which is the wrong shape
     // for the one message on the page whose job is to lower a pulse.
-    line([
-      { text: "  Nothing to learn first. It works like you'd expect:  ", style: { fg: C.body } },
-      { text: "Ctrl+S", style: { fg: C.key } },
+    centred([
+      { text: "Nothing to learn first. It works like you'd expect: ", style: { fg: C.body } },
+      { text: "Ctrl+S", style: { fg: C.key, bold: true } },
       { text: " saves,", style: { fg: C.body } },
     ]),
-    line([
-      { text: "  " },
-      { text: "Ctrl+Z", style: { fg: C.key } },
+    centred([
+      { text: "Ctrl+Z", style: { fg: C.key, bold: true } },
       { text: " undoes, ", style: { fg: C.body } },
-      { text: "Ctrl+F", style: { fg: C.key } },
+      { text: "Ctrl+F", style: { fg: C.key, bold: true } },
       { text: " finds, ", style: { fg: C.body } },
-      { text: "Ctrl+C/V", style: { fg: C.key } },
+      { text: "Ctrl+C/V", style: { fg: C.key, bold: true } },
       { text: " copy-paste — and the mouse just works.", style: { fg: C.body } },
     ]),
-    plain("  Click, drag, scroll, select.", C.body),
+    centred([{ text: "Click, drag, scroll, select.", style: { fg: C.body } }]),
     blank(),
-    plain("  ▼ scroll — the rest is here when you need it", C.muted),
+    centred([
+      { text: "▼ ", style: { fg: C.mark } },
+      { text: "scroll — the rest is here when you need it", style: { fg: C.muted } },
+    ]),
     ...level1(),
     ...level2(),
     ...level3(),
@@ -1293,6 +1380,7 @@ async function openWelcome(force: boolean): Promise<void> {
   if (force) dismissed = false;
   if (!force && (dismissed || !showOnStartup())) return;
   opening = true;
+  readActiveTheme();
   try {
     const res = await editor.createVirtualBuffer({
       name: "Welcome",
