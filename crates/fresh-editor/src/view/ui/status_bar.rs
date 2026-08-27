@@ -1614,7 +1614,7 @@ impl StatusBarRenderer {
     /// The (fg, bg) theme-key strings an element paints with — its non-hover
     /// provenance for the theme inspector, mirroring `element_style`. Hover is
     /// transient so the recorded key is always the element's semantic key.
-    fn element_keys(
+    pub(crate) fn element_keys(
         kind: ElementKind,
         lsp_state: LspIndicatorState,
     ) -> (&'static str, &'static str) {

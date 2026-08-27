@@ -1148,7 +1148,7 @@ impl Editor {
 
         // Status bar (hidden when toggled off, or when a suggestions/file-
         // browser popup covers the bottom row).
-        self.render_status_bar_row(frame, status_bar_area, has_suggestions, has_file_browser);
+        self.publish_status_bar(status_bar_area, has_suggestions, has_file_browser);
 
         // Prompt input line (non-overlay prompts only).
         self.render_prompt_line(frame, prompt_line_area, &prompt, &theme);
@@ -2316,77 +2316,70 @@ impl Editor {
     /// bar's inputs are gathered by [`Self::with_status_bar_ctx`], shared
     /// with the event-time layout derivation
     /// ([`Self::status_bar_layout_now`]).
-    fn render_status_bar_row(
+    /// Publish what the status bar painted — its region, its semantic
+    /// segments, and its theme-key provenance — all read off the laid-out
+    /// tree.
+    ///
+    /// It no longer paints. `StatusBarRenderer::render_status_bar` placed and
+    /// drew every element and recorded provenance in one walk; the tree does
+    /// the placing and the fold does the drawing, so what is left is telling
+    /// the rest of the editor where things ended up.
+    fn publish_status_bar(
         &mut self,
-        frame: &mut Frame,
         area: ratatui::layout::Rect,
         has_suggestions: bool,
         has_file_browser: bool,
     ) {
-        if self.active_window().status_bar_visible && !has_suggestions && !has_file_browser {
-            // Theme-key runs the status bar records as it paints; applied to
-            // the chrome's cell map after the window borrow is released.
-            let mut status_bar_runs: Vec<crate::app::types::ThemeRun> = Vec::new();
-            // Web renders the status bar natively from `status_view`; skip
-            // painting it (the semantic segments are still captured).
-            let sb_draw = !self.suppress_chrome_cells;
-            let status_bar_layout = self
-                .with_status_bar_ctx(|status_ctx, config| {
-                    let mut sb_rec =
-                        crate::app::types::CellThemeRecorder::new(&mut status_bar_runs);
-                    StatusBarRenderer::render_status_bar(
-                        frame,
-                        area,
-                        status_ctx,
-                        config,
-                        Some(&mut sb_rec),
-                        sb_draw,
-                    )
-                })
-                .expect("active buffer must be present");
-            self.active_chrome_mut().apply_theme_runs(&status_bar_runs);
-
-            // Two parity oracles, checking different things since the frame
-            // moved onto the shell.
-            //
-            // The first is no longer "derivation versus frame layout" — both
-            // sides resolve through `shell_frame` now. What it still catches is
-            // the *retained* tree disagreeing with a fresh one: `render` lays
-            // out through the `Ui` that persists across frames, while
-            // `status_bar_area_now` builds a throwaway one. Stale retained
-            // state skewing layout is precisely the failure a retained tree
-            // makes possible, and nothing else would notice it.
-            //
-            // The second is the original oracle and still means what it says:
-            // `compute_status_layout` is a genuinely separate walk from the
-            // paint pass. It retires when the status bar itself migrates.
-            #[cfg(debug_assertions)]
-            {
-                debug_assert_eq!(
-                    self.status_bar_area_now(),
-                    Some(area),
-                    "the retained tree and a fresh one must lay the frame out alike"
-                );
-                // The event-time oracle is gone with the walk it compared
-                // against: `compute_status_layout` was a second placement pass
-                // over live state, and there is one pass now — the layout.
-            }
-
-            // Paint capture for the web: `status_view` mirrors the painted
-            // frame's semantic segments (text + positions). This is paint
-            // OUTPUT, not event geometry — hit-testing derives the segment
-            // rects live via `status_bar_layout_now`.
-            let status_bar = &mut self.active_chrome_mut().status_bar;
-            status_bar.area = Some((area.y, area.x, area.width));
-            status_bar.segments = status_bar_layout.segments;
-        } else {
+        if !(self.active_window().status_bar_visible && !has_suggestions && !has_file_browser) {
             // No bar this frame — the user hid it, or a suggestions / file-
             // browser popup took the row. Drop last frame's capture instead of
             // leaving it to go stale: `status_view` would keep projecting a
             // status bar the web then draws under its prompt row (the TUI's
             // ghost-text bug).
             self.active_chrome_mut().status_bar = Default::default();
+            return;
         }
+        // The retained tree and a fresh one must still lay the frame out
+        // alike: `render` goes through the `Ui` that persists across frames,
+        // while `status_bar_area_now` builds a throwaway one, and stale
+        // retained state skewing layout is exactly the failure a retained tree
+        // makes possible.
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            self.status_bar_area_now(),
+            Some(area),
+            "the retained tree and a fresh one must lay the frame out alike"
+        );
+
+        let Some(bar) = self.shell_frame_status_bar.clone() else {
+            return;
+        };
+        let frame_rect = {
+            let f = self.active_chrome().last_frame;
+            ratatui::layout::Rect::new(0, 0, f.width, f.height)
+        };
+        let (segments, runs) = {
+            let Some(ui) = self.shell_ui.as_ref() else {
+                return;
+            };
+            let segments = crate::view::shell::status_bar::segments(ui, &bar, frame_rect);
+            let runs = crate::view::shell::status_bar::provenance_runs(ui, &bar, frame_rect, area)
+                .into_iter()
+                .map(|(x, y, w, fg, bg)| crate::app::types::ThemeRun {
+                    x,
+                    y,
+                    w,
+                    fg_key: Some(fg),
+                    bg_key: Some(bg),
+                    region: "Status Bar",
+                })
+                .collect::<Vec<_>>();
+            (segments, runs)
+        };
+        self.active_chrome_mut().apply_theme_runs(&runs);
+        let status_bar = &mut self.active_chrome_mut().status_bar;
+        status_bar.area = Some((area.y, area.x, area.width));
+        status_bar.segments = segments;
     }
 
     /// Gather every status-bar input from live editor state and run `f`
@@ -6501,6 +6494,7 @@ impl Editor {
             )
         };
         self.with_status_bar_ctx(|ctx, config| {
+            let lsp_state = ctx.lsp_indicator_state;
             // Whether the dedicated remote indicator is on the bar, so the
             // filename branch can drop its now-redundant prefix. Read before
             // the sides are rendered, exactly as before.
@@ -6573,6 +6567,7 @@ impl Editor {
                     name: element_kind_name(kind),
                     clickable: StatusBarRenderer::clickable_for_kind(kind),
                     token_key,
+                    provenance: StatusBarRenderer::element_keys(kind, lsp_state),
                 }
             };
 

@@ -64,6 +64,16 @@ pub struct Item {
     /// `"<plugin>:<token>"` for a plugin-registered token, which is how the
     /// click rail finds it to fire `status_bar_token_clicked`.
     pub token_key: Option<String>,
+    /// The theme *key names* this element's cells belong to, for the theme
+    /// inspector: `element_keys`' answer, which is what the old
+    /// `CellThemeRecorder` recorded per element.
+    ///
+    /// Separate from the colours in `runs` because those ride the §6.2 interim
+    /// — `element_spans` hands back resolved styles, so paint carries
+    /// `literal()` values. Provenance must stay in names or the inspector
+    /// would report `#7ee787` where it used to report `ui.status_lsp_on_fg`.
+    /// When colours become names this field and `runs` collapse into one.
+    pub provenance: (&'static str, &'static str),
 }
 
 impl Item {
@@ -223,6 +233,32 @@ pub fn plugin_token_areas(
         .collect()
 }
 
+/// The theme-key provenance of every painted cell on the bar, in paint order:
+/// the bar's own ground first, then each element and separator over it.
+///
+/// The old recorder emitted exactly these runs *during* the paint walk. They
+/// come from the laid-out tree now, which is why the walk could go.
+pub fn provenance_runs(
+    ui: &fresh_ui::Ui<UiMsg>,
+    bar: &StatusBar,
+    size: ratatui::layout::Rect,
+    row: ratatui::layout::Rect,
+) -> Vec<(u16, u16, u16, &'static str, &'static str)> {
+    let mut out = vec![(
+        row.x,
+        row.y,
+        row.width,
+        "ui.status_bar_fg",
+        "ui.status_bar_bg",
+    )];
+    for (side, i, it) in sides(bar) {
+        if let Some(r) = rect_of(ui, &item_key(side, i), size) {
+            out.push((r.x, r.y, r.width, it.provenance.0, it.provenance.1));
+        }
+    }
+    out
+}
+
 /// Every element in screen order with its name, text and cells — the bar's
 /// semantic model, which the web renders directly instead of scraping cells.
 pub fn segments(
@@ -273,6 +309,7 @@ mod tests {
             name,
             clickable: None,
             token_key: None,
+            provenance: ("ui.status_bar_fg", "ui.status_bar_bg"),
         }
     }
 
