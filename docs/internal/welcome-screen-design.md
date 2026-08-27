@@ -778,6 +778,38 @@ Eleven things the wireframes did not know:
     `widthPct` back on and shrank them to a third of the pane. The
     percentage has to name the layout it is in.
 
+23. **The host already had the page margin.** The measure was centred by
+    padding every raw row with spaces, which the fenced code sample could
+    not join — a markdown code block turns leading spaces into NBSP and
+    paints its background across them, so the sample carried a slab of
+    grey the width of the whole margin. `setLayoutHints({ composeWidth })`
+    is the mechanism markdown compose mode uses: the host centres the
+    render area and paints the flanking margins paper-on-desk
+    (`ui.compose_margin_bg` outside, a one-column paper edge inside).
+    Handing it the measure replaced every scrap of the padding
+    machinery, and the sample came right on its own.
+
+    Two consequences worth knowing. The panel still lays out at the
+    *pane* width, not the compose width, so anything that fills the panel
+    (a `labeledSection` left to fill a `Col`) is wider than the area the
+    host clips to — on a pane a little wider than the measure, the
+    stacked doors' top border wrapped. And a code block still paints only
+    as far as its text, so the sample is padded to a rectangle: trailing
+    spaces inside the fence carry the background the same way leading
+    ones do.
+
+24. **The hover key lights every widget that shares it.** Making each
+    interior row of a door a full-width bare button keyed to that door
+    means a click anywhere inside the card jumps, and hovering any row
+    lights the whole card at once. `hoverStyle` takes `bold`, so the
+    highlight can carry emphasis rather than only colour.
+
+25. **The empty-workspace screen has to mean empty.** The ambient-open
+    condition asked whether any *file* buffer was open, so closing the
+    last text buffer with a terminal or an agent still running popped the
+    page up over a workspace that was plainly in use. It now counts every
+    buffer except this page and the host's own untitled seed.
+
 ### Still aspirational
 
 - **The LSP card** shows a real syntax-highlighted Rust sample (a markdown

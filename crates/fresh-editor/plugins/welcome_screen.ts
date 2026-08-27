@@ -76,7 +76,7 @@ const C = {
  *  Themes that leave these unset fall back to the `diagnostic.*` family,
  *  so they stay theme-derived rather than a hardcoded grey. */
 /** What every clickable thing on the page does under the pointer. */
-const HOVER = { fg: C.hoverFg, bg: C.hoverBg };
+const HOVER = { fg: C.hoverFg, bg: C.hoverBg, bold: true };
 
 function statusFg(xy: string): string {
   const c = xy.trim();
@@ -194,53 +194,8 @@ const LEVEL_MARK: Record<string, string> = {
 
 // ── Small helpers ────────────────────────────────────────────────────
 
-/** Columns of left margin, so the measure sits centred in a wide pane
- *  instead of hugging the left edge — the same page-view treatment the
- *  markdown compose mode gives a document. Zero once the pane is no
- *  wider than the measure. */
-function indent(): number {
-  const gap = Math.floor((viewportWidth() - measure()) / 2);
-  // A one-column margin is not a margin, it is a wobble: below the cap
-  // the measure already fills the pane, so leave the page flush left.
-  return gap >= 2 ? gap : 0;
-}
-
-/** Nesting depth inside a framed card. A card is already laid out at
- *  the margin, so its contents must not be indented a second time;
- *  everything else on the page is a top-level row and must be. */
-let insideFrame = 0;
-
-/** Build rows that live inside a box the caller has already placed at
- *  the margin, so `line` does not indent them a second time. */
-function inFrame<T>(fn: () => T): T {
-  insideFrame++;
-  try {
-    return fn();
-  } finally {
-    insideFrame--;
-  }
-}
-
-/** A row of the page: indented to the margin unless we are inside a
- *  card, which carries the margin itself. */
 function line(segments: StyledSegment[]): WidgetSpec {
-  const ind = insideFrame > 0 ? 0 : indent();
-  return raw([
-    styledRow(ind > 0 ? [{ text: " ".repeat(ind) }, ...segments] : segments),
-  ]);
-}
-
-/** A row fragment used *inside* a `row(...)`, where the enclosing row
- *  already placed the margin. */
-function lineAt(segments: StyledSegment[]): WidgetSpec {
   return raw([styledRow(segments)]);
-}
-
-/** `spacer(0)` is still a widget; this keeps empty margins out of the
- *  layout entirely. */
-function margin(extra = 0): WidgetSpec[] {
-  const n = indent() + extra;
-  return n > 0 ? [spacer(n)] : [];
 }
 
 function plain(t: string, fg?: string): WidgetSpec {
@@ -268,7 +223,7 @@ function accel(action: string): string {
 
 const VERBS: [string, string, string][] = [
   ["act_open", "Open file", "open"],
-  ["act_recent", "Find a recent file", "quick_open"],
+  ["act_recent", "Command palette", "quick_open"],
   ["act_new", "New buffer", "new"],
 ];
 
@@ -286,13 +241,13 @@ function verbs(): WidgetSpec[] {
   return VERBS.map(([key, , action], i) => {
     const acc = accel(action);
     const parts: WidgetSpec[] = [
-      ...margin(2),
+      spacer(2),
       button(shown[i], { key, bare: true, hoverStyle: HOVER }),
     ];
     if (acc) {
       parts.push(
         spacer(keyCol - shown[i].length),
-        lineAt([{ text: acc, style: { fg: C.key } }]),
+        line([{ text: acc, style: { fg: C.key } }]),
       );
     }
     return row(...parts);
@@ -317,14 +272,13 @@ function heading(id: string, title: string, hint: string): WidgetSpec {
     if (g >= 2) segs.push({ text: " " + "─".repeat(g), style: { fg: C.frame } });
   }
   return row(
-    ...margin(),
     button(open ? "▾" : "▸", {
       key: `fold:${id}`,
       bare: true,
       hoverStyle: HOVER,
     }),
     spacer(1),
-    lineAt(segs),
+    line(segs),
   );
 }
 
@@ -345,7 +299,7 @@ function card(
   const head = heading(id, title, hint);
   if (folded.has(id)) return head;
   // No internal divider: the heading above the box already separates.
-  if (framed) return col(head, toMeasure(col(...inFrame(body))));
+  if (framed) return col(head, toMeasure(col(...body())));
   return col(head, ...body());
 }
 
@@ -441,7 +395,7 @@ function startupRow(): WidgetSpec[] {
     chips,
     blank(),
     row(
-      ...margin(2),
+      spacer(2),
       button(`${on ? "[✓]" : "[ ]"} Show this screen on startup`, {
         key: "startupToggle",
         bare: true,
@@ -504,45 +458,51 @@ function doorTextWidth(): number {
     : Math.max(12, measure() - 8);
 }
 
+/** Every interior row of a door is a full-width bare button carrying the
+ *  card's own key. Two things follow: a click anywhere inside the card
+ *  jumps to its level (a `labeledSection` emits no hit of its own, so
+ *  the frame alone could never be routed), and the hover highlight —
+ *  which the renderer applies to *every* widget sharing the hovered key
+ *  — lights the whole card at once instead of one line of it. */
+function doorRow(d: Door, label: string, focusable = false): WidgetSpec {
+  return row(
+    button(label, {
+      key: `jump:${d.n}`,
+      bare: true,
+      fullWidth: true,
+      focusable,
+      hoverStyle: HOVER,
+    }),
+  );
+}
+
 function doorCard(d: Door, rows: number): WidgetSpec {
   const body = wrap(d.body, doorTextWidth());
-  return inFrame(() => labeledSection({
+  const pad = Math.max(0, rows - body.length);
+  return labeledSection({
     label: d.head,
-    // Stacked, each door is wrapped in its own `row` to carry the page
-    // margin — which is also what makes `widthPct` apply at all, so it
-    // has to name the whole measure there rather than a third of it.
+    // `widthPct` applies only to a Block child of a Row, and stacked
+    // doors are wrapped in one for exactly that reason: a section left
+    // to fill a `Col` takes the whole PANEL width, which on a pane a
+    // little wider than the measure is wider than the compose area the
+    // host clips to — and the card's top border wrapped.
     widthPct: pct(viewportWidth() >= 96 ? measure() / 3 : measure()),
-    key: `door:${d.n}`,
     child: col(
-      // `labeledSection` emits no hit of its own, so clicking a card's
-      // frame does nothing the host can route. Its headline is a
-      // full-width bare button instead: the line the eye lands on
-      // answers the pointer, and the `jump ↓` verb below repeats it.
-      row(button(d.sub, {
-        key: `jump:${d.n}`,
-        bare: true,
-        fullWidth: true,
-        focusable: false,
-        hoverStyle: HOVER,
-      })),
-      blank(),
-      ...body.map((b) => plain(b, C.muted)),
+      doorRow(d, d.sub),
+      doorRow(d, " "),
+      ...body.map((b) => doorRow(d, b)),
       // `labeledSection` sizes to its own child, so an uneven row of
       // doors closes its boxes at different rows and reads as broken
       // rather than as three peers. Pad to the tallest.
-      ...Array.from({ length: Math.max(0, rows - body.length) }, () => blank()),
-      blank(),
-      row(
-        button("jump ↓", {
-          key: `jump:${d.n}`,
-          bare: true,
-          hoverStyle: HOVER,
-        }),
-        flexSpacer(),
-        lineAt([{ text: d.n, style: { fg: C.key } }]),
-      ),
+      ...Array.from({ length: pad }, () => doorRow(d, " ")),
+      doorRow(d, " "),
+      // The one focusable stop in the card, so Tab advances a card at a
+      // time. The digit lives here rather than flushed right: a
+      // full-width button pads its own label, so there is no column to
+      // align a second fragment to.
+      doorRow(d, `jump ↓ · or press ${d.n}`, true),
     ),
-  }));
+  });
 }
 
 function doors(): WidgetSpec[] {
@@ -554,12 +514,7 @@ function doors(): WidgetSpec[] {
     blank(),
     line([{ text: "  WHAT BRINGS YOU HERE?", style: { fg: C.muted } }]),
     blank(),
-    // Stacked, each card still carries the margin: a `spacer` beside a
-    // block child offsets the block, and without it the doors sat flush
-    // left under prose that was indented.
-    wide
-      ? row(...margin(), ...cards)
-      : col(...cards.map((c) => row(...margin(), c))),
+    wide ? row(...cards) : col(...cards.map((c) => row(c))),
   ];
 }
 
@@ -674,8 +629,7 @@ function level1(): WidgetSpec[] {
 
 // ── Level 2 ──────────────────────────────────────────────────────────
 
-const SAMPLE = [
-  "```rust",
+const SAMPLE_CODE = [
   "  pub struct UserStore {",
   "      users: HashMap<u64, User>,",
   "  }",
@@ -685,13 +639,24 @@ const SAMPLE = [
   "          self.users.values().filter(|u| u.is_active)",
   "      }",
   "  }",
-  "```",
 ];
 
-/** The sample at the page margin. */
+/** The sample, padded to a rectangle.
+ *
+ *  A markdown code block paints its background over the text it has and
+ *  no further, so a ragged sample renders as a ragged grey shape rather
+ *  than as a block of code. Trailing spaces inside the fence become
+ *  NBSP and carry the background with them, which is what squares it
+ *  off. (Leading spaces do the same, which is why the page margin must
+ *  never be written into the sample: it painted a slab of code
+ *  background across the whole margin.) */
 function sample(): string {
-  const pad = " ".repeat(indent());
-  return SAMPLE.map((l) => (l.startsWith("```") ? l : pad + l)).join("\n");
+  const longest = Math.max(...SAMPLE_CODE.map((l) => l.length));
+  const w = Math.min(longest + 2, Math.max(20, measure() - 6));
+  const body = SAMPLE_CODE.map((l) =>
+    l.length >= w ? l : l + " ".repeat(w - l.length)
+  );
+  return ["```rust", ...body, "```"].join("\n");
 }
 
 function level2(): WidgetSpec[] {
@@ -701,15 +666,17 @@ function level2(): WidgetSpec[] {
       blank(),
       line([{ text: "  src/store.rs", style: { fg: C.value } }]),
       blank(),
-      // The markdown widget paints its own rows, so the page margin has
-      // to be inside the sample rather than around it: a `spacer` beside
-      // a block child would indent only the block's first row.
+      // The margin goes AROUND the widget, never inside its text: the
+      // markdown renderer turns leading spaces in a code fence into
+      // NBSP and paints the code background across them, so an indent
+      // written into the sample became a grey slab the width of the
+      // whole left margin.
       text({
         value: sample(),
         rows: 9,
         markdown: true,
         readOnly: true,
-        fieldWidth: indent() + measure() - 2,
+        fieldWidth: measure() - 2,
         // Deliberately keyless: a keyed widget joins the Tab cycle, and
         // a read-only sample is something to look at, not a stop on the
         // way to the next control.
@@ -939,7 +906,35 @@ function pct(cols: number): number {
  *  `widthPct`, and an inline `spacer` beside a block child would indent
  *  only the first row, so this is the one available route. */
 function toMeasure(child: WidgetSpec): WidgetSpec {
-  return row(...margin(), labeledSection({ child, widthPct: pct(measure()) }));
+  return row(labeledSection({ child, widthPct: pct(measure()) }));
+}
+
+/** Hand the page's column to the host's own page-view machinery.
+ *
+ *  `setLayoutHints({ composeWidth })` is what markdown compose mode
+ *  uses: the host centres the render area to that width and paints the
+ *  flanking margins as paper-on-desk — `ui.compose_margin_bg` outside,
+ *  a one-column paper edge inside. Doing it here rather than padding
+ *  every row means the margin is a real margin: the code sample no
+ *  longer carries a slab of its own background across it (the markdown
+ *  renderer turns leading spaces in a fence into NBSP and paints the
+ *  code background over them), and the panel never has to know where
+ *  the page sits in the pane.
+ *
+ *  Two columns of slack over the measure: `widget_panel_width` reserves
+ *  that much for the gutter and scrollbar, so the rows the panel builds
+ *  are `measure()` wide and the render area has to hold them. Below the
+ *  cap the hint is dropped — the host skips composing when the width it
+ *  is given is not narrower than the pane, but saying so plainly keeps
+ *  a resize from leaving a stale hint behind. */
+function applyComposeWidth(): void {
+  if (bufferId === null) return;
+  const w = measure() + 2;
+  editor.setLayoutHints(
+    bufferId,
+    null,
+    w < viewportWidth() ? { composeWidth: w } : {},
+  );
 }
 
 function viewportWidth(): number {
@@ -1176,8 +1171,22 @@ function showOnStartup(): boolean {
 
 // ── Lifecycle ────────────────────────────────────────────────────────
 
-function hasRealFiles(): boolean {
-  return editor.listBuffers().some((b) => !b.is_virtual && b.path && b.path.length > 0);
+/** Is anything at all open besides this page?
+ *
+ *  Anything: a file, a terminal, an agent session, another plugin's
+ *  panel. This is the *empty workspace* screen, and a workspace with a
+ *  shell running in it is not empty — closing the last text buffer
+ *  while a terminal is still open used to pop the page up over it.
+ *
+ *  Two buffers do not count: this page itself, and the host's empty
+ *  untitled seed, which is the very thing the page stands in for. */
+function hasOtherBuffers(): boolean {
+  return editor.listBuffers().some((b) => {
+    if (bufferId !== null && b.id === bufferId) return false;
+    const unnamed = !b.path || b.path.length === 0;
+    if (!b.is_virtual && unnamed && !b.modified) return false;
+    return true;
+  });
 }
 
 async function openWelcome(force: boolean): Promise<void> {
@@ -1212,6 +1221,7 @@ async function openWelcome(force: boolean): Promise<void> {
       }
     }
     engaged = force;
+    applyComposeWidth();
     probeThemes();
     probeWorkspaces();
     render();
@@ -1253,7 +1263,7 @@ editor.registerCommand(
 );
 
 registerHandler("welcomeOnReady", async () => {
-  if (!hasRealFiles()) await openWelcome(false);
+  if (!hasOtherBuffers()) await openWelcome(false);
 });
 registerHandler("welcomeOnBufferClosed", async (e: { buffer_id: number }) => {
   // The tab's `×` / `Ctrl+W` route: the buffer is gone and we were not
@@ -1264,7 +1274,7 @@ registerHandler("welcomeOnBufferClosed", async (e: { buffer_id: number }) => {
     dismissed = true;
     return;
   }
-  if (!hasRealFiles()) await openWelcome(false);
+  if (!hasOtherBuffers()) await openWelcome(false);
 });
 registerHandler("welcomeOnAfterFileOpen", (_e: { buffer_id: number; path: string }) => {
   // An auto-opened screen nobody touched was ambient — step aside. One
@@ -1288,6 +1298,7 @@ registerHandler(
     if (bufferId === null || d.buffer_id !== bufferId) return;
     if (d.width === lastW) return;
     lastW = d.width;
+    applyComposeWidth();
     render();
   },
 );
