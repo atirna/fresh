@@ -49,14 +49,38 @@ const C = {
   art: "syntax.function",
   title: "syntax.keyword",
   accent: "syntax.function",
+  /** All prose. The page is a document, so its default ink is the
+   *  editor's default ink — not `syntax.comment`, which is green on the
+   *  stock dark theme, nor `syntax.string`, which is dark red on light. */
+  body: "editor.fg",
+  /** Literal quotable things only: paths, commands, branch names. */
   value: "syntax.string",
-  muted: "syntax.comment",
+  /** Genuinely recessive in every shipped theme, unlike `syntax.comment`. */
+  muted: "editor.line_number_fg",
+  /** Bullets, markers, separators — structure, not content. */
+  gutter: "editor.line_number_fg",
   key: "ui.help_key_fg",
-  frame: "ui.popup_border_fg",
+  /** `ui.popup_border_fg` is built for a floating edge over dimmed
+   *  content, so it is deliberately loud; across ten full-width frames
+   *  it made the chrome the brightest ink on the page. This is the
+   *  editor's own "rule between regions" colour. */
+  frame: "ui.split_separator_fg",
   ok: "ui.file_status_added_fg",
-  warn: "syntax.constant",
   err: "diagnostic.error_fg",
 };
+
+/** Per-porcelain-code colour, matching the file explorer and git gutter.
+ *  Themes that leave these unset fall back to the `diagnostic.*` family,
+ *  so they stay theme-derived rather than a hardcoded grey. */
+function statusFg(xy: string): string {
+  const c = xy.trim();
+  if (c === "??") return "ui.file_status_untracked_fg";
+  if (c.includes("U") || c === "AA" || c === "DD") return "ui.file_status_conflicted_fg";
+  if (c.includes("R")) return "ui.file_status_renamed_fg";
+  if (c.includes("D")) return "ui.file_status_deleted_fg";
+  if (c.includes("A")) return "ui.file_status_added_fg";
+  return "ui.file_status_modified_fg";
+}
 
 // ── Model ────────────────────────────────────────────────────────────
 
@@ -171,6 +195,16 @@ function plain(t: string, fg?: string): WidgetSpec {
   return line([{ text: t, style: fg ? { fg } : undefined }]);
 }
 
+/** A bullet whose marker is structure and whose text is content — the
+ *  two were the same colour, which threw away the marker as a scanning
+ *  aid and painted the sentence as a comment. */
+function bullet(t: string): WidgetSpec {
+  return line([
+    { text: "  · ", style: { fg: C.gutter } },
+    { text: t, style: { fg: C.body } },
+  ]);
+}
+
 function blank(): WidgetSpec {
   return raw([styledRow([{ text: "" }])]);
 }
@@ -188,52 +222,88 @@ function accelSpec(action: string): WidgetSpec[] {
   return [flexSpacer(), line([{ text: label, style: { fg: C.key } }]), spacer(2)];
 }
 
-/** One clickable verb: `▸ Label      Ctrl+X`. */
+/** One clickable verb: `▸ Label` at the prose edge, its key at the
+ *  right of the measure. The gap is computed rather than flexed — a
+ *  `flexSpacer` here stretched `Ctrl+O` 125 columns away from the thing
+ *  it belonged to. */
 function verb(key: string, label: string, action: string): WidgetSpec {
-  return row(
+  const shown = `▸ ${label}`;
+  const acc = accel(action);
+  const gap = Math.max(2, measure() - 2 - shown.length - acc.length);
+  const parts: WidgetSpec[] = [
     spacer(2),
-    button(`▸ ${label}`, { key, bare: true, hoverStyle: { fg: C.accent } }),
-    ...accelSpec(action),
-  );
+    button(shown, { key, bare: true, hoverStyle: { fg: C.accent } }),
+  ];
+  if (acc) {
+    parts.push(spacer(gap), line([{ text: acc, style: { fg: C.key } }]));
+  }
+  return row(...parts);
 }
 
-/** A foldable card. The gutter arrow is a bare button, so folding is a
- *  click or a Tab-and-Enter away, and the card collapses to its header. */
-function card(
-  id: string,
-  title: string,
-  hint: string,
-  body: () => WidgetSpec[],
-): WidgetSpec {
+/** A section heading: fold arrow at the rail, title, then a leader rule
+ *  running out to the hint. A rule is the typographic answer to a wide
+ *  gap between a label and its value — and unlike a flex spacer it can
+ *  be computed exactly, so the hint never drifts a hundred columns from
+ *  the thing it describes. Narrow: the hint goes first, then the rule. */
+function heading(id: string, title: string, hint: string): WidgetSpec {
   const open = !folded.has(id);
-  const header = row(
+  const M = measure();
+  const segs: StyledSegment[] = [{ text: title, style: { fg: C.accent, bold: true } }];
+  const gap = M - 2 - title.length - hint.length - 2;
+  if (gap >= 4) {
+    segs.push({ text: " " + "─".repeat(gap) + " ", style: { fg: C.frame } });
+    segs.push({ text: hint, style: { fg: C.muted } });
+  } else {
+    const g = M - 2 - title.length - 1;
+    if (g >= 2) segs.push({ text: " " + "─".repeat(g), style: { fg: C.frame } });
+  }
+  return row(
     button(open ? "▾" : "▸", {
       key: `fold:${id}`,
       bare: true,
       hoverStyle: { fg: C.accent },
     }),
     spacer(1),
-    line([{ text: title, style: { fg: C.accent, bold: true } }]),
-    flexSpacer(),
-    line([{ text: hint, style: { fg: C.muted } }]),
-    spacer(1),
+    line(segs),
   );
-  if (!open) return labeledSection({ child: header, key: `card:${id}` });
-  return labeledSection({
-    child: col(header, divider({ style: { fg: C.frame } }), ...body()),
-    key: `card:${id}`,
-  });
+}
+
+/** A foldable section.
+ *
+ *  `framed` draws the box. It is reserved for the sections holding real,
+ *  touchable data — the finder, git, themes, the dock — so the frame
+ *  means "your data is in here and you can touch it" rather than
+ *  "section", which it said ten times in the loudest colour on the page.
+ *  Reading material gets the heading and nothing else. */
+function card(
+  id: string,
+  title: string,
+  hint: string,
+  body: () => WidgetSpec[],
+  framed = false,
+): WidgetSpec {
+  const head = heading(id, title, hint);
+  if (folded.has(id)) return head;
+  // No internal divider: the heading above the box already separates.
+  if (framed) return col(head, toMeasure(col(...body())));
+  return col(head, ...body());
 }
 
 function banner(level: string, sub: string): WidgetSpec {
+  const mark = LEVEL_MARK[level];
+  // Computed, not a hardcoded 40: the rule used to stop at column 64 on
+  // a wide terminal and overflow the pane on a narrow one. Heavy stroke
+  // so the top of the hierarchy is also the strongest horizontal.
+  const tail = Math.max(3, measure() - 5 - mark.length - 1);
   return col(
     blank(),
+    blank(),
     line([
-      { text: "──── ", style: { fg: C.frame } },
-      { text: LEVEL_MARK[level], style: { fg: C.title, bold: true } },
-      { text: " " + "─".repeat(40), style: { fg: C.frame } },
+      { text: "━━━━ ", style: { fg: C.frame } },
+      { text: mark, style: { fg: C.title, bold: true } },
+      { text: " " + "━".repeat(tail), style: { fg: C.frame } },
     ]),
-    line([{ text: sub, style: { fg: C.muted } }]),
+    line([{ text: "  " + sub, style: { fg: C.body } }]),
     blank(),
   );
 }
@@ -249,16 +319,37 @@ const ART = [
   "╚═╝     ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝",
 ];
 
+/** ANSI-Shadow is a two-material face: `█` block faces and a `╔╗╚╝║═`
+ *  bevel. Painting both in one colour flattened the mark into a slab;
+ *  recessing the bevel gives it the depth the glyph set was drawn for. */
+function artLine(l: string): WidgetSpec {
+  const segs: StyledSegment[] = [{ text: "  " }];
+  let i = 0;
+  while (i < l.length) {
+    const face = l[i] === "█";
+    let j = i;
+    while (j < l.length && (l[j] === "█") === face) j++;
+    segs.push({ text: l.slice(i, j), style: { fg: face ? C.art : C.frame } });
+    i = j;
+  }
+  return line(segs);
+}
+
 function hero(): WidgetSpec[] {
   const wide = viewportWidth() >= 60;
   const art = wide
-    ? ART.map((l) => line([{ text: "  " + l, style: { fg: C.art } }]))
+    ? ART.map(artLine)
     : [line([{ text: "  fresh", style: { fg: C.art, bold: true } }])];
   return [
     blank(),
     ...art,
     blank(),
-    plain("  A terminal text editor and IDE.  It grows when your work does.", C.value),
+    plain(
+      viewportWidth() >= 70
+        ? "  A terminal text editor and IDE.  It grows when your work does."
+        : "  It grows when your work does.",
+      C.body,
+    ),
     // The chips line carries the off switch on its right. A control for
     // "I don't want this screen" belongs where someone who doesn't want
     // the screen will actually look — the first thing they see — not at
@@ -273,9 +364,9 @@ function hero(): WidgetSpec[] {
 function startupRow(): WidgetSpec[] {
   const chips = line([
     { text: "  single static binary", style: { fg: C.muted } },
-    { text: "  ·  ", style: { fg: C.frame } },
+    { text: "  ·  ", style: { fg: C.gutter } },
     { text: "zero configuration", style: { fg: C.muted } },
-    { text: "  ·  ", style: { fg: C.frame } },
+    { text: "  ·  ", style: { fg: C.gutter } },
     { text: "open source", style: { fg: C.muted } },
   ]);
   const sw = toggle(showOnStartup(), "Show this screen on startup", {
@@ -296,37 +387,47 @@ const DOORS: Door[] = [
     n: "1",
     head: "[1] JUST EDIT TEXT",
     sub: "Open a file & go",
-    body: ["Notes, configs, huge logs.", "Standard keys, full mouse —", "nothing to learn first."],
+    body: ["Notes, configs, huge", "logs. Standard keys and", "full mouse. Nothing to", "learn first."],
   },
   {
     n: "2",
     head: "[2] CLASSIC IDE",
     sub: "Code with LSP & git",
-    body: ["Completions, goto & hover,", "hunk-level diff review,", "splits, themes, plugins."],
+    body: ["Completions, goto and", "hover, hunk-level diff", "review, splits, themes,", "plugins."],
   },
   {
     n: "3",
     head: "[3] ORCHESTRATE",
     sub: "Run agents in parallel",
-    body: ["One workspace per worktree —", "claude, codex, aider and", "remotes. Tour the diffs."],
+    body: ["One worktree per task.", "claude, codex, aider and", "remotes. Tour the diffs."],
   },
 ];
+
+/** Bodies are padded to a common height: `labeledSection` sizes to its
+ *  own child, so an uneven row of doors closes its boxes at different
+ *  rows and reads as broken rather than as three peers. */
+const DOOR_BODY_ROWS = Math.max(...DOORS.map((d) => d.body.length));
 
 function doorCard(d: Door): WidgetSpec {
   return labeledSection({
     label: d.head,
-    widthPct: 33,
+    widthPct: pct(measure() / 3),
     key: `door:${d.n}`,
     child: col(
-      plain(d.sub, C.value),
+      plain(d.sub, C.body),
       blank(),
       ...d.body.map((b) => plain(b, C.muted)),
+      ...Array.from({ length: DOOR_BODY_ROWS - d.body.length }, () => blank()),
       blank(),
-      button(`jump ↓  ·  press ${d.n}`, {
-        key: `jump:${d.n}`,
-        bare: true,
-        hoverStyle: { fg: C.accent },
-      }),
+      row(
+        button("jump ↓", {
+          key: `jump:${d.n}`,
+          bare: true,
+          hoverStyle: { fg: C.accent },
+        }),
+        flexSpacer(),
+        line([{ text: d.n, style: { fg: C.key } }]),
+      ),
     ),
   });
 }
@@ -336,7 +437,7 @@ function doors(): WidgetSpec[] {
   const cards = DOORS.map(doorCard);
   return [
     blank(),
-    line([{ text: "  ── WHAT BRINGS YOU HERE? ──", style: { fg: C.muted } }]),
+    line([{ text: "  WHAT BRINGS YOU HERE?", style: { fg: C.muted } }]),
     blank(),
     wide ? row(...cards) : col(...cards),
   ];
@@ -369,7 +470,7 @@ function recomputeHits(): void {
 }
 
 function finderCard(): WidgetSpec {
-  return card("finder", "Pick up where you left off", "this box is live — type in it", () => {
+  return card("finder", "Pick up where you left off", "live — type in it", () => {
     const rows: WidgetSpec[] = [
       blank(),
       textInput(finderQuery, {
@@ -408,12 +509,12 @@ function finderCard(): WidgetSpec {
     }
     rows.push(blank());
     rows.push(
-      plain("  Fresh remembers your cursor position in every file. Hot Exit restores", C.muted),
+      plain("  Fresh remembers your cursor position in every file. Hot Exit restores", C.body),
     );
-    rows.push(plain("  unsaved buffers after a crash — even unnamed scratch ones.", C.muted));
+    rows.push(plain("  unsaved buffers after a crash — even unnamed scratch ones.", C.body));
     rows.push(blank());
     return rows;
-  });
+  }, true);
 }
 
 function level1(): WidgetSpec[] {
@@ -421,16 +522,16 @@ function level1(): WidgetSpec[] {
     banner("1", "Open a file. Type. Save. Fresh stays out of the way."),
     finderCard(),
     blank(),
-    card("ugly", "Built for the ugly files too", "click ▾ to fold any card", () => [
+    card("ugly", "Built for the ugly files too", "big files, odd encodings", () => [
       blank(),
-      plain("  · Multi-GB files open without blocking the UI — logs, dumps, CSVs.", C.muted),
-      plain("  · Instant startup; text appears as you type. Small memory footprint.", C.muted),
-      plain("  · Encodings beyond UTF-8: UTF-16, GBK, Shift-JIS, Latin-1 and more.", C.muted),
-      plain("  · Project-wide search & replace with regex — even across unsaved buffers.", C.muted),
+      bullet("Multi-GB files open without blocking the UI — logs, dumps, CSVs."),
+      bullet("Instant startup; text appears as you type. Small memory footprint."),
+      bullet("Encodings beyond UTF-8: UTF-16, GBK, Shift-JIS, Latin-1 and more."),
+      bullet("Project-wide search & replace with regex — even across unsaved buffers."),
       blank(),
     ]),
     blank(),
-    card("editorvar", "Make it your $EDITOR", "quality-of-life from day one", () => [
+    card("editorvar", "Make it your $EDITOR", "shell setup", () => [
       blank(),
       plain("  # Use Fresh for commit messages and rebases", C.muted),
       plain("  git config --global core.editor \"fresh --wait\"", C.value),
@@ -446,38 +547,40 @@ function level1(): WidgetSpec[] {
 
 const SAMPLE = [
   "```rust",
-  "pub struct UserStore {",
-  "    users: HashMap<u64, User>,",
-  "}",
+  "  pub struct UserStore {",
+  "      users: HashMap<u64, User>,",
+  "  }",
   "",
-  "impl UserStore {",
-  "    pub fn active_users(&self) -> impl Iterator<Item = &User> {",
-  "        self.users.values().filter(|u| u.is_active)",
-  "    }",
-  "}",
+  "  impl UserStore {",
+  "      pub fn active_users(&self) -> impl Iterator<Item = &User> {",
+  "          self.users.values().filter(|u| u.is_active)",
+  "      }",
+  "  }",
   "```",
 ].join("\n");
 
 function level2(): WidgetSpec[] {
   return [
     banner("2", "Language servers, git review, themes — here the whole time, waiting."),
-    card("lsp", "Language smarts, zero setup", "this block is really highlighted", () => [
+    card("lsp", "Language smarts, zero setup", "real syntax highlighting", () => [
+      blank(),
+      line([{ text: "  src/store.rs", style: { fg: C.value } }]),
       blank(),
       text({
         value: SAMPLE,
-        rows: 11,
+        rows: 9,
         markdown: true,
         readOnly: true,
-        fullWidth: true,
+        fieldWidth: measure() - 2,
         // Deliberately keyless: a keyed widget joins the Tab cycle, and
         // a read-only sample is something to look at, not a stop on the
         // way to the next control.
       }),
       blank(),
-      plain("  · Open a file and the language server starts itself. Hover, goto,", C.muted),
-      plain("    references, rename, code actions and diagnostics, with no setup.", C.muted),
-      plain("  · Configs shipped for Python, TypeScript, Rust, Go, Java, C/C++ and more.", C.muted),
-      plain("  · Run multiple servers per language with merged completions.", C.muted),
+      bullet("Open a file and the language server starts itself. Hover, goto,"),
+      line([{ text: "    references, rename, code actions and diagnostics, with no setup.", style: { fg: C.body } }]),
+      bullet("Configs shipped for Python, TypeScript, Rust, Go, Java, C/C++ and more."),
+      bullet("Run multiple servers per language with merged completions."),
       blank(),
     ]),
     blank(),
@@ -487,18 +590,18 @@ function level2(): WidgetSpec[] {
     blank(),
     card("power", "Power tools when your hands get fast", "optional, all of it", () => [
       blank(),
-      plain("  · Multi-cursor and block selection, keyboard macros, sort lines.", C.muted),
-      plain("  · Command palette with prefix routing: > commands · # buffers · : lines.", C.muted),
-      plain("  · Vi mode with operators, motions and text objects — if that's your thing.", C.muted),
-      plain("  · TypeScript plugins, sandboxed in QuickJS. No node_modules on disk.", C.muted),
-      plain("  · Tabs, split panes, integrated terminal, markdown preview.", C.muted),
+      bullet("Multi-cursor and block selection, keyboard macros, sort lines."),
+      bullet("Command palette with prefix routing: > commands · # buffers · : lines."),
+      bullet("Vi mode with operators, motions and text objects — if that's your thing."),
+      bullet("TypeScript plugins, sandboxed in QuickJS. No node_modules on disk."),
+      bullet("Tabs, split panes, integrated terminal, markdown preview."),
       blank(),
     ]),
   ];
 }
 
 function gitCard(): WidgetSpec {
-  return card("git", "Review your diff before it reviews you", "your real working tree", () => {
+  return card("git", "Review your diff before it reviews you", "your working tree", () => {
     const rows: WidgetSpec[] = [blank()];
     if (!gitProbed) {
       rows.push(plain("  reading git status…", C.muted));
@@ -512,7 +615,7 @@ function gitCard(): WidgetSpec {
           { text: "   ", style: {} },
           {
             text: gitDirty.length === 0 ? "working tree clean" : `${gitDirty.length} changed`,
-            style: { fg: gitDirty.length === 0 ? C.ok : C.warn },
+            style: { fg: gitDirty.length === 0 ? C.ok : C.body },
           },
         ]),
       );
@@ -520,8 +623,8 @@ function gitCard(): WidgetSpec {
       for (const f of gitDirty.slice(0, 6)) {
         rows.push(
           line([
-            { text: "   " + f.slice(0, 2), style: { fg: C.warn } },
-            { text: " " + f.slice(3), style: { fg: C.muted } },
+            { text: "   " + f.slice(0, 2), style: { fg: statusFg(f.slice(0, 2)) } },
+            { text: " " + f.slice(3), style: { fg: C.body } },
           ]),
         );
       }
@@ -539,15 +642,15 @@ function gitCard(): WidgetSpec {
       ),
     );
     rows.push(blank());
-    rows.push(plain("  Hunk-level stage / unstage / discard. Side-by-side diff, review", C.muted));
-    rows.push(plain("  notes, git gutter, git grep.", C.muted));
+    rows.push(plain("  Hunk-level stage / unstage / discard. Side-by-side diff, review", C.body));
+    rows.push(plain("  notes, git gutter, git grep.", C.body));
     rows.push(blank());
     return rows;
-  });
+  }, true);
 }
 
 function themeCard(): WidgetSpec {
-  return card("themes", "Make it yours", "these restyle the editor, live", () => {
+  return card("themes", "Make it yours", "restyles the editor, live", () => {
     const buttons: WidgetSpec[] = [spacer(2)];
     for (const name of themeNames.slice(0, 6)) {
       buttons.push(
@@ -563,23 +666,25 @@ function themeCard(): WidgetSpec {
       blank(),
       row(...buttons),
       blank(),
-      plain("  Live theme editor with \"Inspect Theme at Cursor\". Configurable status", C.muted),
-      plain("  bar. UI translated to 日本語, 한국어, 中文, Tiếng Việt and more.", C.muted),
+      plain("  Live theme editor with \"Inspect Theme at Cursor\". Configurable status", C.body),
+      plain("  bar. UI translated to 日本語, 한국어, 中文, Tiếng Việt and more.", C.body),
       blank(),
     ];
-  });
+  }, true);
 }
 
 // ── Level 3 ──────────────────────────────────────────────────────────
 
+/** Idle is a healthy state. It used to be painted `syntax.constant`
+ *  amber, which told the reader something was wrong. */
 function stateGlyph(w: Workspace): { text: string; fg: string } {
   if (w.kind === "discovered") return { text: "○", fg: C.muted };
   if (w.agentState === "working") return { text: "●", fg: C.ok };
-  return { text: "◐", fg: C.warn };
+  return { text: "◐", fg: C.muted };
 }
 
 function orchestratorCard(): WidgetSpec {
-  return card("orch", "The Orchestrator dock", "your real workspaces", () => {
+  return card("orch", "The Orchestrator dock", "your workspaces", () => {
     const rows: WidgetSpec[] = [blank()];
     if (workspaces.length === 0) {
       rows.push(plain("  No workspaces yet. Cut one and an agent starts inside it.", C.muted));
@@ -606,7 +711,7 @@ function orchestratorCard(): WidgetSpec {
       rows.push(
         line([
           { text: "  ● working   ", style: { fg: C.ok } },
-          { text: "◐ idle   ", style: { fg: C.warn } },
+          { text: "◐ idle   ", style: { fg: C.muted } },
           { text: "○ discovered worktree", style: { fg: C.muted } },
         ]),
       );
@@ -630,11 +735,11 @@ function orchestratorCard(): WidgetSpec {
     actions.push(button("Open the dock", { key: "act_ws_dock", hoverStyle: { fg: C.accent } }));
     rows.push(row(...actions));
     rows.push(blank());
-    rows.push(plain("  One workspace per git worktree, each with its own terminals and", C.muted));
-    rows.push(plain("  agent. Sessions resume after a restart. Leave the rest running.", C.muted));
+    rows.push(plain("  One workspace per git worktree, each with its own terminals and", C.body));
+    rows.push(plain("  agent. Sessions resume after a restart. Leave the rest running.", C.body));
     rows.push(blank());
     return rows;
-  });
+  }, true);
 }
 
 function level3(): WidgetSpec[] {
@@ -669,6 +774,33 @@ function footer(): WidgetSpec[] {
 
 // ── Assembly ─────────────────────────────────────────────────────────
 
+/** The page's text column. Long enough for the longest hand-wrapped
+ *  line plus air, capped so a very wide terminal doesn't stretch a
+ *  paragraph across the room. Without it every card was a 147-column
+ *  box around 70 columns of text, and nothing could look composed. */
+const MEASURE = 88;
+
+function measure(): number {
+  // Less two: a rule computed to exactly the viewport width wraps, and a
+  // wrapped rule is a broken one. `raw` rows flow through at their own
+  // width, so the pane is the only backstop.
+  return Math.min(Math.max(20, viewportWidth() - 2), MEASURE);
+}
+
+/** `widthPct` is an integer percent, so this wobbles a column on
+ *  resize — close enough for a text column, and it keeps the host as
+ *  the one that owns layout. */
+function pct(cols: number): number {
+  return Math.max(1, Math.min(100, Math.round((cols * 100) / viewportWidth())));
+}
+
+/** Constrain a block to the measure. Only `labeledSection` reads
+ *  `widthPct`, and an inline `spacer` beside a block child would indent
+ *  only the first row, so this is the one available route. */
+function toMeasure(child: WidgetSpec): WidgetSpec {
+  return row(labeledSection({ child, widthPct: pct(measure()) }));
+}
+
 function viewportWidth(): number {
   const vp = editor.getViewport();
   return vp && vp.width > 0 ? vp.width : 100;
@@ -683,16 +815,27 @@ function buildSpec(): WidgetSpec {
     verb("act_recent", "Find a recent file", "quick_open"),
     verb("act_new", "New buffer", "new"),
     blank(),
-    labeledSection({
-      key: "reassure",
-      child: col(
-        plain("Nothing to learn first. It works like you'd expect: Ctrl+S saves,", C.value),
-        plain("Ctrl+Z undoes, Ctrl+F finds, Ctrl+C/V copy-paste — and the mouse", C.value),
-        plain("just works. Click, drag, scroll, select.", C.value),
-      ),
-    }),
+    // It teaches keybindings, so the keys should look like keys — the
+    // verbs two lines above already paint theirs in `ui.help_key_fg`.
+    // And no box: a frame is an alert shape, which is the wrong shape
+    // for the one message on the page whose job is to lower a pulse.
+    line([
+      { text: "  Nothing to learn first. It works like you'd expect:  ", style: { fg: C.body } },
+      { text: "Ctrl+S", style: { fg: C.key } },
+      { text: " saves,", style: { fg: C.body } },
+    ]),
+    line([
+      { text: "  " },
+      { text: "Ctrl+Z", style: { fg: C.key } },
+      { text: " undoes, ", style: { fg: C.body } },
+      { text: "Ctrl+F", style: { fg: C.key } },
+      { text: " finds, ", style: { fg: C.body } },
+      { text: "Ctrl+C/V", style: { fg: C.key } },
+      { text: " copy-paste — and the mouse just works.", style: { fg: C.body } },
+    ]),
+    plain("  Click, drag, scroll, select.", C.body),
     blank(),
-    plain("            ▼ scroll — the rest is here when you need it ▼", C.muted),
+    plain("  ▼ scroll — the rest is here when you need it", C.muted),
     ...level1(),
     ...level2(),
     ...level3(),
