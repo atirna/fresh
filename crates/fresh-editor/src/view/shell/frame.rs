@@ -72,6 +72,9 @@ pub struct Frame {
     /// is what decides how wide each toggle is. The row's *existence* is
     /// `is_some`.
     pub search_options: Option<super::search_options::SearchOptions>,
+    /// The status bar's elements, when it is shown. `None` hides the row, the
+    /// same way `status_bar: false` did — which it replaces.
+    pub status_bar_items: Option<super::status_bar::StatusBar>,
     pub prompt_line: bool,
     /// Column width, already resolved against the frame width.
     pub dock: Option<u16>,
@@ -98,6 +101,7 @@ impl Default for Frame {
             menu_bar: true,
             status_bar: true,
             search_options: None,
+            status_bar_items: None,
             prompt_line: false,
             dock: None,
             explorer: None,
@@ -178,7 +182,14 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
         )
         .h(cells(f.menu_bar)),
         body,
-        region(HostRegion::StatusBar).h(cells(f.status_bar)),
+        // Native: the tree measures the bar from its own elements. The row
+        // keeps its region key, so every caller that asks for
+        // `HostRegion::StatusBar`'s rectangle still gets one.
+        match &f.status_bar_items {
+            Some(bar) => named(HostRegion::StatusBar, super::status_bar::status_bar(bar))
+                .h(cells(f.status_bar)),
+            None => region(HostRegion::StatusBar).h(cells(f.status_bar)),
+        },
         // Native: the tree measures this row from its own text. See
         // `shell::search_options`.
         named(

@@ -453,6 +453,15 @@ impl Editor {
     fn apply_ui_fact(&mut self, fact: crate::view::shell::msg::UiFact) {
         use crate::view::shell::msg::UiFact;
         match fact {
+            UiFact::StatusBarClicked(id) => {
+                // The id→behaviour table is unchanged and stays where it is
+                // (`chrome::status_bar`); what the tree replaced is finding
+                // *which* element the pointer was over.
+                if let Err(e) = self.dispatch_status_bar_click(id) {
+                    tracing::warn!("status bar click failed: {e}");
+                }
+            }
+            UiFact::StatusBarTokenClicked(key) => self.fire_status_bar_token_click(&key),
             UiFact::CloseContextMenu => {
                 self.active_window_mut().close_context_menus();
             }

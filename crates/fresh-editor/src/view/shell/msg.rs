@@ -56,6 +56,19 @@ pub enum UiFact {
     /// at a time — the tree's answer, kept apart from the legacy walk's in
     /// `Editor::shell_hover`.
     Hover(Option<crate::app::types::HoverTarget>),
+    /// A click on a status-bar element that answers one.
+    ///
+    /// The id, not an `Action`: the dispatch behind it is not a pure mapping —
+    /// most segments dismiss any open menu-style popup first, and the LSP,
+    /// remote and read-only menus deliberately do not, because each owns a
+    /// toggle that dismissing would defeat. That table stays where it is; this
+    /// only says which element was pressed.
+    StatusBarClicked(crate::view::ui::status_bar::StatusBarClickable),
+    /// A click on a plugin-registered status-bar token, by its registry key
+    /// (`"<plugin>:<token>"`). Fires the `status_bar_token_clicked` hook, so a
+    /// plugin's chip is as clickable as a built-in indicator.
+    StatusBarTokenClicked(String),
+
     /// A **press** on a bar label. Toggles that menu.
     ///
     /// Press, not click, and that is what makes the toggle work. The layer's

@@ -1493,6 +1493,43 @@ impl Editor {
         Some(crate::view::shell::search_options::option_spans(ui, size))
     }
 
+    /// Where layout put each clickable status-bar element, read off the
+    /// retained tree.
+    ///
+    /// This replaces `status_bar_layout_now`, which re-ran the whole placement
+    /// walk on live state every time a pointer event or a popup anchor needed
+    /// a column — a second derivation that could disagree with the painted one
+    /// whenever the state behind it had moved. The tree that painted is the
+    /// one answering.
+    pub(crate) fn status_bar_clickable_rects_now(
+        &self,
+    ) -> Vec<(
+        crate::view::ui::status_bar::StatusBarClickable,
+        ratatui::layout::Rect,
+    )> {
+        let Some(ui) = self.shell_ui.as_ref() else {
+            return Vec::new();
+        };
+        let Some(bar) = self.shell_frame_status_bar.as_ref() else {
+            return Vec::new();
+        };
+        let frame = self.active_chrome().last_frame;
+        let size = ratatui::layout::Rect::new(0, 0, frame.width, frame.height);
+        crate::view::shell::status_bar::clickable_rects(ui, bar, size)
+    }
+
+    /// Screen area `(row, start_col, end_col)` of one clickable element, for
+    /// the popups that anchor to their indicator.
+    pub(crate) fn status_bar_clickable_area_now(
+        &mut self,
+        id: crate::view::ui::status_bar::StatusBarClickable,
+    ) -> Option<(u16, u16, u16)> {
+        self.status_bar_clickable_rects_now()
+            .into_iter()
+            .find(|(cid, _)| *cid == id)
+            .map(|(_, r)| (r.y, r.x, r.x.saturating_add(r.width)))
+    }
+
     /// Render the bottom prompt input line into `area`. Overlay prompts (e.g.
     /// Live Grep) paint their own input row inside their centred frame and so
     /// skip this; file/folder open prompts use a path-colorising renderer.
@@ -2330,17 +2367,9 @@ impl Editor {
                     Some(area),
                     "the retained tree and a fresh one must lay the frame out alike"
                 );
-                let now = self
-                    .status_bar_layout_now()
-                    .map(|(_, l)| (l.clickable, l.plugin_token_areas));
-                debug_assert_eq!(
-                    now,
-                    Some((
-                        status_bar_layout.clickable.clone(),
-                        status_bar_layout.plugin_token_areas.clone()
-                    )),
-                    "status-bar event-time layout and paint walk must agree"
-                );
+                // The event-time oracle is gone with the walk it compared
+                // against: `compute_status_layout` was a second placement pass
+                // over live state, and there is one pass now — the layout.
             }
 
             // Paint capture for the web: `status_view` mirrors the painted
@@ -2670,10 +2699,16 @@ impl Editor {
             + prompt_row_visible as u16;
         let explorer_h = chrome_area.height.saturating_sub(fixed);
         let explorer = self.explorer_content(chrome_area.width, explorer_h);
+        // The bar's elements, measured from the chrome column it will occupy.
+        let status_bar_items = (win_status_bar && !has_suggestions && !has_file_browser)
+            .then(|| self.status_bar_description(chrome_area.width))
+            .flatten();
+        self.shell_frame_status_bar = status_bar_items.clone();
         crate::view::shell::frame::Frame {
             menu_bar: menu_bar_visible,
             status_bar: win_status_bar && !has_suggestions && !has_file_browser,
             search_options,
+            status_bar_items,
             prompt_line: prompt_row_visible,
             dock: dock_area.map(|d| d.width),
             explorer,
@@ -2834,34 +2869,6 @@ impl Editor {
     /// `clickable` / `plugin_token_areas` cache on `StatusBarChrome` —
     /// geometry produced by layout, not recorded by paint. `None` when the
     /// bar is hidden.
-    pub(crate) fn status_bar_layout_now(
-        &mut self,
-    ) -> Option<(
-        ratatui::layout::Rect,
-        crate::view::ui::status_bar::StatusBarLayout,
-    )> {
-        let area = self.status_bar_area_now()?;
-        let layout = self.with_status_bar_ctx(|ctx, config| {
-            StatusBarRenderer::compute_status_layout(area, ctx, config)
-        })?;
-        Some((area, layout))
-    }
-
-    /// Screen area `(row, start_col, end_col)` of a clickable status-bar
-    /// segment, derived from live state. Used to anchor popups to their
-    /// indicator (the LSP / remote / read-only / update menus).
-    pub(crate) fn status_bar_clickable_area_now(
-        &mut self,
-        id: crate::view::ui::status_bar::StatusBarClickable,
-    ) -> Option<(u16, u16, u16)> {
-        let (_, layout) = self.status_bar_layout_now()?;
-        layout
-            .clickable
-            .iter()
-            .find(|(cid, _, _, _)| *cid == id)
-            .map(|(_, row, start, end)| (*row, *start, *end))
-    }
-
     /// Render the modal overlays that dim everything behind them: settings,
     /// calibration wizard, keybinding editor, and event-debug dialog. Each is
     /// drawn only for the TUI (`!suppress_chrome_cells`); the web projects
@@ -6467,4 +6474,122 @@ fn byte_to_screen_col(text: &str, target_byte: usize) -> usize {
         byte += ch.len_utf8();
     }
     col
+}
+
+/// Building the status bar's description from live state.
+impl Editor {
+    /// The bar's elements, in the order they sit on the row.
+    ///
+    /// This is the half of `render_status` that decides *what is on the bar*.
+    /// The other half — where each element lands — is the tree's now; see
+    /// `view::shell::status_bar`.
+    pub(crate) fn status_bar_description(
+        &mut self,
+        width: u16,
+    ) -> Option<crate::view::shell::status_bar::StatusBar> {
+        use crate::app::shell_host::shell_theme::{attrs, literal};
+        use crate::view::shell::status_bar as sb;
+        use crate::view::ui::status_bar::{element_kind_name, StatusBarRenderer};
+
+        let (bar_fg, bar_bg, sep_fg, sep_bg) = {
+            let t = self.theme.read().unwrap();
+            (
+                t.status_bar_fg,
+                t.status_bar_bg,
+                t.status_separator_fg,
+                t.status_separator_bg,
+            )
+        };
+        self.with_status_bar_ctx(|ctx, config| {
+            // Whether the dedicated remote indicator is on the bar, so the
+            // filename branch can drop its now-redundant prefix. Read before
+            // the sides are rendered, exactly as before.
+            ctx.remote_indicator_on_bar = config
+                .left
+                .iter()
+                .chain(config.right.iter())
+                .any(|e| matches!(e, crate::config::StatusBarElement::RemoteIndicator));
+
+            let left = StatusBarRenderer::render_side(&config.left, ctx);
+            let mut right = StatusBarRenderer::render_side(&config.right, ctx);
+
+            // **Which right-hand elements survive** — a content decision, made
+            // from measured text, kept verbatim from `render_status`. Reserve
+            // a sane minimum for the left side so the buffer name and cursor
+            // position are not truncated to a single character on a narrow
+            // terminal, then drop low-priority right elements (configured
+            // right-most first) until the rest fits alongside it. The *first*
+            // right element is never dropped, so a user who configured any
+            // right-side status keeps some of it.
+            let available = width as usize;
+            let sep_w = crate::primitives::display_width::str_width(&config.separator);
+            let total_right: usize = right.iter().map(|(_, w, _, _)| *w).sum::<usize>()
+                + sep_w * right.len().saturating_sub(1);
+            let left_min_target = available.saturating_mul(2).saturating_div(5).min(40);
+            let right_budget = available.saturating_sub(left_min_target + 1);
+            if total_right > right_budget && right.len() > 1 {
+                let mut current = total_right;
+                while current > right_budget && right.len() > 1 {
+                    let Some(dropped) = right.pop() else { break };
+                    current = current.saturating_sub(dropped.1).saturating_sub(sep_w);
+                }
+            }
+
+            let item = |(spans, _w, kind, token_key): (
+                Vec<ratatui::text::Span<'static>>,
+                usize,
+                crate::view::ui::status_bar::ElementKind,
+                Option<String>,
+            )| {
+                let runs = spans
+                    .into_iter()
+                    .map(|s| {
+                        let fg = literal(s.style.fg.unwrap_or(bar_fg));
+                        let bg = literal(s.style.bg.unwrap_or(bar_bg));
+                        let mut mods: Vec<&str> = Vec::new();
+                        if s.style
+                            .add_modifier
+                            .contains(ratatui::style::Modifier::BOLD)
+                        {
+                            mods.push("bold");
+                        }
+                        if s.style
+                            .add_modifier
+                            .contains(ratatui::style::Modifier::ITALIC)
+                        {
+                            mods.push("italic");
+                        }
+                        if s.style
+                            .add_modifier
+                            .contains(ratatui::style::Modifier::UNDERLINED)
+                        {
+                            mods.push("underlined");
+                        }
+                        (s.content.to_string(), attrs(&fg, &bg, &mods))
+                    })
+                    .collect();
+                sb::Item {
+                    runs,
+                    name: element_kind_name(kind),
+                    clickable: StatusBarRenderer::clickable_for_kind(kind),
+                    token_key,
+                }
+            };
+
+            sb::StatusBar {
+                left: left.into_iter().map(item).collect(),
+                right: right.into_iter().map(item).collect(),
+                separator: config.separator.clone(),
+                base_theme: crate::app::shell_host::shell_theme::pair(
+                    "ui.status_bar_fg",
+                    "ui.status_bar_bg",
+                ),
+                sep_theme: crate::app::shell_host::shell_theme::attrs(
+                    &literal(sep_fg),
+                    &literal(sep_bg),
+                    &[],
+                ),
+            }
+        })
+    }
 }

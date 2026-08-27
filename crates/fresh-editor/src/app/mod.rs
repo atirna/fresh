@@ -1164,6 +1164,14 @@ pub struct Editor {
     /// It replaced three invocations from three different bar rectangles,
     /// reconciled only by a `debug_assert_eq!` that release builds compile out.
     pub(crate) menu_layout_frame: Option<crate::view::ui::menu::MenuLayout>,
+    /// The status bar's elements for the frame being rendered.
+    ///
+    /// Kept for the same reason as `menu_layout_frame`: reading a rectangle
+    /// back out of the tree needs to know *which* element each key belongs to,
+    /// and that is the description. Set by `shell_frame`; read by the popup
+    /// anchors, the click rail and the web projection — all of which used to
+    /// re-run the placement walk instead.
+    pub(crate) shell_frame_status_bar: Option<crate::view::shell::status_bar::StatusBar>,
     /// What the pointer is over *in the shell's tree*, as the tree itself
     /// reported it.
     ///
