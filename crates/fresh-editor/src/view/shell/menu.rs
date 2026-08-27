@@ -215,6 +215,19 @@ fn menu_intents(n: Node<UiMsg>, keys: &[MenuShortcut]) -> Node<UiMsg> {
         .action(Intent::Confirm, |_| nav(MenuNav::Activate));
     // Cancel is deliberately absent: the layer declares `ESCAPE` dismissal,
     // and a key that dismisses a layer is answered by that layer.
+    //
+    // `hjkl` were hard-coded arms in the handler this replaced and are bound in
+    // no keymap, so without these they would simply have stopped working. They
+    // are declared *before* the keymap's own shortcuts below, so a user who
+    // binds those letters to something else still wins.
+    for (ch, intent) in [
+        ('h', Intent::Left),
+        ('j', Intent::Down),
+        ('k', Intent::Up),
+        ('l', Intent::Right),
+    ] {
+        n = n.shortcut(fresh_ui::KeyPress::new(fresh_ui::KeyCode::Char(ch)), intent);
+    }
     for s in keys {
         n = n.shortcut(s.key, s.intent);
     }
@@ -318,7 +331,11 @@ fn dropdown(
         // open-ness from build time rather than asking after the close.
         l = l
             .modality(Modality::None)
-            .dismiss(Dismiss::OUTSIDE_POINTER)
+            // Escape closes the chain. It is declared here rather than handled
+            // as an intent because a key that dismisses a layer is answered by
+            // that layer — which is what `menu_intents` deliberately leaves
+            // `Intent::Cancel` out for.
+            .dismiss(Dismiss::OUTSIDE_POINTER.or(Dismiss::ESCAPE))
             .on_dismiss(|_| UiMsg::Ui(UiFact::CloseMenu));
     }
     l
@@ -1197,15 +1214,40 @@ mod intent_tests {
         ));
     }
 
-    /// Escape is not an intent the chain claims: the layer declares `ESCAPE`
-    /// dismissal, and a key that dismisses a layer is answered by that layer.
+    /// Escape closes the menu, and it does so as the layer's dismissal rather
+    /// than as an intent the chain claims.
+    ///
+    /// The first version of this test asserted only that no `MenuNav` was
+    /// produced — which passes just as well when Escape does *nothing at all*,
+    /// and that is exactly what it did: the chain declared `OUTSIDE_POINTER`
+    /// dismissal and no `ESCAPE`, so deleting the old handler's `Esc` arm left
+    /// the key unanswered by anyone. Assert the effect, not the absence.
     #[test]
-    fn escape_is_left_to_the_layer() {
+    fn escape_closes_the_menu() {
         let mut ui = open(Vec::new());
         let got = press(&mut ui, KeyCode::Esc, Mods::NONE);
         assert!(
-            !matches!(got.as_slice(), [UiMsg::Ui(UiFact::MenuNav(_))]),
+            matches!(got.as_slice(), [UiMsg::Ui(UiFact::CloseMenu)]),
             "got {got:?}"
         );
+    }
+
+    /// `hjkl` navigate, as they did before the migration — they were hard-coded
+    /// arms in the old handler and are bound in no keymap.
+    #[test]
+    fn hjkl_navigate() {
+        let mut ui = open(Vec::new());
+        for (ch, want) in [
+            ('j', MenuNav::NextItem),
+            ('k', MenuNav::PrevItem),
+            ('h', MenuNav::Back),
+            ('l', MenuNav::Forward),
+        ] {
+            let got = press(&mut ui, KeyCode::Char(ch), Mods::NONE);
+            assert!(
+                matches!(got.as_slice(), [UiMsg::Ui(UiFact::MenuNav(n))] if *n == want),
+                "{ch}: got {got:?}"
+            );
+        }
     }
 }
