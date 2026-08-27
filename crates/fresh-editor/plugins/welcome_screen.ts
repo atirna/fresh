@@ -1678,6 +1678,13 @@ function moveFinder(delta: number): void {
 /** Movement keys decide only *who* moves — the focused widget, or the
  *  editor. The moving itself is the host's, which is why none of the
  *  scroll arithmetic that used to live here does any more. */
+/** The only movement keys this page still names.
+ *
+ *  Everything else — Left/Right, Home/End, the page keys — the host now
+ *  routes on its own: to the focused text widget when there is one, to
+ *  the buffer otherwise. This page keeps Up and Down because on it they
+ *  mean something the host cannot know: with the finder focused they
+ *  walk its *hits*, which are plugin state, not text in the field. */
 registerHandler("welcome_up", () => {
   engaged = true;
   if (finderFocused()) moveFinder(-1);
@@ -1690,38 +1697,6 @@ registerHandler("welcome_down", () => {
 });
 
 
-/** Document keys the mode was swallowing.
- *
- *  A mode with `allowTextInput` owns the keyboard, so every key it does
- *  not name is dropped — and these were not named. On a page you read
- *  by scrolling, Home and End are how you get to either end of it. */
-registerHandler("welcome_doc_start", () => {
-  engaged = true;
-  if (finderFocused()) {
-    dispatch(widgetKey("Home"));
-    return;
-  }
-  scrollToTop(0);
-});
-registerHandler("welcome_doc_end", () => {
-  engaged = true;
-  if (finderFocused()) {
-    dispatch(widgetKey("End"));
-    return;
-  }
-  editor.executeAction("move_document_end");
-});
-
-registerHandler("welcome_page_up", () => {
-  engaged = true;
-  editor.executeAction("move_page_up");
-});
-registerHandler("welcome_page_down", () => {
-  engaged = true;
-  editor.executeAction("move_page_down");
-});
-registerHandler("welcome_left", () => dispatch(widgetKey("Left")));
-registerHandler("welcome_right", () => dispatch(widgetKey("Right")));
 registerHandler("welcome_backspace", () => dispatch(widgetKey("Backspace")));
 registerHandler("welcome_delete", () => dispatch(widgetKey("Delete")));
 /** Escape leaves the finder before it leaves the page: a reader who
@@ -1803,14 +1778,6 @@ editor.defineMode(
     ["Space", "welcome_space"],
     ["Up", "welcome_up"],
     ["Down", "welcome_down"],
-    ["Home", "welcome_doc_start"],
-    ["End", "welcome_doc_end"],
-    ["C-Home", "welcome_doc_start"],
-    ["C-End", "welcome_doc_end"],
-    ["PageUp", "welcome_page_up"],
-    ["PageDown", "welcome_page_down"],
-    ["Left", "welcome_left"],
-    ["Right", "welcome_right"],
     ["Backspace", "welcome_backspace"],
     ["Delete", "welcome_delete"],
     ["/", "welcome_focus_find"],

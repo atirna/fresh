@@ -519,7 +519,12 @@ pub enum ModeKeyDisposition {
     Forward(Action),
     /// Shift+nav extends the focused widget text selection. Always
     /// consumed, even when the move is a no-op at a boundary.
-    WidgetSelection(WidgetSelectionMove),
+    WidgetSelection {
+        mv: WidgetSelectionMove,
+        /// `true` for Shift+nav (extend the selection), `false` for a
+        /// plain move.
+        extend: bool,
+    },
     /// Consumed with no effect (unbound key in a text-input or
     /// read-only mode).
     Block,
@@ -606,7 +611,52 @@ pub fn mode_key_disposition(
                 _ => None,
             };
             if let Some(mv) = mv {
-                return ModeKeyDisposition::WidgetSelection(mv);
+                return ModeKeyDisposition::WidgetSelection { mv, extend: true };
+            }
+        }
+
+        // Navigation is not the mode's to swallow.
+        //
+        // A mode declaring `allow_text_input` owns the keyboard, and
+        // everything it did not name was blocked here. That made every
+        // such page re-declare the whole navigation set — arrows, page
+        // keys, Home/End — and hand each one back to the host through a
+        // plugin handler, which is a lot of plumbing to arrive at the
+        // behaviour the host already implements. The welcome screen had
+        // nine such handlers; before they were written, Home and End
+        // simply did nothing on it.
+        //
+        // So navigation resolves the way it would anywhere else: to the
+        // focused text widget when there is one, and to the buffer
+        // otherwise. Character keys are still captured above, and every
+        // other unbound key is still blocked — a focused search field
+        // must not let Ctrl+O through.
+        // Plain navigation only. Shift+nav with no focused widget stays
+        // blocked, as it was: extending a *buffer* selection is not what
+        // a page like this is for, and widening that here would be a
+        // behaviour change to every `allow_text_input` mode rather than
+        // a fix to the one thing that was broken.
+        let plain = !event
+            .modifiers
+            .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
+        let nav = match event.code {
+            KeyCode::Left => Some(WidgetSelectionMove::Left),
+            KeyCode::Right => Some(WidgetSelectionMove::Right),
+            KeyCode::Up => Some(WidgetSelectionMove::Up),
+            KeyCode::Down => Some(WidgetSelectionMove::Down),
+            KeyCode::Home => Some(WidgetSelectionMove::Home),
+            KeyCode::End => Some(WidgetSelectionMove::End),
+            _ => None,
+        };
+        if let Some(mv) = nav {
+            if plain && view.has_focused_text_widget {
+                return ModeKeyDisposition::WidgetSelection { mv, extend: false };
+            }
+        }
+        if plain && (nav.is_some() || matches!(event.code, KeyCode::PageUp | KeyCode::PageDown)) {
+            let action = kb.resolve(event, KeyContext::Normal);
+            if action != Action::None {
+                return ModeKeyDisposition::Forward(action);
             }
         }
         return ModeKeyDisposition::Block;
@@ -909,7 +959,10 @@ mod tests {
                 &kb,
                 &event(KeyCode::Left, KeyModifiers::SHIFT)
             ),
-            ModeKeyDisposition::WidgetSelection(WidgetSelectionMove::Left)
+            ModeKeyDisposition::WidgetSelection {
+                mv: WidgetSelectionMove::Left,
+                extend: true
+            }
         );
         assert_eq!(
             mode_key_disposition(
@@ -918,7 +971,10 @@ mod tests {
                 &kb,
                 &event(KeyCode::Left, KeyModifiers::SHIFT | KeyModifiers::CONTROL)
             ),
-            ModeKeyDisposition::WidgetSelection(WidgetSelectionMove::WordLeft)
+            ModeKeyDisposition::WidgetSelection {
+                mv: WidgetSelectionMove::WordLeft,
+                extend: true
+            }
         );
         // No focused widget Text → the key is simply blocked.
         assert_eq!(
