@@ -700,6 +700,13 @@ Eleven things the wireframes did not know:
     may not be loaded should be gated: the Orchestrator's two are drawn only
     when `getPluginApi("orchestrator")` answers.
 
+12. **Hand-wrapped prose only fits the width it was wrapped at.** The three
+    door bodies were literal arrays of short lines, set to a third of a wide
+    terminal. Below 96 columns the doors stack full-width, and those lines
+    stayed a 22-column column inside a 57-column box — the one place on the
+    page that looked broken at the narrow breakpoint. They are single
+    sentences now, wrapped at render time to whichever width is in force.
+
 ### Still aspirational
 
 - **The LSP card** shows a real syntax-highlighted Rust sample (a markdown
@@ -715,7 +722,7 @@ Eleven things the wireframes did not know:
 
 ### Verified by hand
 
-Driven in tmux at 160×44, 74×40 and 52×30, against both a two-file scratch
+Driven in tmux at 150×42, 64×42 and 52×30, against both a two-file scratch
 repo and this repository (where the workspace-trust modal correctly renders
 over the page and owns the keyboard, and the finder fuzzy-matches the whole
 tracked tree — `wlcscr` finds `welcome_screen.ts`): the ladder

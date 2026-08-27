@@ -381,35 +381,59 @@ function startupRow(): WidgetSpec[] {
 
 // ── The three doors ──────────────────────────────────────────────────
 
-type Door = { n: string; head: string; sub: string; body: string[] };
+type Door = { n: string; head: string; sub: string; body: string };
 
 const DOORS: Door[] = [
   {
     n: "1",
     head: "[1] JUST EDIT TEXT",
     sub: "Open a file & go",
-    body: ["Notes, configs, huge", "logs. Standard keys and", "full mouse. Nothing to", "learn first."],
+    body: "Notes, configs, huge logs. Standard keys and full mouse. Nothing to learn first.",
   },
   {
     n: "2",
     head: "[2] CLASSIC IDE",
     sub: "Code with LSP & git",
-    body: ["Completions, goto and", "hover, hunk-level diff", "review, splits, themes,", "plugins."],
+    body: "Completions, goto and hover, hunk-level diff review, splits, themes, plugins.",
   },
   {
     n: "3",
     head: "[3] ORCHESTRATE",
     sub: "Run agents in parallel",
-    body: ["One worktree per task.", "claude, codex, aider and", "remotes. Tour the diffs."],
+    body: "One worktree per task. claude, codex, aider and remotes. Tour the diffs.",
   },
 ];
 
-/** Bodies are padded to a common height: `labeledSection` sizes to its
- *  own child, so an uneven row of doors closes its boxes at different
- *  rows and reads as broken rather than as three peers. */
-const DOOR_BODY_ROWS = Math.max(...DOORS.map((d) => d.body.length));
+/** Greedy word wrap. The door bodies used to be hand-wrapped arrays,
+ *  which set them to the width of a third of a wide terminal — and then
+ *  kept that ragged 22-column column when the doors stacked full-width
+ *  on a narrow one. Wrapping at render time lets one sentence set
+ *  itself correctly at either size. */
+function wrap(text: string, width: number): string[] {
+  const out: string[] = [];
+  let line = "";
+  for (const w of text.split(" ")) {
+    if (!line) line = w;
+    else if (line.length + 1 + w.length <= width) line += " " + w;
+    else {
+      out.push(line);
+      line = w;
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
 
-function doorCard(d: Door): WidgetSpec {
+/** Inner text width of one door, at whichever layout is in force. */
+function doorTextWidth(): number {
+  const wide = viewportWidth() >= 96;
+  return wide
+    ? Math.max(12, Math.floor(measure() / 3) - 5)
+    : Math.max(12, measure() - 6);
+}
+
+function doorCard(d: Door, rows: number): WidgetSpec {
+  const body = wrap(d.body, doorTextWidth());
   return labeledSection({
     label: d.head,
     widthPct: pct(measure() / 3),
@@ -417,8 +441,11 @@ function doorCard(d: Door): WidgetSpec {
     child: col(
       plain(d.sub, C.body),
       blank(),
-      ...d.body.map((b) => plain(b, C.muted)),
-      ...Array.from({ length: DOOR_BODY_ROWS - d.body.length }, () => blank()),
+      ...body.map((b) => plain(b, C.muted)),
+      // `labeledSection` sizes to its own child, so an uneven row of
+      // doors closes its boxes at different rows and reads as broken
+      // rather than as three peers. Pad to the tallest.
+      ...Array.from({ length: Math.max(0, rows - body.length) }, () => blank()),
       blank(),
       row(
         button("jump ↓", {
@@ -435,7 +462,9 @@ function doorCard(d: Door): WidgetSpec {
 
 function doors(): WidgetSpec[] {
   const wide = viewportWidth() >= 96;
-  const cards = DOORS.map(doorCard);
+  const w = doorTextWidth();
+  const rows = Math.max(...DOORS.map((d) => wrap(d.body, w).length));
+  const cards = DOORS.map((d) => doorCard(d, rows));
   return [
     blank(),
     line([{ text: "  WHAT BRINGS YOU HERE?", style: { fg: C.muted } }]),
