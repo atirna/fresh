@@ -46,8 +46,8 @@
 use std::rc::Rc;
 
 use fresh_ui::{
-    col, gesture, row, stack, text, text_runs, Event, GestureKind, Key, Node, PointerMode, Run,
-    Sizing,
+    col, gesture, layout_reader, row, stack, text, text_runs, Event, GestureKind, Key, LayoutInfo,
+    Node, PointerMode, Run, Sizing,
 };
 
 use crate::app::shell_host::shell_theme::{attrs, pair};
@@ -122,6 +122,9 @@ pub struct Explorer {
     pub body: Body,
     /// The viewport row the caret sits on, when the panel owns the keyboard.
     pub caret_row: Option<usize>,
+    /// Whether the pointer is on the resize grip. The panel draws its own
+    /// highlight from this; see [`grip_ink`].
+    pub grip_hovered: bool,
 }
 
 impl Explorer {
@@ -178,7 +181,7 @@ pub fn explorer(e: &Explorer) -> Node<UiMsg> {
 fn overlay(e: &Explorer) -> Node<UiMsg> {
     col()
         .pointer_mode(PointerMode::Transparent)
-        .children([title_strip(e), grip_strip()])
+        .children([title_strip(e), grip_strip(e)])
 }
 
 /// The one-column drag handle on the panel's right edge, below the title line.
@@ -189,8 +192,37 @@ fn overlay(e: &Explorer) -> Node<UiMsg> {
 /// tested the border first). The two disagreed: hovering the top-right corner
 /// lit the close button while clicking it started a resize. They agree now,
 /// and they agree because there is one description instead of two walks.
-fn grip_strip() -> Node<UiMsg> {
-    let grip = gesture(row().w(Sizing::Cells(1)))
+/// What the grip paints: nothing at rest, and its own run of `│` when hovered.
+///
+/// **A node that repaints the column it sits on has to know how tall it is**,
+/// and a description is written before layout runs. That is what
+/// `layout_reader` is for: its builder runs *during* layout with the
+/// constraints in hand, so the run is as long as the grip turns out to be. The
+/// description never states a height.
+///
+/// Before this, the highlight was a one-cell `Paragraph` per row in a post-pass
+/// over the folded buffer, walking `0..explorer_area.height` and re-deriving
+/// the column as `area.x + area.width - 1` — the panel's width arriving from
+/// app state to recompute a coordinate the tree had already placed.
+///
+/// At rest it paints nothing at all rather than painting the border's `│` a
+/// second time: the panel's own `border()` already draws that column, and two
+/// nodes painting one cell is how they drift apart.
+fn grip_ink(hovered: bool) -> Node<UiMsg> {
+    if !hovered {
+        return row();
+    }
+    let ink = pair("ui.split_separator_hover_fg", "editor.bg");
+    layout_reader(move |c: LayoutInfo| {
+        col().children(
+            (0..c.constraints.max_h).map(|_| text("│").theme(ink.clone()).h(Sizing::Cells(1))),
+        )
+    })
+}
+
+fn grip_strip(e: &Explorer) -> Node<UiMsg> {
+    let grip = gesture(grip_ink(e.grip_hovered))
+        .w(Sizing::Cells(1))
         .key(grip_key())
         .on(
             GestureKind::Press,
@@ -207,10 +239,20 @@ fn grip_strip() -> Node<UiMsg> {
         )
         .on_enter(hover_msg(Some(HoverTarget::FileExplorerBorder)))
         .on_leave(hover_msg(None));
-    row()
-        .flex(1)
-        .pointer_mode(PointerMode::Transparent)
-        .children([row().flex(1).pointer_mode(PointerMode::Transparent), grip])
+    // A one-cell tail below the strip, so the grip spans the panel's *wall* and
+    // stops above `┘`. The corners belong to the frame that drew them: the old
+    // post-pass walked `0..explorer_area.height` and recoloured both of them,
+    // so hovering the grip turned `┐` and `┘` into `│`. Settled here rather
+    // than reproduced, like the two disagreements the last commit settled.
+    col().pointer_mode(PointerMode::Transparent).children([
+        row()
+            .flex(1)
+            .pointer_mode(PointerMode::Transparent)
+            .children([row().flex(1).pointer_mode(PointerMode::Transparent), grip]),
+        row()
+            .h(Sizing::Cells(1))
+            .pointer_mode(PointerMode::Transparent),
+    ])
 }
 
 fn panel(e: &Explorer) -> Node<UiMsg> {
@@ -534,6 +576,7 @@ mod tests {
             close_theme: close_theme(false),
             body: Body::Rows(rows),
             caret_row: None,
+            grip_hovered: false,
         }
     }
 
@@ -755,5 +798,55 @@ mod tests {
             assert!(theme.resolve_theme_key(fg).is_some(), "unknown fg {fg:?}");
             assert!(theme.resolve_theme_key(bg).is_some(), "unknown bg {bg:?}");
         }
+    }
+
+    /// The grip repaints the column it sits on, for its whole run — which it
+    /// can only do because `layout_reader` runs its builder during layout, with
+    /// the extent in hand.
+    #[test]
+    fn the_hovered_grip_paints_the_wall_and_leaves_the_corners() {
+        let mut e = panel_of(vec![row_of(0, "src", None), row_of(1, "lib", None)], 12);
+        e.grip_hovered = true;
+        let got = lines(e, 12, 5);
+        let col = |y: usize| got[y].chars().nth(11).expect("twelve columns");
+        for y in 1..4 {
+            assert_eq!(col(y), '│', "row {y} is the grip's");
+        }
+        // The corners are the frame's. The post-pass this replaced walked
+        // `0..explorer_area.height` and recoloured both of them.
+        assert_eq!(col(0), '┐', "the top corner survives hover");
+        assert_eq!(col(4), '┘', "and so does the bottom one");
+    }
+
+    /// At rest it paints nothing, rather than painting the border's `│` a
+    /// second time — but it still claims its column for input.
+    #[test]
+    fn the_resting_grip_leaves_the_border_to_the_border() {
+        let e = panel_of(vec![row_of(0, "src", None)], 12);
+        assert!(!e.grip_hovered, "the default");
+        let ui = laid_out(e, 12, 4);
+        let grip = rect_of(&ui, &grip_key(), Rect::new(0, 0, 12, 4)).expect("the grip");
+        assert_eq!(
+            (grip.x, grip.width),
+            (11, 1),
+            "it still claims its column for input"
+        );
+        let painted = ui
+            .spec()
+            .items
+            .iter()
+            .filter(|i| matches!(&i.draw, fresh_ui::Draw::Lines(_)))
+            .any(|i| i.rect.x == 11 && i.rect.y > 0 && i.rect.y < 3);
+        assert!(!painted, "the resting grip paints nothing of its own");
+    }
+
+    /// Hovering changes the grip's ink, not its glyphs — the wall was already
+    /// `│`, drawn by the border.
+    #[test]
+    fn hover_changes_the_grips_ink_not_its_glyphs() {
+        let at_rest = lines(panel_of(vec![row_of(0, "src", None)], 12), 12, 4);
+        let mut hot = panel_of(vec![row_of(0, "src", None)], 12);
+        hot.grip_hovered = true;
+        assert_eq!(at_rest, lines(hot, 12, 4));
     }
 }

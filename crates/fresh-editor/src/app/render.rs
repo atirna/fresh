@@ -1926,7 +1926,8 @@ impl Editor {
     /// The sidebar's content THIS instant: its chrome, and one row per visible
     /// tree node.
     ///
-    /// This is `FileExplorerRenderer::render` and `build_node_line` with the
+    /// This is the old `FileExplorerRenderer::render` and `build_node_line`
+    /// (both now deleted) with the
     /// geometry taken out. What is left is what the panel *says* — the title,
     /// each row's runs and the theme name each run paints in — and layout
     /// decides every column from it. `content_width`, `left_side_width`,
@@ -1969,6 +1970,7 @@ impl Editor {
             .unwrap_or(false);
         let (title_theme, border_theme) = fe::chrome_themes(disconnected, focused);
         let close_hovered = matches!(self.shell_hover, Some(HoverTarget::FileExplorerCloseButton));
+        let grip_hovered = matches!(self.shell_hover, Some(HoverTarget::FileExplorerBorder));
         let title = self.explorer_title(remote.as_deref());
         let body = self.explorer_body(height, focused);
         let caret_row = focused.then(|| self.explorer_caret_row()).flatten();
@@ -1981,6 +1983,7 @@ impl Editor {
             close_theme: fe::close_theme(close_hovered),
             body,
             caret_row,
+            grip_hovered,
         })
     }
 
@@ -2270,7 +2273,7 @@ impl Editor {
 
     /// Returns the cell the sidebar wants the hardware caret parked on (its
     /// selected row) when it owns the keyboard, for the caller to commit at
-    /// the end of the draw. See [`FileExplorerRenderer::render`].
+    /// the end of the draw. See `view::shell::file_explorer`.
     /// Render the status bar into `area`, unless it's toggled off or a
     /// suggestions / file-browser popup is occupying the bottom row. The
     /// bar's inputs are gathered by [`Self::with_status_bar_ctx`], shared
@@ -4912,29 +4915,10 @@ impl Editor {
                     }
                 }
             }
-            Some(HoverTarget::FileExplorerBorder) => {
-                // Highlight the file explorer border for resize
-                if let Some(explorer_area) = self.active_layout().file_explorer_area {
-                    let (hover_fg, editor_bg) = {
-                        let theme = self.theme.read().unwrap();
-                        (theme.split_separator_hover_fg, theme.editor_bg)
-                    };
-                    let hover_style = Style::default().fg(hover_fg).bg(editor_bg);
-                    let border_x = explorer_area.x + explorer_area.width.saturating_sub(1);
-                    for row_offset in 0..explorer_area.height {
-                        let paragraph = Paragraph::new(Span::styled("│", hover_style));
-                        frame.render_widget(
-                            paragraph,
-                            ratatui::layout::Rect::new(
-                                border_x,
-                                explorer_area.y + row_offset,
-                                1,
-                                1,
-                            ),
-                        );
-                    }
-                }
-            }
+            // The explorer's grip highlights itself: it is a node in the
+            // shell's tree and paints its own column, so there is nothing to
+            // re-derive here. See `view::shell::file_explorer::grip_ink`.
+            Some(HoverTarget::FileExplorerBorder) => {}
             // Menu hover is handled by MenuRenderer
             _ => {}
         }
