@@ -72,16 +72,29 @@ const C = {
 /** Per-porcelain-code colour, matching the file explorer and git gutter.
  *  Themes that leave these unset fall back to the `diagnostic.*` family,
  *  so they stay theme-derived rather than a hardcoded grey. */
-/** A word that can be clicked is marked the way a link is marked. The
- *  page is a document, and an underline says "this is a control" without
- *  spending a colour that the page is already using for meaning. */
+/** A word that can be clicked is marked the way a link is marked, and
+ *  it is marked *always* — an underline that only appears under the
+ *  pointer teaches nothing, because you have to already be pointing at
+ *  the thing to learn that you could.
+ *
+ *  It follows that the label a link carries must be exactly its text:
+ *  an underline runs the width of the button's cells, so a marker
+ *  baked into the label (`▸ `, `● `) or padding from `fullWidth` is
+ *  underlined too. Markers sit outside the button now, and nothing
+ *  underlined is full-width. */
 const LINK = { underline: true };
 
-/** Under the pointer the same word lifts rather than being highlighted:
- *  brightest ink, bold, underline kept. A background band reads as a
- *  selection — a state the thing is in — where a glow reads as the
- *  pointer being on it, which is what is actually true. */
-const HOVER = { fg: C.hoverFg, bold: true, underline: true };
+/** Under the pointer, a link lifts rather than lighting up: brightest
+ *  ink, bold, and the underline it already had. A background band reads
+ *  as a selection — a state the thing is in — where a glow reads as the
+ *  pointer being on it, which is what is true. */
+const HOVER_LINK = { fg: C.hoverFg, bold: true, underline: true };
+
+/** The same lift, for things that are not links: the framed buttons,
+ *  whose brackets already say what they are, and the door cards, which
+ *  are cards. Underlining either would be marking what is already
+ *  marked. */
+const GLOW = { fg: C.hoverFg, bold: true };
 
 function statusFg(xy: string): string {
   const c = xy.trim();
@@ -115,11 +128,15 @@ let opening = false;
  *  opens; one the reader engaged with is theirs to close. */
 let engaged = false;
 /** Set when the reader closes the page — by Escape, by the tab's `×`,
- *  by `Ctrl+W`. The ambient open paths then stay quiet for the rest of
- *  the session: closing this screen must never be undone by the very
- *  `buffer_closed` event the close itself produced, and "I closed it"
- *  is an answer, not a question to ask again. The `Welcome` command
- *  clears it — asking for the page back is the other answer. */
+ *  by `Ctrl+W`. It answers one question only: *this* emptying of the
+ *  workspace has been answered. Closing the screen must never be undone
+ *  by the very `buffer_closed` event the close itself produced.
+ *
+ *  It is cleared the moment the workspace stops being empty, because
+ *  the next time it empties is a new question. It used to hold for the
+ *  rest of the session, which read as the screen appearing at random:
+ *  close it once and it never came back, however many times you emptied
+ *  the workspace afterwards. */
 let dismissed = false;
 
 const folded = new Set<string>();
@@ -254,20 +271,24 @@ const VERBS: [string, string, string][] = [
  *  spaces past the longest label, so the eye can carry a label to its
  *  key without crossing the page. */
 function verbs(): WidgetSpec[] {
-  const shown = VERBS.map(([, label]) => `▸ ${label}`);
-  const keyCol = Math.max(...shown.map((t) => t.length)) + 4;
-  return VERBS.map(([key, , action], i) => {
+  const labels = VERBS.map(([, label]) => label);
+  const keyCol = Math.max(...labels.map((t) => t.length)) + 4;
+  return VERBS.map(([key, label, action], i) => {
     const acc = accel(action);
     const parts: WidgetSpec[] = [
       spacer(2),
-      button(shown[i], { key, bare: true, style: LINK, hoverStyle: HOVER }),
+      // The marker is outside the button: an underline that includes it
+      // starts two columns before the word it marks.
+      line([{ text: "▸ ", style: { fg: C.gutter } }]),
+      button(labels[i], { key, bare: true, style: LINK, hoverStyle: HOVER_LINK }),
     ];
     if (acc) {
       parts.push(
-        spacer(keyCol - shown[i].length),
+        spacer(keyCol - labels[i].length),
         line([{ text: acc, style: { fg: C.key } }]),
       );
     }
+    void label;
     return row(...parts);
   });
 }
@@ -293,7 +314,7 @@ function heading(id: string, title: string, hint: string): WidgetSpec {
     button(open ? "▾" : "▸", {
       key: `fold:${id}`,
       bare: true,
-      hoverStyle: HOVER,
+      hoverStyle: GLOW,
     }),
     spacer(1),
     line(segs),
@@ -418,7 +439,7 @@ function startupRow(): WidgetSpec[] {
         key: "startupToggle",
         bare: true,
         style: LINK,
-        hoverStyle: HOVER,
+        hoverStyle: HOVER_LINK,
       }),
     ),
   ];
@@ -488,13 +509,12 @@ function doorRow(d: Door, label: string, verb = false): WidgetSpec {
     button(label, {
       key: `jump:${d.n}`,
       bare: true,
+      // Full width so the whole card is one target, which is also why
+      // nothing in it is underlined: the mark would run the padding.
       fullWidth: true,
       // One Tab stop per card, on the row that names the action.
       focusable: verb,
-      // Only that row is marked: underlining every line of the card
-      // would underline its prose, and the card is a card, not a link.
-      ...(verb ? { style: LINK } : {}),
-      hoverStyle: HOVER,
+      hoverStyle: GLOW,
     }),
   );
 }
@@ -504,6 +524,11 @@ function doorCard(d: Door, rows: number): WidgetSpec {
   const pad = Math.max(0, rows - body.length);
   return labeledSection({
     label: d.head,
+    // The card's own key is the key of the control filling it, so the
+    // frame and its legend light with the rows rather than watching
+    // them light. A section is never itself hovered — it emits no hit.
+    key: `jump:${d.n}`,
+    hoverStyle: GLOW,
     // `widthPct` applies only to a Block child of a Row, and stacked
     // doors are wrapped in one for exactly that reason: a section left
     // to fill a `Col` takes the whole PANEL width, which on a pane a
@@ -600,12 +625,19 @@ function finderCard(): WidgetSpec {
         // stop at this card instead of six.
         rows.push(
           row(
-            button(`${on ? "  ▸ " : "    "}${h.path}`, {
+            line([{
+              text: on ? "   ▸ " : "     ",
+              style: { fg: C.accent },
+            }]),
+            button(h.path, {
               key: `hit:${i}`,
               bare: true,
-              fullWidth: true,
+              // Natural width, not full: a full-width button pads its
+              // label, and the underline runs the padding too — the
+              // result read as a rule across the card.
               focusable: false,
-              hoverStyle: HOVER,
+              style: LINK,
+              hoverStyle: HOVER_LINK,
             }),
           ),
         );
@@ -798,9 +830,9 @@ function gitCard(): WidgetSpec {
     rows.push(
       row(
         spacer(2),
-        button("Review the branch diff", { key: "act_review", hoverStyle: HOVER }),
+        button("Review the branch diff", { key: "act_review", hoverStyle: GLOW }),
         spacer(2),
-        button("Git log", { key: "act_gitlog", hoverStyle: HOVER }),
+        button("Git log", { key: "act_gitlog", hoverStyle: GLOW }),
       ),
     );
     rows.push(blank());
@@ -816,11 +848,15 @@ function themeCard(): WidgetSpec {
     const buttons: WidgetSpec[] = [spacer(2)];
     for (const name of themeNames.slice(0, 6)) {
       buttons.push(
-        button(name === activeTheme ? `● ${name}` : `  ${name}`, {
+        line([{
+          text: name === activeTheme ? "● " : "  ",
+          style: { fg: C.accent },
+        }]),
+        button(name, {
           key: `theme:${name}`,
           bare: true,
           style: LINK,
-          hoverStyle: HOVER,
+          hoverStyle: HOVER_LINK,
         }),
         spacer(2),
       );
@@ -863,7 +899,7 @@ function orchestratorCard(): WidgetSpec {
               key: `ws:${w.windowId}`,
               bare: true,
               style: LINK,
-              hoverStyle: HOVER,
+              hoverStyle: HOVER_LINK,
             }),
             flexSpacer(),
             line([{ text: w.branch, style: { fg: C.muted } }]),
@@ -890,13 +926,13 @@ function orchestratorCard(): WidgetSpec {
     const actions: WidgetSpec[] = [spacer(2)];
     if (orchLoaded) {
       actions.push(
-        button("New workspace…", { key: "act_ws_new", hoverStyle: HOVER }),
+        button("New workspace…", { key: "act_ws_new", hoverStyle: GLOW }),
         spacer(2),
-        button("Run agent here…", { key: "act_ws_agent", hoverStyle: HOVER }),
+        button("Run agent here…", { key: "act_ws_agent", hoverStyle: GLOW }),
         spacer(2),
       );
     }
-    actions.push(button("Open the dock", { key: "act_ws_dock", hoverStyle: HOVER }));
+    actions.push(button("Open the dock", { key: "act_ws_dock", hoverStyle: GLOW }));
     rows.push(row(...actions));
     rows.push(blank());
     rows.push(plain("  One workspace per git worktree, each with its own terminals and", C.body));
@@ -1333,9 +1369,18 @@ registerHandler("welcomeOnBufferClosed", async (e: { buffer_id: number }) => {
     dismissed = true;
     return;
   }
-  if (!hasOtherBuffers()) await openWelcome(false);
+  if (hasOtherBuffers()) {
+    // Still something open: whatever answer the reader gave the last
+    // time the workspace emptied has expired.
+    dismissed = false;
+    return;
+  }
+  await openWelcome(false);
 });
 registerHandler("welcomeOnAfterFileOpen", (_e: { buffer_id: number; path: string }) => {
+  // The workspace is not empty any more, so a previous "I closed it"
+  // no longer answers anything.
+  dismissed = false;
   // An auto-opened screen nobody touched was ambient — step aside. One
   // the reader engaged with is a document they are reading; leave it.
   if (bufferId === null || engaged) return;

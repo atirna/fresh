@@ -2707,6 +2707,17 @@ pub enum WidgetSpec {
         width_pct: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<String>,
+        /// How the section's own chrome — its border and its legend —
+        /// looks while `key` is the hovered widget.
+        ///
+        /// A section emits no hit area of its own, so it never becomes
+        /// the hovered widget by being pointed at. Give it the key of
+        /// the control inside it and the frame answers with that
+        /// control: a card whose rows share one key lights as a card
+        /// rather than one row at a time.
+        #[ts(type = "Partial<OverlayOptions>")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hover_style: Option<OverlayOptions>,
     },
     /// Reserve a rectangle in the widget layout for the host to
     /// natively paint the editor `Window` identified by

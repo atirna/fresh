@@ -774,6 +774,11 @@ export function windowEmbed(options: {
 export function labeledSection(options: {
   label?: string;
   child: WidgetSpec;
+  /** How the section's own chrome — border and legend — looks while
+   * `key` is the hovered widget. A section emits no hit of its own, so
+   * give it the key of a control inside it and the frame answers with
+   * that control: a card whose rows share one key lights as a card. */
+  hoverStyle?: Partial<OverlayOptions>;
   /** When this section is a Block child of a Row, request a
    * specific share of the row's width as a percentage (1..=100).
    * Out-of-range values fall back to the equal-split default.
@@ -782,13 +787,15 @@ export function labeledSection(options: {
   widthPct?: number;
   key?: string;
 }): WidgetSpec {
-  return {
+  const spec: WidgetSpec = {
     kind: "labeledSection",
     label: options.label ?? "",
     child: options.child,
     widthPct: options.widthPct,
     key: options.key,
   };
+  if (options.hoverStyle !== undefined) spec.hoverStyle = options.hoverStyle;
+  return spec;
 }
 
 /** Float `child` over the rest of the layout instead of consuming

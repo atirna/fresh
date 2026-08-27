@@ -4723,6 +4723,7 @@ pub(crate) mod tests {
             }),
             width_pct: None,
             key: None,
+            hover_style: None,
         };
         let spec = WidgetSpec::List {
             items: vec![],
@@ -4800,6 +4801,7 @@ pub(crate) mod tests {
             }),
             width_pct: None,
             key: None,
+            hover_style: None,
         };
         let spec = WidgetSpec::List {
             items: vec![],
@@ -6603,6 +6605,7 @@ pub(crate) mod tests {
             child: Box::new(make_text_input("hi", -1, false, false, 4, Some("n"))),
             width_pct: None,
             key: None,
+            hover_style: None,
         };
         let prev = HashMap::new();
         let out = render_spec(&spec, &prev, "", 20);
@@ -6754,6 +6757,7 @@ pub(crate) mod tests {
             }),
             width_pct: None,
             key: None,
+            hover_style: None,
         };
         let out = render_spec(&spec, &HashMap::new(), "", 30);
         let widths: Vec<usize> = out
@@ -6774,6 +6778,7 @@ pub(crate) mod tests {
             child: Box::new(make_text_input("hi", -1, false, false, 4, Some("n"))),
             width_pct: None,
             key: None,
+            hover_style: None,
         };
         let prev = HashMap::new();
         // panel_width = 16 → inner_width = 12 → middle row is
@@ -6796,6 +6801,7 @@ pub(crate) mod tests {
             child: Box::new(make_text_input("ab", -1, false, true, 0, Some("n"))),
             width_pct: None,
             key: None,
+            hover_style: None,
         };
         let prev = HashMap::new();
         let out = render_spec(&spec, &prev, "", 16);
@@ -6818,6 +6824,7 @@ pub(crate) mod tests {
             child: Box::new(make_text_input("abc", 3, true, false, 4, Some("n"))),
             width_pct: None,
             key: None,
+            hover_style: None,
         };
         let prev = HashMap::new();
         let out = render_spec(&spec, &prev, "n", 20);
@@ -6840,12 +6847,14 @@ pub(crate) mod tests {
                     child: Box::new(make_text_input("", -1, false, false, 0, Some("n"))),
                     width_pct: None,
                     key: None,
+                    hover_style: None,
                 },
                 WidgetSpec::LabeledSection {
                     label: "Cmd".into(),
                     child: Box::new(make_text_input("", -1, false, false, 0, Some("c"))),
                     width_pct: None,
                     key: None,
+                    hover_style: None,
                 },
             ],
             key: None,
@@ -7435,6 +7444,7 @@ pub(crate) mod tests {
                     child: Box::new(boxed_list("l", 3, 5)),
                     width_pct: None,
                     key: None,
+                    hover_style: None,
                 },
             ],
         };

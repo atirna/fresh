@@ -837,6 +837,44 @@ Eleven things the wireframes did not know:
     markdown renderer shared with every hover popup and the markdown
     preview — not this page's to switch off.
 
+28. **A mark that only appears on hover teaches nothing** — you have to
+    already be pointing at the thing to learn that you could point at
+    it. Clickable words carry their underline always; the pointer adds
+    the lift, not the mark. Which forces a rule about labels: an
+    underline runs the width of the button's cells, so the label has to
+    be exactly the text. Markers (`▸ `, `● `) sit outside the button
+    now, and nothing underlined is `fullWidth` — a full-width result row
+    underlined its padding and read as a rule drawn across the card.
+
+    The framed buttons are deliberately not underlined: their brackets
+    already say what they are, so they take the lift alone. The rule is
+    "if a thing shows an underline it shows it always", not "everything
+    clickable is underlined".
+
+29. **A section can be hovered by proxy.** `labeledSection` emits no hit
+    of its own, so it is never what the pointer is on. Giving it the key
+    of the control inside it makes `ctx.is_hovered` true whenever that
+    control is, and its border and legend light with the card instead of
+    watching the card light. `LabeledSection` carries a `hover_style`
+    for this — the extension path `Button`'s own docs describe.
+
+30. **Sharing one key across a group makes focus paint the group.** Every
+    row of a door carries the card's key so the whole card is one target;
+    the focus clamp lands on the one tabbable row, and every other row
+    rendered itself focused too — a standing band across the card at
+    rest. `Button` now gates focus rendering on `focusable`: a widget
+    dropped from the Tab cycle can never be what focus is on, so it must
+    not look like it.
+
+31. **"I closed it" answers one question, not the session.** The
+    dismissal flag was set for good, so closing the page once meant it
+    never returned however many times the workspace emptied afterwards —
+    which reads exactly like a screen that appears at random. It is
+    cleared the moment anything opens: the next emptying is a new
+    question. The flag still does the job it was added for, which is to
+    stop the `buffer_closed` event fired by the close itself from
+    undoing the close.
+
 ### Still aspirational
 
 - **The LSP card** shows a real syntax-highlighted Rust sample (a markdown

@@ -83,6 +83,7 @@ impl WidgetImpl for Button {
         let WidgetSpec::Button {
             label,
             focused,
+            focusable,
             intent,
             key,
             disabled,
@@ -97,7 +98,15 @@ impl WidgetImpl for Button {
         };
         let key = key.as_deref();
         let mut out = CollectedOutput::default();
+        // `focusable: false` drops the button from the Tab cycle, so it
+        // can never be what focus is on — and must not render as though
+        // it were. This matters when several buttons share one key to
+        // act as a single control: the focus clamp lands on the one
+        // tabbable member, and without this gate every other member
+        // painted itself focused too, putting the focus band across the
+        // whole group at rest.
         let is_focused = !disabled
+            && *focusable
             && if key.is_some_and(|k| !k.is_empty()) {
                 ctx.is_focused(key)
             } else {

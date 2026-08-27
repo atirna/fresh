@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use fresh_core::api::WidgetSpec;
+use fresh_core::api::{OverlayOptions, WidgetSpec};
 use fresh_core::text_property::{InlineOverlay, OffsetUnit, TextPropertyEntry};
 
 use super::WidgetImpl;
@@ -76,10 +76,22 @@ impl WidgetImpl for LabeledSection {
         ctx: RenderContext<'_>,
         panel_width: u32,
     ) -> CollectedOutput {
-        let WidgetSpec::LabeledSection { label, child, .. } = spec else {
+        let WidgetSpec::LabeledSection {
+            label,
+            child,
+            key,
+            hover_style,
+            ..
+        } = spec
+        else {
             return CollectedOutput::default();
         };
-        collect_labeled_section(label, child, prev, next_state, ctx, panel_width)
+        // A section emits no hit of its own, so it is hovered only by
+        // carrying the key of a control inside it.
+        let hover = hover_style
+            .as_ref()
+            .filter(|_| ctx.is_hovered(key.as_deref()));
+        collect_labeled_section(label, child, prev, next_state, ctx, panel_width, hover)
     }
 }
 
@@ -662,6 +674,22 @@ fn collect_col(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Paint `style` over a byte range of an entry — the seam the section
+/// uses to light its own chrome under the pointer.
+fn paint_range(entry: &mut TextPropertyEntry, start: usize, end: usize, style: &OverlayOptions) {
+    if start >= end || end > entry.text.len() {
+        return;
+    }
+    entry.inline_overlays.push(InlineOverlay {
+        start,
+        end,
+        style: style.clone(),
+        properties: Default::default(),
+        unit: OffsetUnit::Byte,
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
 fn collect_labeled_section(
     label: &str,
     child: &WidgetSpec,
@@ -669,6 +697,7 @@ fn collect_labeled_section(
     next_state: &mut HashMap<String, WidgetInstanceState>,
     ctx: RenderContext<'_>,
     panel_width: u32,
+    hover: Option<&OverlayOptions>,
 ) -> CollectedOutput {
     let mut entries: Vec<TextPropertyEntry> = Vec::new();
     let mut hits: Vec<HitArea> = Vec::new();
@@ -721,7 +750,12 @@ fn collect_labeled_section(
     // legend: `╭─ <label> ─...─╮`. When the label is empty,
     // produce a plain `╭─...─╮` bar.
     let total_cols = panel_width.max(2) as usize;
-    entries.push(render_section_top_border(label, total_cols));
+    let mut top = render_section_top_border(label, total_cols);
+    if let Some(style) = hover {
+        let n = top.text.len();
+        paint_range(&mut top, 0, n, style);
+    }
+    entries.push(top);
 
     // Render each child row wrapped with the side borders
     // and one column of padding. Pad/truncate the child
@@ -729,13 +763,21 @@ fn collect_labeled_section(
     // lines up regardless of the child's natural width.
     for mut child_entry in child_out.entries {
         strip_trailing_newline(&mut child_entry);
-        let wrapped = wrap_in_side_border(child_entry, inner_width as usize);
+        let mut wrapped = wrap_in_side_border(child_entry, inner_width as usize);
         let row_offset = entries.len() as u32;
         // Shift hits/focus emitted by the child by 1 row
         // (top border) and by the left-border prefix
         // ("│ " — 4 bytes for the box-drawing char + 1
         // for the space).
         let _ = row_offset;
+        // The side borders only: the child's own rows answer the
+        // pointer through their own widgets, and painting over them
+        // here would fight whatever they already say.
+        if let Some(style) = hover {
+            let n = wrapped.text.len();
+            paint_range(&mut wrapped, 0, LEFT_BORDER_PREFIX.len(), style);
+            paint_range(&mut wrapped, n.saturating_sub(" \u{2502}".len()), n, style);
+        }
         entries.push(wrapped);
     }
 
@@ -749,7 +791,12 @@ fn collect_labeled_section(
     }
     embeds.extend(std::mem::take(&mut child_out.embeds));
 
-    entries.push(render_section_bottom_border(total_cols));
+    let mut bottom = render_section_bottom_border(total_cols);
+    if let Some(style) = hover {
+        let n = bottom.text.len();
+        paint_range(&mut bottom, 0, n, style);
+    }
+    entries.push(bottom);
 
     CollectedOutput {
         entries,
@@ -1221,12 +1268,14 @@ mod tests {
             child: Box::new(make_text_input("x", -1, false, false, 4, Some("a"))),
             width_pct: Some(40),
             key: None,
+            hover_style: None,
         };
         let right = WidgetSpec::LabeledSection {
             label: "preview".into(),
             child: Box::new(make_text_input("y", -1, false, false, 4, Some("b"))),
             width_pct: None,
             key: None,
+            hover_style: None,
         };
         let spec = WidgetSpec::Row {
             wrap: false,
@@ -1266,12 +1315,14 @@ mod tests {
             child: Box::new(make_list(0, 3, 10, Some("rail"))),
             width_pct: Some(30),
             key: None,
+            hover_style: None,
         };
         let right = WidgetSpec::LabeledSection {
             label: "Prose".into(),
             child: Box::new(make_list(-1, 3, 10, Some("prose"))),
             width_pct: Some(70),
             key: None,
+            hover_style: None,
         };
         let spec = WidgetSpec::Row {
             wrap: false,
