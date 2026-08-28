@@ -26,7 +26,7 @@
 use std::rc::Rc;
 
 use fresh_ui::widgets::RowState;
-use fresh_ui::{col, row, text, text_runs, Elide, Key, Node, Run, Sizing};
+use fresh_ui::{col, row, stack, text, text_runs, Elide, Key, Node, Run, Sizing};
 
 use crate::app::shell_host::shell_theme::{attrs, pair, with_bg, with_fg};
 
@@ -537,7 +537,18 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
         let st = hover_state(i, st);
         theme(rows_for_theme.get(i).is_some_and(|r| r.disabled), st)
     })
-    .scrollbar()
+    // **The bar rides the popup's right border, and the column is always
+    // reserved for it.** Both halves of that are what the painter did:
+    // `render` drew the shared scrollbar widget over `outer.right() - 1`, the
+    // ring's own column, and laid the rows out in the inner rect either way —
+    // so a list that grew past ten entries did not reflow its columns by a
+    // cell. A gutter that came and went would leave the bar *beside* the ring
+    // rather than on it, which is the one thing the ring column cannot say.
+    .scrollbar_gutter()
+    // Named apart from the rows, because the bar is not part of the list's
+    // ground: it is the editor's one scrollbar, in the editor's one pair of
+    // scrollbar colours, wherever it appears.
+    .scrollbar_theme(pair("ui.scrollbar_thumb_fg", "ui.scrollbar_track_fg"))
     // A click reports the row; what that *means* is the prompt type's
     // business — `select_suggestion` confirms when `click_confirms()` says a
     // click commits, and otherwise syncs the input. That decision was already
@@ -550,6 +561,13 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
     // activates — before it, the widget fired activation on the first and let
     // it win, so setting both confirmed every click.
     .activate_on(fresh_ui::widgets::Activate::DoubleClick)
+    // **The keyboard belongs to the prompt's input line, which is not in this
+    // tree.** The editor sets the selection every frame and handles every key
+    // the prompt answers — Up, Down, Enter, Tab-completion — so a list that
+    // joined the focus ring would only be somewhere for Tab to land, and Tab
+    // in a command palette completes the query. The mouse is unaffected: a
+    // list that declines focus still answers clicks and the wheel.
+    .focusable(false)
     .on_select(|i| UiMsg::Ui(UiFact::SuggestionSelect(i)))
     .on_activate(|i| UiMsg::Ui(UiFact::SuggestionConfirm(i)));
     if let Some(i) = selected {
@@ -570,14 +588,28 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
 /// .style(bg(suggestion_bg))`, and the `Paragraph` that padded the unused rows
 /// with the same background. `border()` is the ring, and a themed box already
 /// fills before its content, so the padding rows are what the fill does anyway.
+///
+/// **The ring and the rows are stacked, not nested, because the bar rides the
+/// ring.** A bordered box holds its children inside the ring by construction —
+/// that is what a border *is* — so a list nested in one can never reach the
+/// column the bar wants, and reserving a second column beside it draws two
+/// vertical lines where the painter drew one. Stacked, the rows are inset from
+/// the ring on the three sides that have no bar and run flush to it on the
+/// fourth, where the list's own gutter lands on the ring's column and the bar
+/// paints over it. Where there is no bar the gutter stays empty and the ring
+/// shows through, which is why the gutter has to be stable: the layout, not
+/// the description, is what knows whether this list overflows.
 fn popup(s: &Suggestions) -> Node<UiMsg> {
-    let body = col()
-        .key(POPUP_KEY.with(|k| k.clone()))
-        .theme(pair("ui.popup_border_fg", "ui.suggestion_bg"))
-        .child(suggestions(s));
+    let ground = pair("ui.popup_border_fg", "ui.suggestion_bg");
     if !s.place.bordered() {
-        // Inside a card, the card decides how tall this is.
-        return absorb(body);
+        // Inside a card, the card decides how tall this is — and draws
+        // whatever frame there is.
+        return absorb(
+            col()
+                .key(POPUP_KEY.with(|k| k.clone()))
+                .theme(ground)
+                .child(suggestions(s)),
+        );
     }
     // How tall the box is, in the terms the painter used: as many rows as it
     // has, up to the cap, plus the ring. A content rule rather than a
@@ -585,7 +617,25 @@ fn popup(s: &Suggestions) -> Node<UiMsg> {
     // sentence in `render`, and it belongs with the list it describes because
     // nothing outside knows the cap.
     let visible = s.rows.len().min(MAX_VISIBLE_SUGGESTIONS) as u16;
-    absorb(body.border().h(Sizing::Cells(visible + 2)))
+    absorb(
+        stack()
+            .key(POPUP_KEY.with(|k| k.clone()))
+            // Named once, on the node the whole popup is: the ring inherits
+            // the pair and draws in its foreground, and the fill under
+            // everything is the popup's ground.
+            .theme(ground)
+            .h(Sizing::Cells(visible + 2))
+            .children([
+                col().border(),
+                col().children([
+                    row().h(Sizing::Cells(1)),
+                    row()
+                        .flex(1)
+                        .children([row().w(Sizing::Cells(1)), suggestions(s).flex(1)]),
+                    row().h(Sizing::Cells(1)),
+                ]),
+            ]),
+    )
 }
 
 /// The list as an overlay above the prompt row.
