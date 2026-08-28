@@ -28,7 +28,7 @@ use std::rc::Rc;
 use fresh_ui::widgets::RowState;
 use fresh_ui::{col, row, stack, text, text_runs, Elide, Key, Node, Run, Sizing};
 
-use crate::app::shell_host::shell_theme::{attrs, pair, with_bg, with_fg};
+use crate::app::shell_host::shell_theme::{attrs, pair, Attrs, Ink, Paint};
 
 use super::msg::{UiFact, UiMsg};
 
@@ -284,26 +284,30 @@ fn every_theme_name() -> Vec<String> {
     out
 }
 
-/// A plugin's span as a run, layered over the row's own name.
+/// A plugin's span as a run, layered over the row's own ink.
 ///
 /// Half-named on purpose: `styled_span_style` started from the row's style and
 /// set only what the span mentioned, so a span that names a foreground keeps
-/// the selection's background under it. `with_fg` and `with_bg` are that, in
-/// the grammar.
+/// the selection's background under it.
+///
+/// The string form of this did the layering by hand, and the two halves did
+/// not agree: swapping a background re-spliced the attribute tail while setting
+/// attributes dropped it, so a span that named both lost the row's `+dim`. As
+/// fields there is nothing to disagree about. A row whose ink is unreadable
+/// keeps its name, because a span is a decoration and losing it is better than
+/// losing the row.
 fn span_run(sp: &DescriptionSpan, row: &str) -> Run {
-    let mut name = row.to_string();
+    let Some(mut ink) = Ink::parse(row) else {
+        return Run::themed(sp.text.clone(), row.to_string());
+    };
     if let Some(fg) = &sp.fg {
-        name = with_fg(&name, fg);
+        ink = ink.with_fg(Paint::key(fg.clone()));
     }
     if let Some(bg) = &sp.bg {
-        name = with_bg(&name, bg);
+        ink = ink.with_bg(Paint::key(bg.clone()));
     }
-    if !sp.attrs.is_empty() {
-        let (fg, bg) = name.split_once('/').unwrap_or((name.as_str(), ""));
-        let bg = bg.split('+').next().unwrap_or(bg);
-        name = attrs(fg, bg, &sp.attrs);
-    }
-    Run::themed(sp.text.clone(), name)
+    ink = ink.plus(Attrs::all_named(sp.attrs.iter().map(|a| a.as_ref())));
+    Run::themed(sp.text.clone(), ink.to_string())
 }
 
 /// `ColumnLayout`'s widths, ported rather than reconstructed.
@@ -817,7 +821,7 @@ mod tests {
             for half in [fg, bg] {
                 let half = half.unwrap_or_else(|| panic!("{name:?} has an unnamed half"));
                 assert!(
-                    theme.resolve_theme_key(half).is_some(),
+                    theme.resolve_theme_key(&half).is_some(),
                     "{half:?} (in {name:?}) is not a theme key"
                 );
             }

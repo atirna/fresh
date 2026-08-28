@@ -39,22 +39,10 @@ use std::rc::Rc;
 use fresh_ui::widgets::RowState;
 use fresh_ui::{col, row, Align, Anchor, Elide, Fit, Key, Node, Place, Run, Sizing};
 
-use crate::app::shell_host::shell_theme::{attrs, pair, with_bg, with_fg};
+use crate::app::shell_host::shell_theme::{pair, Attrs, Ink, Paint};
 use crate::view::popup::{PopupContent, PopupListItem, PopupPosition};
 
 use super::msg::{UiFact, UiMsg};
-
-/// `shell_theme::attrs`, taking a name that is already a pair.
-fn with_attrs(name: &str, a: &[&'static str]) -> String {
-    if a.is_empty() {
-        return name.to_string();
-    }
-    let body = name.split('+').next().unwrap_or(name);
-    match body.split_once('/') {
-        Some((fg, bg)) => attrs(fg, bg, a),
-        None => name.to_string(),
-    }
-}
 
 /// The caret's screen position, when the frame has one.
 ///
@@ -183,7 +171,17 @@ fn description(text: &str) -> Node<UiMsg> {
 /// the prompt's list carries after an earlier draft of *that* module used five
 /// keys that exist nowhere.
 fn list_row(item: &PopupListItem, row_theme: &str, hint: Option<&str>) -> Node<UiMsg> {
-    let muted = with_fg(row_theme, "ui.help_separator_fg");
+    // The row's ink, and the same ink with the muted foreground. A row whose
+    // name is unreadable would have no ink to layer on, so it keeps its name
+    // and the decorations below are simply not applied.
+    let row_ink = Ink::parse(row_theme);
+    let muted_ink = row_ink
+        .clone()
+        .map(|i| i.with_fg(Paint::key("ui.help_separator_fg")));
+    let muted = muted_ink
+        .as_ref()
+        .map(Ink::to_string)
+        .unwrap_or_else(|| row_theme.to_string());
     let mut cells: Vec<Node<UiMsg>> = Vec::new();
     if let Some(icon) = &item.icon {
         cells.push(fresh_ui::text(format!("{icon} ")).theme(row_theme.to_string()));
@@ -195,17 +193,21 @@ fn list_row(item: &PopupListItem, row_theme: &str, hint: Option<&str>) -> Node<U
     if indent > 0 {
         cells.push(fresh_ui::text(&item.text[..indent]).theme(row_theme.to_string()));
     }
-    // A row with a `data` payload acts on click, so it reads as a link.
-    let mut attrs: Vec<&'static str> = Vec::new();
+    // A row with a `data` payload acts on click, so it reads as a link; a
+    // disabled one recedes and takes the muted foreground with it.
+    let mut extra = Attrs::NONE;
     if item.data.is_some() && !item.disabled {
-        attrs.push("underline");
+        extra = extra | Attrs::UNDERLINE;
     }
-    let text_theme = if item.disabled {
-        attrs.push("dim");
-        with_attrs(&muted, &attrs)
+    let base = if item.disabled {
+        extra = extra | Attrs::DIM;
+        muted_ink.clone()
     } else {
-        with_attrs(row_theme, &attrs)
+        row_ink.clone()
     };
+    let text_theme = base
+        .map(|i| i.plus(extra).to_string())
+        .unwrap_or_else(|| row_theme.to_string());
     cells.push(fresh_ui::text(trimmed).theme(text_theme).elide(Elide::Tail));
     if let Some(detail) = &item.detail {
         cells.push(fresh_ui::text(format!(" {detail}")).theme(muted.clone()));
@@ -291,32 +293,21 @@ fn row_theme(selected: bool, hovered: bool) -> String {
 /// background, which is what a ratatui `Style` with one field set already
 /// meant.
 fn styled_runs(line: &crate::view::markdown::StyledLine) -> Vec<Run> {
-    use crate::app::shell_host::shell_theme::literal;
-    use ratatui::style::Modifier;
     line.spans
         .iter()
         .map(|s| {
-            let base = pair("ui.popup_text_fg", "ui.popup_bg");
-            let mut name = match s.style.fg {
-                Some(c) => with_fg(&base, &literal(c)),
-                None => base,
-            };
+            // The popup's own ink, with only what the span actually mentions
+            // moved. A ratatui `Style` with one field set already meant "leave
+            // the rest alone", and that is now what this says.
+            let mut ink = Ink::keys("ui.popup_text_fg", "ui.popup_bg")
+                .with_attrs(Attrs::from_modifier(s.style.add_modifier));
+            if let Some(c) = s.style.fg {
+                ink = ink.with_fg(Paint::Lit(c));
+            }
             if let Some(c) = s.style.bg {
-                name = with_bg(&name, &literal(c));
+                ink = ink.with_bg(Paint::Lit(c));
             }
-            let mut a: Vec<&'static str> = Vec::new();
-            for (m, n) in [
-                (Modifier::BOLD, "bold"),
-                (Modifier::ITALIC, "italic"),
-                (Modifier::UNDERLINED, "underline"),
-                (Modifier::CROSSED_OUT, "strikethrough"),
-                (Modifier::DIM, "dim"),
-            ] {
-                if s.style.add_modifier.contains(m) {
-                    a.push(n);
-                }
-            }
-            Run::themed(s.text.clone(), with_attrs(&name, &a))
+            Run::themed(s.text.clone(), ink.to_string())
         })
         .collect()
 }
@@ -331,7 +322,12 @@ fn every_theme_name() -> Vec<String> {
     for sel in [false, true] {
         for hov in [false, true] {
             let t = row_theme(sel, hov);
-            out.push(with_fg(&t, "ui.help_separator_fg"));
+            out.push(
+                Ink::parse(&t)
+                    .expect("a row ladder entry is readable")
+                    .with_fg(Paint::key("ui.help_separator_fg"))
+                    .to_string(),
+            );
             out.push(t);
         }
     }
@@ -493,7 +489,7 @@ mod tests {
             for half in [fg, bg] {
                 let half = half.unwrap_or_else(|| panic!("{name:?} has an unnamed half"));
                 assert!(
-                    theme.resolve_theme_key(half).is_some(),
+                    theme.resolve_theme_key(&half).is_some(),
                     "{half:?} (in {name:?}) is not a theme key"
                 );
             }
