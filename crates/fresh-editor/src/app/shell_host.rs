@@ -970,6 +970,35 @@ impl Editor {
                 st.drag_start_position = Some((x, y));
                 st.drag_start_explorer_width = Some(w);
             }
+            // The dock's column, all four of its gestures. Each body is the
+            // arm `chrome::Dock::on_pointer` ran; what is gone is the pair of
+            // boxes that decided *which* arm, and the insertion-order rule
+            // that put the grip above the column.
+            UiFact::DockPress { x, y } => {
+                // Re-focus first when blurred: the un-blur notifies the plugin
+                // via a `focus` widget_event, so any mirror of dock-focus
+                // state updates before the click's row-select event fires its
+                // scheduling logic.
+                if self.dock.as_ref().is_some_and(|f| !f.focused) {
+                    self.refocus_floating_panel(crate::app::PanelSlot::Dock);
+                }
+                self.handle_floating_widget_click(crate::app::PanelSlot::Dock, x, y);
+            }
+            UiFact::DockContext { x, y } => {
+                if self.dock.as_ref().is_some_and(|f| !f.focused) {
+                    self.refocus_floating_panel(crate::app::PanelSlot::Dock);
+                }
+                self.handle_floating_widget_context_click(crate::app::PanelSlot::Dock, x, y);
+            }
+            UiFact::DockScroll { delta, x, y } => {
+                self.handle_floating_widget_panel_wheel(crate::app::PanelSlot::Dock, x, y, delta);
+            }
+            UiFact::DockResizeBegin => self.dock_resizing = true,
+            UiFact::DockBlur => {
+                if self.dock.as_ref().is_some_and(|f| f.focused) {
+                    self.blur_floating_panel(crate::app::PanelSlot::Dock);
+                }
+            }
             UiFact::ExplorerScroll { delta, x, y } => {
                 // The surface's wheel, with the surface. Unchanged from the
                 // chrome component's `on_wheel`, including the plugin hook —

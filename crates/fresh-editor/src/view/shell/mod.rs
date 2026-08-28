@@ -15,6 +15,7 @@
 //! into the rectangles this same layout produced.
 
 pub mod context_menu;
+pub mod dock;
 pub mod file_explorer;
 pub mod fold;
 pub mod frame;

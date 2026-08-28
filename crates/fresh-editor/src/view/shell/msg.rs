@@ -169,6 +169,23 @@ pub enum UiFact {
     /// The wheel over the panel. Positive is down, matching `Input::Wheel`.
     /// Carries the pointer so the plugin `wheel` hook still gets a position.
     ExplorerScroll { delta: i32, x: u16, y: u16 },
+    /// A left press inside the dock column, in screen coordinates. The panel's
+    /// widgets are a plugin's `WidgetSpec` rather than nodes, so the runtime
+    /// hit-tests its own boxes and the tree reports only where — the same seam
+    /// as `CardToolbarPress`.
+    DockPress { x: u16, y: u16 },
+    /// A right press inside the dock column: the plugin raises a per-session
+    /// context menu from it.
+    DockContext { x: u16, y: u16 },
+    /// The wheel over the dock column. Positive is down, and the pointer rides
+    /// along for the panel's own hit test.
+    DockScroll { delta: i32, x: u16, y: u16 },
+    /// A press on the dock's right-edge grip: start a width drag. The drag
+    /// itself is still the legacy grab — see `shell::dock`.
+    DockResizeBegin,
+    /// A left press landed outside the dock column. Blurs a focused dock and
+    /// does nothing to one already blurred; either way the press goes on.
+    DockBlur,
 }
 
 /// What a menu-bar navigation step does to the open chain.

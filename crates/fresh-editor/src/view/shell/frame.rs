@@ -257,8 +257,15 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
         .h(cells(f.search_options.is_some())),
         region(HostRegion::PromptLine).h(cells(f.prompt_line)),
     ]);
+    // Native around a `Host` content leaf: the column answers its own pointer
+    // and carries its width grip, while the panel's widgets stay the widget
+    // runtime's until `WidgetSpec` becomes a `Node`. A hidden dock is still in
+    // the tree at zero width, like every other region.
     let frame = row().children([
-        region(HostRegion::Dock).w(Sizing::Cells(f.dock.unwrap_or(0))),
+        match f.dock {
+            Some(w) => named(HostRegion::Dock, super::dock::dock()).w(Sizing::Cells(w)),
+            None => region(HostRegion::Dock).w(Sizing::Cells(0)),
+        },
         chrome,
     ]);
     // Overlays, in paint order. Menu-bar dropdowns first, then a context menu
@@ -296,8 +303,15 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
         Some(chain) => frame.child(chain),
         None => frame,
     };
-    match &f.menu {
+    let frame = match &f.menu {
         Some(menu) => frame.child(super::context_menu::context_menu(menu)),
+        None => frame,
+    };
+    // Outermost, and last: a capture-phase observer sees the press before
+    // anything below it and lets the press continue. Only present when there
+    // is a dock to blur.
+    match f.dock {
+        Some(w) => super::dock::blur_observer(w, frame),
         None => frame,
     }
 }
