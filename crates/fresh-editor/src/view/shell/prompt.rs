@@ -365,7 +365,12 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
         list = list.selected(i);
     }
 
-    col().children([fresh_ui::ComponentExt::node(list)])
+    // Keyed so the window can be read back off the tree: `spec.index` maps
+    // this key to the range of items the list produced, and the scrollbar
+    // among them is where the viewport reports where its window sits.
+    col()
+        .key(LIST_KEY.with(|k| k.clone()))
+        .children([fresh_ui::ComponentExt::node(list)])
 }
 
 /// The list as an overlay above the prompt row.
@@ -393,6 +398,7 @@ pub fn suggestions_layer(s: &Suggestions) -> Node<UiMsg> {
 
 thread_local! {
     static LAYER_KEY: Key = Key::Str("prompt_suggestions".into());
+    static LIST_KEY: Key = Key::Str("prompt_suggestion_list".into());
 }
 
 /// Where the list landed, read back off the laid-out tree.
@@ -407,6 +413,33 @@ pub fn suggestions_rect(spec: &fresh_ui::LayoutSpec) -> Option<fresh_ui::Rect> {
         .iter()
         .find(|(k, _)| *k == key)
         .and_then(|(_, r)| spec.items.get(r.start).map(|i| i.rect))
+}
+
+/// Which slice of the list is on screen, read back off the laid-out tree.
+///
+/// **The framework owns the window; this reads it, it does not set it.** The
+/// painter took its slice from `Prompt::scroll_offset`, which the wheel
+/// handler, the scrollbar handlers and the click rail all wrote to and read
+/// from — five places agreeing by hand about one number. A `viewport` owns its
+/// window, reveals the selection when it moves, and reports where it is on the
+/// scrollbar it already emits; everything else on this side becomes a reader.
+///
+/// `(first, visible)`, in rows. A list that fits its box emits no scrollbar and
+/// answers `(0, rows)`, which is the same thing said cheaply.
+pub fn suggestions_window(spec: &fresh_ui::LayoutSpec) -> Option<(usize, usize)> {
+    let key = LIST_KEY.with(|k| k.clone());
+    let range = spec.index.iter().find(|(k, _)| *k == key)?.1.clone();
+    spec.items[range]
+        .iter()
+        .find_map(|i| match &i.draw {
+            fresh_ui::Draw::Scrollbar {
+                offset,
+                content,
+                window,
+            } => Some((*offset as usize, (*window as usize).min(*content as usize))),
+            _ => None,
+        })
+        .or(Some((0, 0)))
 }
 
 #[cfg(test)]
@@ -528,6 +561,44 @@ mod tests {
                 .iter()
                 .any(|m| matches!(m, UiMsg::Ui(UiFact::SuggestionConfirm(2)))),
             "the second confirms"
+        );
+    }
+
+    /// **The window is read back, not stored.**
+    ///
+    /// `Prompt::scroll_offset` was written and read by five places — the
+    /// painter's slice, the wheel, the scrollbar's click and its drag, and the
+    /// click rail's `start_idx` — which agreed by hand. The viewport owns it
+    /// and reports it, so a wheel over the list moves the window and everyone
+    /// reading it sees the same number by construction.
+    #[test]
+    fn the_window_follows_the_wheel_and_is_read_back() {
+        use fresh_ui::Axis;
+        let mut ui: Ui<UiMsg> = Ui::new();
+        let tree = || {
+            suggestions(&Suggestions {
+                rows: rows(100),
+                selected: Some(0),
+            })
+        };
+        ui.frame(tree(), Size::new(40, 8));
+        assert_eq!(
+            suggestions_window(ui.spec()).map(|(f, _)| f),
+            Some(0),
+            "a fresh list starts at the top"
+        );
+        ui.dispatch(Input::Wheel {
+            pos: Point::new(4, 4),
+            axis: Axis::Vertical,
+            delta: 3,
+            mods: Mods::NONE,
+        });
+        ui.frame(tree(), Size::new(40, 8));
+        let (first, visible) = suggestions_window(ui.spec()).expect("a window");
+        assert!(first > 0, "the wheel moved the window, got {first}");
+        assert!(
+            visible > 0 && visible <= 8,
+            "the window is what fits, got {visible}"
         );
     }
 
