@@ -1326,7 +1326,7 @@ display-list-is-not-a-diff rule, pinned at the cell.
 
 | Stage | What moves | Why here |
 |---|---|---|
-| **S1** | Frame skeleton: every region a `Host` leaf, painted by today's painters. Input fully delegated. | **Landed.** The frame's geometry is the shell's, the retained tree persists across frames, native items paint through the fold, and input is offered to the shell ahead of the legacy walk. Every region is still a `Host` leaf, so nothing has changed on screen — which is the point. Remaining: the body still paints through `Editor::render`'s own `render_content` call, not through the seam — `fold_native` installs a `Skip` painter, so `HostPainter::paint_host` is never reached in the live path and `paint_body`'s `BodyState::default()` drops nothing today. Threading real state means *moving the body onto the seam*, which is S5's per-leaf `render_content` decision (§6.2 item 7) rather than a loose end here. |
+| **S1** | Frame skeleton: every region a `Host` leaf, painted by today's painters. Input fully delegated. | **Landed, including the body.** The frame's geometry is the shell's, the retained tree persists across frames, native items paint through the fold, and input is offered to the shell ahead of the legacy walk. The split grid is now painted *by* the fold, through `HostPainter::paint_host`, with the rectangle layout gave the body — `render`'s own hundred-line assembly of `render_content`'s 28 arguments is deleted and `shell_host::paint_body` is the only copy. It had to be: two assemblies of one call drift, and the unreached one had, dropping five of the seven results and passing `BodyState::default()`. What made the second copy necessary was `suppress_chrome_cells` skipping the fold outright — which skipped the body with it — so the fold grew `Paints::HostsOnly`: a frontend that draws the tree's surfaces itself still needs its host regions painted, because the panes are cells even on the web. What remains for the body is S5's decomposition (§6.2 item 7), which subdivides the leaf rather than removing it. |
 | **S2** | The live-derived regions — status bar, search-options row — become native descriptions. | **Done.** Both surfaces describe what is on them and layout decides every column. The **search-options row** was the first surface to meet the third acceptance criterion. The **status bar** was the one that paid for it twice: `render_status` placed every element *and* emitted a `StatusBarLayout`, then `compute_status_layout` re-ran the whole walk at event time over state that may have moved. `clickable_rects`, `plugin_token_areas`, `segments` and `provenance_runs` all read the laid-out tree now; plugin tokens became first-class (they were a second loop the click rail reached only after missing every built-in). What stayed app-side is *which* right-hand elements appear when the bar is too narrow — a content decision from measured text, not geometry. |
 | **S3** | Overlays become real `Layer`s: context menus → dropdowns/menu bar → popups → prompt/palette → modals. | The value stage. Each one deletes guard boxes, a rank entry, and a slice of the capture band. **Context menus: done** (below) — paint, pointer, dismissal, keyboard and geometry, with only the `blocks_terminal_input` rank entry left behind. **Menu bar: paint and pointer migrated** — the bar row is a native background region, the dropdown chain is a stack of layers, and the close guard is a dismissal property.
 
@@ -1570,11 +1570,15 @@ list.
    and the ordering rule retires. Nothing replaces it: which band an item
    belongs to is `LayoutSpec::layers_from`'s answer, not a convention anyone
    has to maintain.
-3. ~~**The fold-callback API**~~ — **prototyped** (§5.0). `HostPainter` +
-   `impl HostPainter for Editor`; paint order, clipping, the caret rule and the
-   borrow are covered by tests. What remains is threading real per-frame state
-   and publishing `BodyOutput` to the geometry bridge — mechanical S1 work. The
-   `Ui`-beside-`Editor` constraint it revealed is recorded in §4.4.
+3. ~~**The fold-callback API**~~ — **shipped, and it is the render path.**
+   `HostPainter` + `impl HostPainter for Editor`; paint order, clipping, the
+   caret rule and the borrow are covered by tests, and the split grid is
+   painted through it. The per-frame state and the seven published rectangles
+   travel on the editor (`pending_body_state` / `pending_body_output`) rather
+   than through the call, because `paint_host` carries a region and a
+   rectangle and nothing else — a display list is geometry, not the editor's
+   hover state. The `Ui`-beside-`Editor` constraint it revealed is recorded in
+   §4.4.
 4. ~~**Colour that is not a theme name**~~ — **decided and shipped: a name is
    always real theme keys.**
 

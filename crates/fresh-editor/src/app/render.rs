@@ -308,25 +308,13 @@ impl Editor {
         // region under them has to be written first, a native overlay over
         // them has to be written last. One pass could only ever serve one of
         // those, which is what confined migration to top-most surfaces.
-        if !self.suppress_chrome_cells {
-            let palette = self.shell_palette();
-            let ui = self
-                .shell_ui
-                .take()
-                .expect("the shell tree is taken and returned within one frame");
-            let caret = crate::view::shell::fold::fold_native(
-                ui.spec(),
-                frame.buffer_mut(),
-                &palette,
-                crate::view::shell::fold::Band::Background,
-            );
-            // Nothing in this band can report a caret: `fold_native` skips
-            // host regions, and the native cursor is answered by the overlay
-            // pass (see `fold_band`). A caret here would mean one of those two
-            // facts had quietly changed.
-            debug_assert!(caret.is_none(), "the background band placed a caret");
-            self.shell_ui = Some(ui);
-        }
+        // The band itself is folded further down, immediately before the
+        // split grid used to be painted — because the grid is painted *by* it
+        // now, through `HostPainter`, and the plugin `lines_changed` hooks
+        // between here and there add the overlays that paint has to see.
+        // Nothing between the two points writes a cell, so deferring the
+        // paint changes no pixel; what it buys is one paint of the body
+        // instead of a live one here and an unreached copy behind the seam.
 
         use crate::view::shell::frame::HostRegion;
         let status_bar_area = region(HostRegion::StatusBar);
@@ -739,80 +727,67 @@ impl Editor {
             _ => None,
         };
 
-        let is_maximized = self
-            .windows
-            .get(&self.active_window)
-            .and_then(|w| w.buffers.splits())
-            .map(|(mgr, _)| mgr)
-            .expect("active window must have a populated split layout")
-            .is_maximized();
-
-        // The active split's buffer renderer records where the hardware
-        // cursor *wants* to appear here; we only commit it to the frame at
-        // the very end of this draw pass, after popups have been rendered,
-        // so a popup covering the cursor cell causes the cursor to be
-        // hidden (otherwise the hardware caret would bleed through the
-        // popup).
-        let mut pending_hardware_cursor: Option<(u16, u16)> = None;
-
         let _content_span = tracing::info_span!("render_content").entered();
-        // Web renders the tab bar natively from `tab_bar_view`; skip painting it
-        // to cells (its TabLayout is still computed). Panes always draw.
-        let split_draw_tab_bar = !self.suppress_chrome_cells;
-        // Bundle the immutable editor render settings. Built before the
-        // `&mut self.windows` borrow below; it only borrows `self.config`,
-        // so the two coexist.
-        let cfg = crate::view::ui::EditorRenderConfig::new(
-            &self.config.editor,
-            self.background_fade,
-            self.software_cursor_only,
+        // **The split grid is painted by the fold, through the seam.**
+        //
+        // What stood here was a hundred lines assembling `render_content`'s 28
+        // arguments — the `with_all_mut` disjoint split, the preview buffer,
+        // the scrollback set, the cell-theme map — and `app::shell_host` held
+        // a second copy of the same assembly behind `HostPainter`, reached by
+        // nothing, because `fold_native` installs a painter that skips host
+        // regions. Two assemblies of one call is a thing that drifts, and this
+        // one had: the unreached copy dropped five of the seven results and
+        // passed `BodyState::default()`, so it would have painted a grid with
+        // no hovered tab.
+        //
+        // There is one assembly now, in `shell_host::paint_body`, and the
+        // display list is what reaches it — with the rectangle *layout* gave
+        // the body rather than one computed beside it. The state it needs and
+        // the rectangles it produces travel on the editor, because
+        // `paint_host` carries a region and a rectangle and nothing else.
+        self.pending_body_state = crate::app::shell_host::BodyState {
+            lsp_waiting,
+            hide_cursor,
+            hovered_tab,
+            hovered_close_split,
+            hovered_maximize_split,
+            // Web renders the tab bar natively from `tab_bar_view`; skip
+            // painting it to cells (its `TabLayout` is still computed). Panes
+            // always draw.
+            draw_tab_bar: !self.suppress_chrome_cells,
+        };
+        // The active split's buffer renderer records where the hardware cursor
+        // *wants* to appear; we only commit it to the frame at the very end of
+        // this draw pass, after popups have been rendered, so a popup covering
+        // the cursor cell causes the cursor to be hidden (otherwise the
+        // hardware caret would bleed through the popup).
+        let palette = self.shell_palette();
+        let paints = match self.suppress_chrome_cells {
+            true => crate::view::shell::fold::Paints::HostsOnly,
+            false => crate::view::shell::fold::Paints::All,
+        };
+        let ui = self
+            .shell_ui
+            .take()
+            .expect("the shell tree is taken and returned within one frame");
+        // The caret this band reports is the body's: a native `fresh-ui` field
+        // that placed one is answered by the overlay pass, which runs last and
+        // is the only pass that can know nothing covered it.
+        //
+        // A frontend that draws the tree's surfaces itself still gets its host
+        // regions painted — the panes are cells even on the web. That used to
+        // be "skip the fold and call the split renderer separately", which is
+        // where the second assembly came from.
+        let pending_hardware_cursor = crate::view::shell::fold::fold_band(
+            ui.spec(),
+            frame.buffer_mut(),
+            &palette,
+            self,
+            crate::view::shell::fold::Band::Background,
+            paints,
         );
-        // `cfg` is captured by the render closure; the theme read-guard and the
-        // `RenderStyle` wrapping it are built *inside* the closure so the
-        // `self.theme` borrow is released before the post-render `&mut self`
-        // chrome updates.
-        // Take a single mutable borrow on the active window's splits and
-        // split it into (&SplitManager, &mut HashMap<...>) — Rust can
-        // destructure the tuple, but we can't make two separate
-        // `windows.get`/`windows.get_mut` calls in the same expression.
-        let active_window_id = self.active_window;
-        // Take one &mut on the active window. Split-borrow into
-        // buffers (mut), split_mgr (immutable view of mgr), and
-        // split_view_states (mut) — all disjoint sub-fields.
-        let __win = self
-            .windows
-            .get_mut(&active_window_id)
-            .expect("active window must exist");
-        let __metadata_ref = &__win.buffer_metadata;
-        // Copy out the preview buffer id (the single source of truth) so the
-        // tab renderer can style the "(preview)" tab without holding a borrow
-        // of `__win` across the `with_all_mut` closure below.
-        let __preview_buffer = __win.preview.map(|(_, b)| b);
-        // The splits currently showing a terminal in read-only scrollback.
-        // Per-split (not a window flag), so two splits on the same terminal can
-        // differ — one live, one scrollback (fresh#2595). Computed here, before
-        // the disjoint mutable sub-field borrows below take effect.
-        let __scrollback_view_splits: std::collections::HashSet<crate::model::event::LeafId> =
-            __win
-                .buffers
-                .splits()
-                .map(|(_, vs_map)| {
-                    vs_map
-                        .iter()
-                        .filter(|(leaf, svs)| {
-                            __win.split_terminal_scrollback(**leaf, svs.active_buffer)
-                        })
-                        .map(|(leaf, _)| *leaf)
-                        .collect()
-                })
-                .unwrap_or_default();
-        let __event_logs_mut = &mut __win.event_logs;
-        let __grouped_ref = &__win.grouped_subtrees;
-        let __composite_buffers_mut = &mut __win.composite_buffers;
-        let __composite_view_states_mut = &mut __win.composite_view_states;
-        let __cell_theme_map_mut = &mut __win.chrome_layout.cell_theme_map;
-        let __tab_bar_visible = __win.tab_bar_visible;
-        let (
+        self.shell_ui = Some(ui);
+        let crate::app::shell_host::BodyOutput {
             split_areas,
             tab_layouts,
             close_split_areas,
@@ -820,46 +795,7 @@ impl Editor {
             view_line_mappings,
             horizontal_scrollbar_areas,
             grouped_separator_areas,
-        ) = __win
-            .buffers
-            .with_all_mut(|__buffers_mut, __mgr, __vs_map| {
-                // Built here so the `self.theme` read-guard lives only for the
-                // render call, not the later `&mut self` chrome updates.
-                let theme_guard = self.theme.read().unwrap();
-                let style = crate::view::ui::RenderStyle {
-                    theme: &theme_guard,
-                    ansi_background: self.ansi_background.as_ref(),
-                    cfg,
-                };
-                SplitRenderer::render_content(
-                    frame.buffer_mut(),
-                    editor_content_area,
-                    &*__mgr,
-                    __buffers_mut,
-                    __metadata_ref,
-                    __preview_buffer,
-                    __event_logs_mut,
-                    __composite_buffers_mut,
-                    __composite_view_states_mut,
-                    style,
-                    lsp_waiting,
-                    Some(__vs_map),
-                    __grouped_ref,
-                    hide_cursor,
-                    hovered_tab,
-                    hovered_close_split,
-                    hovered_maximize_split,
-                    is_maximized,
-                    __tab_bar_visible,
-                    self.session_mode || !self.software_cursor_only,
-                    &__scrollback_view_splits,
-                    __cell_theme_map_mut,
-                    size.width,
-                    &mut pending_hardware_cursor,
-                    split_draw_tab_bar,
-                )
-            })
-            .expect("active window must have a populated split layout");
+        } = self.pending_body_output.take().unwrap_or_default();
 
         drop(_content_span);
         let _post_content_span = tracing::info_span!("render_post_content").entered();
@@ -5176,50 +5112,36 @@ impl Editor {
             .pre_sync_ensure_visible(active_split);
         self.active_window_mut().sync_scroll_groups();
 
-        // Replicate the layout computation that produces editor_content_area.
-        // Same constraints as render(): [menu_bar, main_content, status_bar, search_options, prompt_line]
-        let constraints = vec![
-            Constraint::Length(if self.active_window_mut().menu_bar_visible {
-                1
-            } else {
-                0
-            }),
-            Constraint::Min(0),
-            Constraint::Length(if self.active_window_mut().status_bar_visible {
-                1
-            } else {
-                0
-            }), // status bar
-            Constraint::Length(0), // search options (doesn't matter for layout)
-            Constraint::Length(if self.active_window_mut().prompt_line_visible {
-                1
-            } else {
-                0
-            }), // prompt line
-        ];
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(constraints)
-            .split(size);
-        let main_content_area = main_chunks[1];
-
-        // Compute editor_content_area (with file explorer split if visible)
-        let file_explorer_should_show = self.file_explorer_visible()
-            && (self.file_explorer().is_some()
-                || self.active_window().file_explorer_sync_in_progress);
-        let editor_content_area = if file_explorer_should_show {
-            let explorer_cols = self
-                .active_window()
-                .file_explorer_width
-                .to_cols(main_content_area.width);
-            let horizontal_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(explorer_cols), Constraint::Min(0)])
-                .split(main_content_area);
-            horizontal_chunks[1]
-        } else {
-            main_content_area
-        };
+        // The body's rectangle, from the frame the shell describes — the same
+        // description and the same layout `render` uses, laid out at the size
+        // the replay is running against.
+        //
+        // What stood here was a hand-rolled ratatui `Layout` "replicating" it,
+        // and a replica of a layout is a layout that disagrees. This one did,
+        // three ways: it gave the search-options row a `Length(0)` under a
+        // comment saying it "doesn't matter for layout" (it is a row, and it
+        // is one cell tall when the row is up), it kept the status bar whether
+        // or not a suggestion list or the file browser had taken its row, and
+        // it carved the explorer but never the dock — so a replay with a dock
+        // open computed visual-line motion against a body twenty-odd columns
+        // too wide.
+        let split = self.compute_dock_split(size);
+        let shell = self.shell_frame(split).resolve_dock(size.width);
+        let mut ui = self
+            .shell_ui
+            .take()
+            .expect("the shell tree is taken and returned within one call");
+        ui.frame(
+            crate::view::shell::frame::frame_tree(shell),
+            fresh_ui::Size::new(size.width, size.height),
+        );
+        let regions = crate::view::shell::frame::regions_of(&ui, size);
+        self.shell_ui = Some(ui);
+        let editor_content_area = regions
+            .iter()
+            .find(|(r, _)| *r == crate::view::shell::frame::HostRegion::Body)
+            .map(|(_, rect)| *rect)
+            .unwrap_or_default();
 
         // Compute layout for all visible splits and update cached view_line_mappings.
         // Take one &mut borrow on the active window's splits; destructure into
