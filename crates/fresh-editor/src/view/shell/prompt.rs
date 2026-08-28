@@ -26,9 +26,9 @@
 use std::rc::Rc;
 
 use fresh_ui::widgets::RowState;
-use fresh_ui::{col, row, text, Elide, Key, Node, Sizing};
+use fresh_ui::{col, row, text, text_runs, Elide, Key, Node, Run, Sizing};
 
-use crate::app::shell_host::shell_theme::pair;
+use crate::app::shell_host::shell_theme::{attrs, pair, with_bg, with_fg};
 
 use super::msg::{UiFact, UiMsg};
 
@@ -54,6 +54,23 @@ mod yields_last {
     pub const DESCRIPTION: u8 = 0;
 }
 
+/// A piece of a description a plugin styled itself.
+///
+/// Already in the grammar rather than in colours: `fg` and `bg` are theme-key
+/// names or `#rrggbb` literals, which is exactly what `shell_theme` reads. The
+/// painter resolved a plugin's `OverlayColorSpec` to a concrete `Color` here
+/// and lost its provenance on the way; a name keeps it, and a span that names
+/// only one half inherits the other from the row it sits on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DescriptionSpan {
+    pub text: String,
+    pub fg: Option<String>,
+    pub bg: Option<String>,
+    /// `shell_theme`'s attribute names: `bold`, `italic`, `underline`,
+    /// `strikethrough`.
+    pub attrs: Vec<&'static str>,
+}
+
 /// One row of the list, as content. No geometry: the columns are placed by
 /// layout, and which of them survives a narrow row is `priority`'s answer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -61,6 +78,9 @@ pub struct SuggestionRow {
     pub name: String,
     pub keybinding: Option<String>,
     pub description: Option<String>,
+    /// A description a plugin styled piece by piece. Wins over `description`,
+    /// the same way `push_description_column` checks it first.
+    pub description_spans: Option<Vec<DescriptionSpan>>,
     pub source: Option<String>,
     pub disabled: bool,
 }
@@ -139,7 +159,10 @@ fn row_bg(disabled: bool, st: RowState) -> &'static str {
 fn theme(disabled: bool, st: RowState) -> String {
     let bg = row_bg(disabled, st);
     if disabled {
-        return pair("editor.line_number_fg", bg);
+        // `dim` is new to the grammar and is what makes this a faithful port
+        // rather than a near one: the painter reached for `Modifier::DIM`
+        // directly, which no name could carry and no theme could override.
+        return attrs("editor.line_number_fg", bg, &["dim"]);
     }
     match st {
         RowState::Selected | RowState::SelectedBlur => pair("ui.popup_selection_fg", bg),
@@ -157,6 +180,15 @@ fn column(disabled: bool, st: RowState, fg: &str) -> String {
     } else {
         pair(fg, row_bg(disabled, st))
     }
+}
+
+/// The source label is always dimmed — `source_style`'s three arms differ only
+/// in background.
+fn source_theme(disabled: bool, st: RowState) -> String {
+    if disabled {
+        return theme(disabled, st);
+    }
+    attrs("editor.line_number_fg", row_bg(disabled, st), &["dim"])
 }
 
 /// The keybinding reads as a shortcut on a row the eye is on, and recedes to
@@ -184,10 +216,32 @@ fn every_theme_name() -> Vec<String> {
         for disabled in [false, true] {
             out.push(theme(disabled, st));
             out.push(keybinding_theme(disabled, st));
-            out.push(column(disabled, st, "editor.line_number_fg"));
+            out.push(source_theme(disabled, st));
         }
     }
     out
+}
+
+/// A plugin's span as a run, layered over the row's own name.
+///
+/// Half-named on purpose: `styled_span_style` started from the row's style and
+/// set only what the span mentioned, so a span that names a foreground keeps
+/// the selection's background under it. `with_fg` and `with_bg` are that, in
+/// the grammar.
+fn span_run(sp: &DescriptionSpan, row: &str) -> Run {
+    let mut name = row.to_string();
+    if let Some(fg) = &sp.fg {
+        name = with_fg(&name, fg);
+    }
+    if let Some(bg) = &sp.bg {
+        name = with_bg(&name, bg);
+    }
+    if !sp.attrs.is_empty() {
+        let (fg, bg) = name.split_once('/').unwrap_or((name.as_str(), ""));
+        let bg = bg.split('+').next().unwrap_or(bg);
+        name = attrs(fg, bg, &sp.attrs);
+    }
+    Run::themed(sp.text.clone(), name)
 }
 
 /// One row's four columns, in paint order, each carrying the priority that says
@@ -206,14 +260,23 @@ fn node_row(index: usize, r: &SuggestionRow, st: RowState, name_elide: Elide) ->
     cells.push(row().flex(1).min_w(1));
 
     // The description carries no colour of its own: the painter draws it in
-    // `base_style`, so it is the row.
-    if let Some(d) = &r.description {
-        cells.push(
+    // `base_style`, so it is the row. A plugin's styled description is the
+    // same run with its pieces named — one node either way, because the pieces
+    // are one logical string and must wrap and elide as one.
+    match (&r.description_spans, &r.description) {
+        (Some(spans), _) => cells.push(
+            text_runs(spans.iter().map(|sp| span_run(sp, &t)))
+                .theme(t.clone())
+                .elide(Elide::Tail)
+                .priority(yields_last::DESCRIPTION),
+        ),
+        (None, Some(d)) => cells.push(
             text(d.clone())
                 .theme(t.clone())
                 .elide(Elide::Tail)
                 .priority(yields_last::DESCRIPTION),
-        );
+        ),
+        (None, None) => {}
     }
     if let Some(k) = &r.keybinding {
         cells.push(
@@ -225,7 +288,7 @@ fn node_row(index: usize, r: &SuggestionRow, st: RowState, name_elide: Elide) ->
     if let Some(sc) = &r.source {
         cells.push(
             text(sc.clone())
-                .theme(column(r.disabled, st, "editor.line_number_fg"))
+                .theme(source_theme(r.disabled, st))
                 .elide(Elide::Tail)
                 .priority(yields_last::SOURCE),
         );
@@ -375,7 +438,12 @@ mod tests {
         use crate::view::theme::Theme;
         let theme = Theme::from_json(r#"{"name":"test"}"#).expect("defaults");
         for name in every_theme_name() {
-            for half in name.split('/') {
+            // `names` is the grammar's own reader: it drops the `+attrs` tail
+            // and reports each half only when it is a name rather than a
+            // `#rrggbb` literal. Nothing here should be a literal.
+            let (fg, bg) = crate::app::shell_host::shell_theme::names(&name);
+            for half in [fg, bg] {
+                let half = half.unwrap_or_else(|| panic!("{name:?} has an unnamed half"));
                 assert!(
                     theme.resolve_theme_key(half).is_some(),
                     "{half:?} (in {name:?}) is not a theme key"
@@ -521,6 +589,65 @@ mod tests {
             cmd.starts_with("Toggle") && cmd.ends_with('…'),
             "a command name must keep its head, got {cmd:?}"
         );
+    }
+
+    /// **A plugin's styled description keeps its pieces, and inherits the
+    /// rest of the row.**
+    ///
+    /// `styled_span_style` started from the row's style and set only what the
+    /// span mentioned, so a span naming a foreground still sat on the
+    /// selection's background. It also resolved the plugin's colour to a
+    /// concrete `Color` on the way, which the theme inspector could not
+    /// explain afterwards; a `ThemeKey` spec now stays a key.
+    #[test]
+    fn a_styled_span_names_only_what_it_overrides() {
+        let s = Suggestions {
+            rows: vec![SuggestionRow {
+                name: "cmd".into(),
+                description_spans: Some(vec![
+                    DescriptionSpan {
+                        text: "hit".into(),
+                        fg: Some("editor.warning_fg".into()),
+                        attrs: vec!["bold"],
+                        ..DescriptionSpan::default()
+                    },
+                    DescriptionSpan {
+                        text: " rest".into(),
+                        ..DescriptionSpan::default()
+                    },
+                ]),
+                ..SuggestionRow::default()
+            }],
+            selected: Some(0),
+        };
+        let ui = laid_out(s, 40, 4);
+        let themes: Vec<(String, String)> = ui
+            .spec()
+            .items
+            .iter()
+            .filter_map(|i| match &i.draw {
+                fresh_ui::Draw::Lines(l) => l
+                    .first()
+                    .map(|t| (t.to_string(), i.theme.as_str().to_string())),
+                _ => None,
+            })
+            .collect();
+        let of = |needle: &str| {
+            themes
+                .iter()
+                .find(|(t, _)| t.contains(needle))
+                .map(|(_, k)| k.clone())
+                .unwrap_or_else(|| panic!("no run for {needle:?} in {themes:?}"))
+        };
+        // The span's own foreground, the row's background, the row's selected
+        // state — all three, from one name.
+        assert_eq!(
+            of("hit"),
+            "editor.warning_fg/ui.suggestion_selected_bg+bold",
+            "a span keeps the row under it"
+        );
+        // A span that overrides nothing is the row.
+        assert_eq!(of("rest"), theme(false, RowState::Selected));
     }
 
     /// **Ledger finding A: the column yield order.** The name is sized before

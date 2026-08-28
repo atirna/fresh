@@ -2752,7 +2752,7 @@ impl Editor {
     /// **Not yet handed to the frame.** `SuggestionsRenderer::render_with_hover`
     /// still draws this list, and only one of the two may draw it: the layer
     /// paints in the overlay band and would land on top of the painter's cells.
-    /// Two things have to move before the painter goes, and each is a concept
+    /// One thing has to move before the painter goes, and it is a concept
     /// rather than a line count:
     ///
     /// * **The window.** The painter reads `Prompt::scroll_offset`, and so do
@@ -2761,13 +2761,10 @@ impl Editor {
     ///   too, the two would disagree about which row a click is on. Needs
     ///   `List` to accept a controlled offset — `viewport().scroll_at` is
     ///   already the library's spelling for it — and to report when it changes.
-    /// * **A plugin's styled description.** `description_spans` carries
-    ///   per-span colours, which `Run::themed` + `shell_theme::literal` already
-    ///   express — mechanical, unlike the window.
-    ///
     /// Everything else is done and covered: the rows, the four-column yield
-    /// order, the selection, the scrollbar, the click, and the placement above
-    /// the prompt row.
+    /// order with its ellipsis and its truncation direction, the selection,
+    /// a plugin's styled description spans, the scrollbar, the click, and the
+    /// placement above the prompt row.
     #[allow(dead_code)]
     fn suggestions_description(&self) -> Option<crate::view::shell::prompt::Suggestions> {
         use crate::view::shell::prompt::{SuggestionRow, Suggestions};
@@ -2783,6 +2780,10 @@ impl Editor {
                     name: s.text.clone(),
                     keybinding: s.keybinding.clone(),
                     description: s.description.clone(),
+                    description_spans: s
+                        .description_spans
+                        .as_ref()
+                        .map(|v| v.iter().map(Self::description_span).collect()),
                     // Character for character what `push_source_column`
                     // wrote: the plugin's own name, or the word for a
                     // built-in.
@@ -2795,6 +2796,48 @@ impl Editor {
                 .collect(),
             selected: prompt.selected_suggestion,
         })
+    }
+
+    /// A plugin's styled description span, as a name rather than a colour.
+    ///
+    /// `styled_span_style` resolved an `OverlayColorSpec` against the theme
+    /// here and handed the painter a concrete `Color`, which the theme
+    /// inspector could not explain afterwards and a user could not override. A
+    /// `ThemeKey` spec passes through as the key it is; an `Rgb` one becomes
+    /// the `#rrggbb` literal `shell_theme` reads — untraceable either way,
+    /// because a plugin's arbitrary colour has no name, but now it is only the
+    /// literals that are.
+    fn description_span(
+        st: &fresh_core::api::StyledText,
+    ) -> crate::view::shell::prompt::DescriptionSpan {
+        use crate::view::shell::prompt::DescriptionSpan;
+        let name = |c: &fresh_core::api::OverlayColorSpec| match c.as_rgb() {
+            Some((r, g, b)) => format!("#{r:02x}{g:02x}{b:02x}"),
+            None => c.as_theme_key().unwrap_or_default().to_string(),
+        };
+        let Some(opts) = st.style.as_ref() else {
+            return DescriptionSpan {
+                text: st.text.clone(),
+                ..DescriptionSpan::default()
+            };
+        };
+        let mut attrs: Vec<&'static str> = Vec::new();
+        for (on, a) in [
+            (opts.bold, "bold"),
+            (opts.italic, "italic"),
+            (opts.underline, "underline"),
+            (opts.strikethrough, "strikethrough"),
+        ] {
+            if on {
+                attrs.push(a);
+            }
+        }
+        DescriptionSpan {
+            text: st.text.clone(),
+            fg: opts.fg.as_ref().map(&name),
+            bg: opts.bg.as_ref().map(&name),
+            attrs,
+        }
     }
 
     /// The open context menu as the shell describes it: the point it was
