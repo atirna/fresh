@@ -26,7 +26,7 @@
 use std::rc::Rc;
 
 use fresh_ui::widgets::RowState;
-use fresh_ui::{col, row, text, Key, Node, Sizing};
+use fresh_ui::{col, row, text, Elide, Key, Node, Sizing};
 
 use crate::app::shell_host::shell_theme::pair;
 
@@ -71,6 +71,24 @@ pub struct Suggestions {
     pub rows: Vec<SuggestionRow>,
     /// Which row is selected, if any. Controlled: the editor holds it.
     pub selected: Option<usize>,
+}
+
+impl Suggestions {
+    /// Which end of a name survives a narrow row.
+    ///
+    /// `ColumnLayout::names_are_paths` decided this from the shape of the list
+    /// rather than from a flag: a list with neither keybindings nor sources is
+    /// a file finder, and a path keeps its filename. A command palette keeps
+    /// its head — "Toggle Compose/Preview (All Files)" contains a slash and is
+    /// still a command name, which is the bug that rule was written for.
+    fn name_elide(&self) -> Elide {
+        let has = |f: fn(&SuggestionRow) -> bool| self.rows.iter().any(f);
+        if has(|r| r.keybinding.is_some()) || has(|r| r.source.is_some()) {
+            Elide::Tail
+        } else {
+            Elide::Head
+        }
+    }
 }
 
 pub fn row_key(index: usize) -> Key {
@@ -174,11 +192,12 @@ fn every_theme_name() -> Vec<String> {
 
 /// One row's four columns, in paint order, each carrying the priority that says
 /// when it yields.
-fn node_row(index: usize, r: &SuggestionRow, st: RowState) -> Node<UiMsg> {
+fn node_row(index: usize, r: &SuggestionRow, st: RowState, name_elide: Elide) -> Node<UiMsg> {
     let t = theme(r.disabled, st);
     let mut cells: Vec<Node<UiMsg>> = vec![text(r.name.clone())
         .theme(t.clone())
         .key(name_key(index))
+        .elide(name_elide)
         .priority(yields_last::NAME)];
 
     // A flexible gap rather than padding: it is what puts the trailing columns
@@ -192,6 +211,7 @@ fn node_row(index: usize, r: &SuggestionRow, st: RowState) -> Node<UiMsg> {
         cells.push(
             text(d.clone())
                 .theme(t.clone())
+                .elide(Elide::Tail)
                 .priority(yields_last::DESCRIPTION),
         );
     }
@@ -206,6 +226,7 @@ fn node_row(index: usize, r: &SuggestionRow, st: RowState) -> Node<UiMsg> {
         cells.push(
             text(sc.clone())
                 .theme(column(r.disabled, st, "editor.line_number_fg"))
+                .elide(Elide::Tail)
                 .priority(yields_last::SOURCE),
         );
     }
@@ -226,6 +247,7 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
     let rows_for_row = Rc::new(rows);
     let rows_for_key = rows_for_row.clone();
     let rows_for_theme = rows_for_row.clone();
+    let name_elide = s.name_elide();
 
     // `List` reports the state it holds; the names are this module's. Both the
     // row builder and `row_theme` need the state, and only the latter is given
@@ -252,6 +274,7 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
                 } else {
                     RowState::Normal
                 },
+                name_elide,
             ),
             None => row().h(Sizing::Cells(1)),
         },
@@ -448,6 +471,55 @@ mod tests {
         assert!(
             list.bottom() <= prompt.y,
             "the list must sit above the prompt row: list {list:?}, prompt {prompt:?}"
+        );
+    }
+
+    /// **A path keeps its filename; a command keeps its head.**
+    ///
+    /// `ColumnLayout::names_are_paths` read this off the shape of the list —
+    /// neither keybindings nor sources means a file finder — and the two ends
+    /// are not interchangeable: `truncate_head_ellipsis` exists so a long path
+    /// still shows what file it is, and the tail form exists because "Toggle
+    /// Compose/Preview (All Files)" contains a slash and is still a command
+    /// name. That was the bug the rule was written for.
+    #[test]
+    fn a_path_gives_up_its_head_and_a_command_its_tail() {
+        let painted = |r: SuggestionRow| {
+            let s = Suggestions {
+                rows: vec![r],
+                selected: Some(0),
+            };
+            let ui = laid_out(s, 16, 4);
+            let spec = ui.spec();
+            let id = ui.find_by_key(&name_key(0)).expect("the name column");
+            let rect = ui.rect_of(id);
+            spec.items
+                .iter()
+                .find(|i| i.rect == rect && matches!(&i.draw, fresh_ui::Draw::Lines(_)))
+                .and_then(|i| match &i.draw {
+                    fresh_ui::Draw::Lines(l) => l.first().map(|s| s.to_string()),
+                    _ => None,
+                })
+                .expect("the name painted")
+        };
+        // Neither keybinding nor source: a file finder. The filename survives.
+        let path = painted(SuggestionRow {
+            name: "src/view/shell/prompt.rs".into(),
+            ..SuggestionRow::default()
+        });
+        assert!(
+            path.ends_with("prompt.rs") && path.starts_with('…'),
+            "a path must keep its filename, got {path:?}"
+        );
+        // A keybinding makes it a command palette. The head survives.
+        let cmd = painted(SuggestionRow {
+            name: "Toggle Compose/Preview (All Files)".into(),
+            keybinding: Some("^P".into()),
+            ..SuggestionRow::default()
+        });
+        assert!(
+            cmd.starts_with("Toggle") && cmd.ends_with('…'),
+            "a command name must keep its head, got {cmd:?}"
         );
     }
 

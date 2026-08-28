@@ -182,7 +182,7 @@ The guard for the other half of this is host-side:
 asserts both halves resolve. An earlier draft of that module used five keys
 that exist nowhere; nothing failed, every row simply painted grey.
 
-### F. No ellipsis, and no truncation direction — *open*
+### F. No ellipsis, and no truncation direction — *closed, `Node::elide`*
 
 `priority` decides a column's width during layout, which is the point — but it
 means the host can no longer truncate its own text, because it does not know
@@ -191,13 +191,27 @@ the width until layout is over. The library clips instead, so
 *path* truncates at the head so its filename survives while a *command name*
 truncates at the tail.
 
-The two are one concept: a run says how it gives up cells. Something like
-`text(..).elide(Elide::Tail)` / `Elide::Head`, resolved where the run is
-measured. Both directions have a live caller in the prompt today, and the
-status bar's segments want the tail form as well.
+The two are one concept: a run says how it gives up cells, and which end
+survives is part of what it says. `text(..).elide(Elide::Tail | Elide::Head)`,
+resolved at **paint** rather than at measure — that is the crux. Measurement
+reports the natural width; it is layout that decides the run gets less, so the
+number to cut to does not exist until the rectangle does.
 
-This is one of the three things holding the painter's retirement — see
-`Editor::suggestions_description`, which lists them.
+Both directions have a live caller in the same change: the prompt's name column
+takes `Elide::Head` when the list is a file finder, so a path keeps its
+filename, and `Elide::Tail` otherwise, because "Toggle Compose/Preview (All
+Files)" contains a slash and is still a command name. Description and source
+take the tail form. The status bar's segments want it too, and the explorer's
+truncated filenames after that.
+
+Cells rather than characters, which is not pedantry: `ColumnLayout` carries a
+regression test for a panic from truncating a description at a multi-byte
+boundary, and counting `char`s would also put the mark one cell early for every
+CJK glyph.
+
+One cosmetic difference, deliberate: the painter wrote `...` for a description
+and `…` for a name. The library writes `…` for both, so the mark costs one cell
+everywhere and the arithmetic is `width - 1` rather than a second measurement.
 
 ## How each rule is tested
 
