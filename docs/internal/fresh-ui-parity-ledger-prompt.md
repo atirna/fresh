@@ -153,6 +153,52 @@ pointer" had to be written as "cover everything below z15", and once it is a
 covering box it acquires a z, and once it has a z the other two gestures need
 their own. `Modality` stays all-or-nothing.
 
+### E. `List` stamps its own theme vocabulary — *closed, `List::row_theme`*
+
+`List` set each row's theme to `list.row`, `list.row.selected`,
+`list.row.selected.blur` or `list.row.hover`, **overwriting** whatever the row
+builder had named. That is a good default and a bad only option: this editor's
+theme has no entry for any of those four names, and `shell_theme::resolve`
+falls back to the plain editor ground for a name it cannot resolve *silently*.
+The first `List` in the editor would have drawn every row — selection included
+— in the buffer's own colours, with nothing failing anywhere.
+
+Not derivable. A host cannot compute the name itself, because two of the four
+states are the widget's private business: `hovered` and `focused` live in
+`ListState`, mirrored from Enter/Leave and focus transitions. Nor can it paint
+underneath: the stamped fill is emitted before the row's content, so a host
+covering it is paying for a fill it does not want and losing hover with it.
+
+`List::row_theme(|index, RowState| -> String)` is the split the rest of the
+library already draws: **the widget owns the state machine, the host owns the
+palette.** `RowState::theme()` is still the default when no host names one, so
+the existing vocabulary and every test on it stand. Caller and test land with
+it: `view::shell::prompt::theme` is the whole of `row_base_style`,
+`keybinding_style` and `source_style`, and it made the painter's hover arm
+reachable — which the wrapper approach would have thrown away.
+
+The guard for the other half of this is host-side:
+`every_theme_name_is_a_real_key` walks every name `prompt.rs` can emit and
+asserts both halves resolve. An earlier draft of that module used five keys
+that exist nowhere; nothing failed, every row simply painted grey.
+
+### F. No ellipsis, and no truncation direction — *open*
+
+`priority` decides a column's width during layout, which is the point — but it
+means the host can no longer truncate its own text, because it does not know
+the width until layout is over. The library clips instead, so
+`truncate_tail_ellipsis`'s `…` is lost, and so is the file finder's rule that a
+*path* truncates at the head so its filename survives while a *command name*
+truncates at the tail.
+
+The two are one concept: a run says how it gives up cells. Something like
+`text(..).elide(Elide::Tail)` / `Elide::Head`, resolved where the run is
+measured. Both directions have a live caller in the prompt today, and the
+status bar's segments want the tail form as well.
+
+This is one of the three things holding the painter's retirement — see
+`Editor::suggestions_description`, which lists them.
+
 ## How each rule is tested
 
 Rules 1–5 and 9–11 get shell-level unit tests in `view/shell/prompt.rs`, in the

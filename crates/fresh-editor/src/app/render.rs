@@ -2734,7 +2734,71 @@ impl Editor {
             // description and the rectangles the not-yet-migrated hit-testing
             // uses cannot disagree — they are one computation.
             dropdowns: menu_layout.map(|l| l.shell_dropdowns).unwrap_or_default(),
+            // Held back, deliberately: see `suggestions_description`. Building
+            // it here and letting the overlay band paint it would put the new
+            // list on top of the painter's, which still draws.
+            suggestions: None,
         }
+    }
+
+    /// The prompt's suggestion list as the shell describes it.
+    ///
+    /// Content only — no window and no rectangle. The painter kept a
+    /// `scroll_offset` to say which slice was visible and recorded the box it
+    /// drew; `list().windowed(..)` asks for the rows it can show and
+    /// `Anchor::Node` + `Place::Above` place the layer, so neither is stored
+    /// on this side any more.
+    ///
+    /// **Not yet handed to the frame.** `SuggestionsRenderer::render_with_hover`
+    /// still draws this list, and only one of the two may draw it: the layer
+    /// paints in the overlay band and would land on top of the painter's cells.
+    /// Three things have to move before the painter goes, and each is a concept
+    /// rather than a line count:
+    ///
+    /// * **The window.** The painter reads `Prompt::scroll_offset`, and so do
+    ///   the wheel and scrollbar handlers and the click rail's `start_idx`. A
+    ///   `List` owns its window through the viewport, so until the rail moves
+    ///   too, the two would disagree about which row a click is on. Needs
+    ///   `List` to accept a controlled offset — `viewport().scroll_at` is
+    ///   already the library's spelling for it — and to report when it changes.
+    /// * **Truncation.** `truncate_tail_ellipsis`, and the head-first variant
+    ///   the file finder uses so a path keeps its filename, write a real
+    ///   ellipsis. `priority` decides a column's width *during* layout, so the
+    ///   host cannot pre-truncate; the library clips, which loses it.
+    /// * **A plugin's styled description.** `description_spans` carries
+    ///   per-span colours, which `Run::themed` + `shell_theme::literal` already
+    ///   express — the only one of the three that is mechanical.
+    ///
+    /// Everything else is done and covered: the rows, the four-column yield
+    /// order, the selection, the scrollbar, the click, and the placement above
+    /// the prompt row.
+    #[allow(dead_code)]
+    fn suggestions_description(&self) -> Option<crate::view::shell::prompt::Suggestions> {
+        use crate::view::shell::prompt::{SuggestionRow, Suggestions};
+        let prompt = self.active_window().prompt.as_ref()?;
+        if prompt.suggestions.is_empty() {
+            return None;
+        }
+        Some(Suggestions {
+            rows: prompt
+                .suggestions
+                .iter()
+                .map(|s| SuggestionRow {
+                    name: s.text.clone(),
+                    keybinding: s.keybinding.clone(),
+                    description: s.description.clone(),
+                    // Character for character what `push_source_column`
+                    // wrote: the plugin's own name, or the word for a
+                    // built-in.
+                    source: s.source.as_ref().map(|src| match src {
+                        crate::input::commands::CommandSource::Builtin => "builtin".to_string(),
+                        crate::input::commands::CommandSource::Plugin(name) => name.clone(),
+                    }),
+                    disabled: s.disabled,
+                })
+                .collect(),
+            selected: prompt.selected_suggestion,
+        })
     }
 
     /// The open context menu as the shell describes it: the point it was
