@@ -13,7 +13,6 @@ use crate::services::plugins::hooks::HookArgs;
 use crate::view::popup_mouse::{popup_areas_to_layout_info, PopupHitTester};
 use crate::view::prompt::PromptType;
 use anyhow::Result as AnyhowResult;
-use ratatui::layout::Rect;
 use std::time::{Duration, Instant};
 
 /// Columns one notch of a sideways wheel pans. Horizontal panning has

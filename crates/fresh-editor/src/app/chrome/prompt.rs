@@ -9,7 +9,7 @@
 use crate::input::keybindings::Action;
 use anyhow::Result as AnyhowResult;
 
-use super::{in_rect, ChromeComponent, ChromeTreeBuilder, Editor};
+use super::{ChromeComponent, ChromeTreeBuilder, Editor};
 
 pub(crate) struct Prompt;
 
@@ -263,39 +263,5 @@ impl Editor {
             prompt.set_input_plain(suggestion.get_value().to_string());
         }
         Some(self.handle_action(Action::PromptConfirm))
-    }
-
-    /// Route a wheel event inside the floating-overlay prompt (Live Grep).
-    ///
-    /// The overlay is mouse-modal, so it always consumes the wheel (returns
-    /// true) when active — the event must never leak to the buffer below.
-    /// * Over the preview pane → scroll the preview.
-    /// * Anywhere else (result list, input, toolbar, frame) → scroll the
-    ///   result list *without* moving the selection.
-    ///
-    /// Bottom-anchored prompts have no arm here at all: their list is a
-    /// `fresh-ui` viewport and takes the wheel itself when the pointer is
-    /// over it.
-    pub(super) fn handle_overlay_prompt_scroll(&mut self, col: u16, row: u16, delta: i32) -> bool {
-        if !self.overlay_prompt_active() {
-            return false;
-        }
-        let preview_area = self.active_chrome().prompt_preview_area;
-        let results_visible = self
-            .active_chrome()
-            .prompt_results_area
-            .map(|r| r.height as usize)
-            .unwrap_or(0);
-        if let Some(preview) = preview_area {
-            if in_rect(col, row, preview) {
-                self.active_window_mut()
-                    .scroll_overlay_preview_by_lines(delta);
-                return true;
-            }
-        }
-        if let Some(prompt) = self.active_window_mut().prompt.as_mut() {
-            prompt.scroll_results(delta, results_visible);
-        }
-        true
     }
 }
