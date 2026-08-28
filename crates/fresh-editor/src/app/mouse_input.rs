@@ -10,7 +10,6 @@
 use super::chrome::in_rect;
 use super::*;
 use crate::services::plugins::hooks::HookArgs;
-use crate::view::popup_mouse::{popup_areas_to_layout_info, PopupHitTester};
 use crate::view::prompt::PromptType;
 use anyhow::Result as AnyhowResult;
 use std::time::{Duration, Instant};
@@ -974,11 +973,25 @@ impl Editor {
         self.active_window_mut().mouse_state.lsp_hover_request_sent = false;
     }
 
-    /// Check if mouse position is over a transient popup (hover, signature help)
+    /// Is the pointer over a transient popup (hover, signature help)?
+    ///
+    /// The LSP hover keep-alive's one question, asked directly. It used to go
+    /// through `view::popup_mouse` — a `PopupHitTester` over a
+    /// `Vec<PopupLayoutInfo>` built by converting the cached tuples into a
+    /// struct with seven fields, of which this reads one. That module's other
+    /// half (click, hover, drag dispatch) was replaced by the popups
+    /// component and then by the tree; what was left was scaffolding around a
+    /// rectangle test, with a doc comment naming a second caller that no
+    /// longer exists.
     fn is_mouse_over_transient_popup(&self, col: u16, row: u16) -> bool {
-        let layouts = popup_areas_to_layout_info(&self.active_chrome().popup_areas);
-        let hit_tester = PopupHitTester::new(&layouts, &self.active_state().popups);
-        hit_tester.is_over_transient_popup(col, row)
+        let popups = &self.active_state().popups;
+        if !popups.is_visible() || !popups.top().is_some_and(|p| p.transient) {
+            return false;
+        }
+        self.active_chrome()
+            .popup_areas
+            .iter()
+            .any(|(_, outer, ..)| in_rect(col, row, *outer))
     }
 
     // `split_at_position` lives on `impl Window` — call it via
