@@ -1133,7 +1133,6 @@ impl Editor {
         // Initialize popup/suggestion layout state (rendered after status bar below)
         self.active_chrome_mut().suggestions_area = None;
         self.active_chrome_mut().suggestions_outer_area = None;
-        self.active_chrome_mut().suggestions_scrollbar_rect = None;
         self.active_chrome_mut().prompt_results_area = None;
         self.active_chrome_mut().prompt_preview_area = None;
         self.active_window_mut().file_browser_layout = None;
@@ -3719,12 +3718,13 @@ impl Editor {
 
     /// Copy the suggestion list's rectangles out of the shell tree.
     ///
-    /// A bridge, and it is meant to read like one. `suggestions_area`,
-    /// `suggestions_outer_area` and `suggestions_scrollbar_rect` are consumed
-    /// by four rails that still work in coordinates — the click and hover
-    /// walks in `chrome::Prompt`, the buffer-cursor absorb guard in
-    /// `mouse_input`, the wheel's row budget in `prompt_lifecycle`, and the
-    /// web `Scene`. Each of them is a separate migration. Until then they read
+    /// A bridge, and it is meant to read like one. The click and hover walks
+    /// and the scrollbar drag are gestures in the tree now, and took the
+    /// scrollbar rect with them. What is left reads coordinates for reasons
+    /// that are not input routing: the web `Scene`, which draws from rects;
+    /// `cursor_obscured_by_overlay`, which asks whether the terminal caret is
+    /// under the box; and the column widths the next description is measured
+    /// against. Each of those is a separate migration. Until then they read
     /// one answer, produced once, by the layout that actually placed the box —
     /// which is already better than the painter's return value, because there
     /// is no longer a second derivation to disagree with.
@@ -3735,11 +3735,10 @@ impl Editor {
             (
                 p::suggestions_rect(spec),
                 p::suggestions_list_rect(spec),
-                p::suggestions_scrollbar_rect(spec),
                 p::suggestions_window(spec),
             )
         });
-        let Some((outer, list, bar, window)) = read else {
+        let Some((outer, list, window)) = read else {
             return;
         };
         let total = self
@@ -3756,7 +3755,6 @@ impl Editor {
         };
         let chrome = self.active_chrome_mut();
         chrome.suggestions_outer_area = outer.map(to_rect);
-        chrome.suggestions_scrollbar_rect = bar.map(to_rect);
         chrome.suggestions_area = list.map(|r| {
             let (first, visible) = window.unwrap_or((0, r.h as usize));
             (to_rect(r), first, visible.max(r.h as usize), total)
@@ -4707,8 +4705,6 @@ impl Editor {
             .as_ref()
             .map(|out| out.boxes.clone())
             .unwrap_or_default();
-        self.active_chrome_mut().prompt_toolbar_origin =
-            toolbar_widget_out.as_ref().map(|_| (inner.x, inner.y + 1));
         if let Some(out) = &toolbar_widget_out {
             // Widget toolbar: paint each rendered row across the full
             // width. Click routing needs no recorded rects — the box tree
