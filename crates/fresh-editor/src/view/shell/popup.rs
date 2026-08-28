@@ -51,27 +51,62 @@ use super::msg::{UiFact, UiMsg};
 /// stated here rather than inside each strategy.
 pub type Caret = Option<(u16, u16)>;
 
+/// Which point in the buffer a cursor-anchored popup hangs off.
+///
+/// Two, not one: a completion list lines up with the start of the word being
+/// completed, so its column is the word's and its row is the caret's, while
+/// everything else uses the caret itself. `render_buffer_popups` chose between
+/// them with an `if` on the popup's kind and then passed a pair of numbers;
+/// naming the two points instead is what lets the description say *which* one
+/// without knowing where either is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CaretAnchor {
+    /// The text caret.
+    Caret,
+    /// The start of the word a completion popup is completing.
+    CompletionWord,
+}
+
+impl CaretAnchor {
+    /// What a popup of this kind hangs off.
+    pub fn for_kind(kind: crate::view::popup::PopupKind) -> CaretAnchor {
+        match kind {
+            crate::view::popup::PopupKind::Completion => CaretAnchor::CompletionWord,
+            _ => CaretAnchor::Caret,
+        }
+    }
+
+    /// The key the tree knows it by, and the host publishes against.
+    pub fn key(self) -> Key {
+        Key::Pair(
+            "caret".into(),
+            match self {
+                CaretAnchor::Caret => 0,
+                CaretAnchor::CompletionWord => 1,
+            },
+        )
+    }
+}
+
 /// Where a popup goes, as a layer's anchor and placement.
 ///
 /// Returns the layer with its geometry set and no child; the caller adds the
 /// content. Split out because placement is the half of this surface that is
 /// pure restatement, and it is worth being able to test it against
 /// `calculate_area` on its own.
-pub fn placed(position: &PopupPosition, caret: Caret) -> Node<UiMsg> {
+pub fn placed(position: &PopupPosition, at: CaretAnchor) -> Node<UiMsg> {
     let l = fresh_ui::layer();
     // Both cursor-relative families and `Fixed` clamp; the screen-anchored ones
     // cannot fall outside a frame they are measured against.
-    let caret_at = || {
-        let (x, y) = caret.unwrap_or((0, 0));
-        Anchor::Point(x, y)
-    };
-    // The caret is a *cell*, not a point: below it is the row after it, and a
-    // flip clears it rather than landing on it. `calculate_area` says the same
-    // thing as `cursor_y + 1` and a matching `- height`.
-    let caret_cell = || {
-        let (x, y) = caret.unwrap_or((0, 0));
-        Anchor::Cell(x, y)
-    };
+    //
+    // **The caret is named, not measured.** It lives inside the buffer's host
+    // leaf, so the tree cannot find it and the description must not carry its
+    // coordinates — the buffer publishes a rectangle for this key once it knows
+    // (`Ui::set_host_anchor`), and the layer resolves against it. The published
+    // rectangle is one cell, which is the whole of the old `Anchor::Cell`
+    // distinction: below the caret is the row *after* it, not its own row.
+    let caret_cell = || Anchor::Node(at.key());
+    let caret_at = caret_cell;
     match position {
         PopupPosition::AtCursor => l.anchor(caret_at()).place(Place::Over).fit(Fit::CLAMP),
         // "Not enough space below, put above" — thirteen lines that `Fit::FLIP`
@@ -104,12 +139,20 @@ pub fn placed(position: &PopupPosition, caret: Caret) -> Node<UiMsg> {
         // The segment that opened it. See the module docs and the ledger's
         // finding A; the two numbers in this variant are a rectangle the caller
         // already had and threw away.
+        //
+        // **Confined to the area left of the editor's scrollbar.** Clamping to
+        // the frame puts this popup's right border on the scrollbar's column —
+        // `calculate_area` reserved it with a `saturating_sub(1)` and a comment
+        // saying why. Naming the region says the same thing without the
+        // arithmetic, and it is the only strategy that reserves anything, so it
+        // is the only one that names it.
         PopupPosition::AboveStatusBarAt { .. } => l
             .anchor(Anchor::Node(super::status_bar::item_key(
                 super::status_bar::Side::Right,
                 0,
             )))
             .place(Place::Above)
+            .within(clear_of_scrollbar_key())
             .fit(Fit::FLIP.or(Fit::CLAMP)),
     }
 }
@@ -126,11 +169,23 @@ pub fn placed(position: &PopupPosition, caret: Caret) -> Node<UiMsg> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Placed {
     pub position: PopupPosition,
-    /// Where the caret is, for the cursor-anchored strategies. `None` for the
-    /// screen-anchored ones, which never look at it.
-    pub caret: Caret,
+    /// Which buffer point the cursor-anchored strategies hang off. The
+    /// screen-anchored ones never look at it.
+    pub at: CaretAnchor,
     /// What the popup asks to occupy, in cells: `(width, height)`.
     pub size: (u16, u16),
+}
+
+/// The region a popup may occupy when it must leave the editor's vertical
+/// scrollbar alone: the frame, less its rightmost column.
+///
+/// Published by the editor rather than found in the tree, because the split's
+/// scrollbar is not in the tree yet — it is painted by `render_content`, which
+/// is the last thing to migrate. When the split grid becomes a subtree the
+/// region is an ordinary element and this key finds it instead, with nothing
+/// here changing.
+pub fn clear_of_scrollbar_key() -> Key {
+    Key::Str("popup_area_clear_of_scrollbar".into())
 }
 
 /// The key a placed popup carries, by its index in paint order.
@@ -148,7 +203,7 @@ pub fn placed_layers(ps: &[Placed]) -> Vec<Node<UiMsg>> {
     ps.iter()
         .enumerate()
         .map(|(i, p)| {
-            placed(&p.position, p.caret)
+            placed(&p.position, p.at)
                 .key(popup_key(i))
                 .child(col().w(Sizing::Cells(p.size.0)).h(Sizing::Cells(p.size.1)))
         })
@@ -415,19 +470,26 @@ mod tests {
     ) -> ratatui::layout::Rect {
         let key = fresh_ui::Key::from(7u64);
         let mut ui: Ui<UiMsg> = Ui::new();
-        let spec = ui
-            .frame(
-                col().child(
-                    placed(position, caret).key(key.clone()).child(
-                        row()
-                            .w(Sizing::Cells(w))
-                            .h(Sizing::Cells(h))
-                            .theme("ui.popup_border_fg/ui.popup_bg"),
-                    ),
+        ui.frame(
+            col().child(
+                placed(position, CaretAnchor::Caret).key(key.clone()).child(
+                    row()
+                        .w(Sizing::Cells(w))
+                        .h(Sizing::Cells(h))
+                        .theme("ui.popup_border_fg/ui.popup_bg"),
                 ),
-                Size::new(FRAME.0, FRAME.1),
-            )
-            .clone();
+            ),
+            Size::new(FRAME.0, FRAME.1),
+        );
+        // The buffer's leaf publishes the caret; here the test stands in for
+        // it. One cell, which is what a caret is.
+        if let Some((x, y)) = caret {
+            ui.set_host_anchor(
+                CaretAnchor::Caret.key(),
+                fresh_ui::Rect::new(x as i32, y as i32, 1, 1),
+            );
+        }
+        let spec = ui.place_layers(Size::new(FRAME.0, FRAME.1)).clone();
         let r = spec
             .index
             .iter()

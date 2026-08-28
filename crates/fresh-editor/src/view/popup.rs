@@ -884,6 +884,42 @@ impl Popup {
         description_lines + content_lines + border_height
     }
 
+    /// What this popup asks to occupy, in cells, given the area it sits in.
+    ///
+    /// The *size* half of `calculate_area`, which all six of its strategies
+    /// computed identically before going on to disagree about placement — the
+    /// one exception being `CenteredOverlay`, whose whole reason to exist is
+    /// that it takes a percentage of the frame instead of measuring its own
+    /// content, so Live Grep's box does not resize per keystroke.
+    ///
+    /// Split out because placement has moved into the shell's tree and
+    /// measurement has not: the description states the size, the tree states
+    /// where it goes. `calculate_area` calls this too, so the two cannot drift
+    /// while both exist.
+    pub fn asked_size(&self, terminal_area: Rect) -> (u16, u16) {
+        if let PopupPosition::CenteredOverlay {
+            width_pct,
+            height_pct,
+        } = self.position
+        {
+            let pct = |extent: u16, p: u8| {
+                (((extent as u32 * p.clamp(1, 100) as u32) / 100) as u16)
+                    .max(1)
+                    .min(extent)
+            };
+            return (
+                pct(terminal_area.width, width_pct),
+                pct(terminal_area.height, height_pct),
+            );
+        }
+        (
+            self.width.min(terminal_area.width),
+            self.content_height()
+                .min(self.max_height)
+                .min(terminal_area.height),
+        )
+    }
+
     /// Calculate the area where this popup should be rendered
     pub fn calculate_area(&self, terminal_area: Rect, cursor_pos: Option<(u16, u16)>) -> Rect {
         match self.position {
@@ -893,12 +929,7 @@ impl Popup {
                     terminal_area.y + terminal_area.height / 2,
                 ));
 
-                let width = self.width.min(terminal_area.width);
-                // Use the minimum of max_height, actual content height, and terminal height
-                let height = self
-                    .content_height()
-                    .min(self.max_height)
-                    .min(terminal_area.height);
+                let (width, height) = self.asked_size(terminal_area);
 
                 // `cursor_*` are absolute screen coordinates, so clamp
                 // against the area's absolute edges. The area's `x`/`y`
@@ -941,11 +972,7 @@ impl Popup {
                 }
             }
             PopupPosition::Fixed { x, y } => {
-                let width = self.width.min(terminal_area.width);
-                let height = self
-                    .content_height()
-                    .min(self.max_height)
-                    .min(terminal_area.height);
+                let (width, height) = self.asked_size(terminal_area);
                 // Clamp x and y to ensure popup stays within the area's
                 // absolute bounds (its `x`/`y` may be offset by a left dock).
                 let right = terminal_area.x + terminal_area.width;
@@ -968,11 +995,7 @@ impl Popup {
                 }
             }
             PopupPosition::Centered => {
-                let width = self.width.min(terminal_area.width);
-                let height = self
-                    .content_height()
-                    .min(self.max_height)
-                    .min(terminal_area.height);
+                let (width, height) = self.asked_size(terminal_area);
                 let x = terminal_area.x + (terminal_area.width.saturating_sub(width)) / 2;
                 let y = terminal_area.y + (terminal_area.height.saturating_sub(height)) / 2;
                 Rect {
@@ -982,16 +1005,8 @@ impl Popup {
                     height,
                 }
             }
-            PopupPosition::CenteredOverlay {
-                width_pct,
-                height_pct,
-            } => {
-                let w_pct = width_pct.clamp(1, 100) as u32;
-                let h_pct = height_pct.clamp(1, 100) as u32;
-                let width = ((terminal_area.width as u32 * w_pct) / 100) as u16;
-                let height = ((terminal_area.height as u32 * h_pct) / 100) as u16;
-                let width = width.max(1).min(terminal_area.width);
-                let height = height.max(1).min(terminal_area.height);
+            PopupPosition::CenteredOverlay { .. } => {
+                let (width, height) = self.asked_size(terminal_area);
                 let x = terminal_area.x + (terminal_area.width.saturating_sub(width)) / 2;
                 let y = terminal_area.y + (terminal_area.height.saturating_sub(height)) / 2;
                 Rect {
@@ -1002,11 +1017,7 @@ impl Popup {
                 }
             }
             PopupPosition::BottomRight => {
-                let width = self.width.min(terminal_area.width);
-                let height = self
-                    .content_height()
-                    .min(self.max_height)
-                    .min(terminal_area.height);
+                let (width, height) = self.asked_size(terminal_area);
                 // Position in bottom right of the area, leaving 2 rows for
                 // the status bar. Offset by the area's `x`/`y` so the popup
                 // hugs the chrome's right edge (beside a left dock) rather
@@ -1025,11 +1036,7 @@ impl Popup {
                 }
             }
             PopupPosition::AboveStatusBarAt { x, status_row } => {
-                let width = self.width.min(terminal_area.width);
-                let height = self
-                    .content_height()
-                    .min(self.max_height)
-                    .min(terminal_area.height);
+                let (width, height) = self.asked_size(terminal_area);
                 // Reserve the rightmost column for the editor scrollbar.
                 // Without the reservation, a popup that overflows the
                 // right edge gets clamped flush to the area's right edge
