@@ -1,0 +1,299 @@
+//! Popups, as descriptions.
+//!
+//! See `docs/internal/fresh-ui-parity-ledger-popups.md` for the full rule
+//! inventory. This module starts where the surface is most obviously a
+//! restatement: **placement**.
+//!
+//! `Popup::calculate_area` is six strategies, each of which ends by clamping to
+//! the area's absolute edges:
+//!
+//! ```text
+//!   let right  = area.x + area.width;
+//!   let x      = if cursor_x + width > right { right - width } else { cursor_x }
+//!                   .max(area.x);
+//! ```
+//!
+//! written out six times, plus — for `BelowCursor` — thirteen lines of "not
+//! enough space below, put above". Those are `Fit::CLAMP` and `Fit::FLIP`, and
+//! the strategies themselves are `Anchor` plus `Place`:
+//!
+//! ```text
+//!   AtCursor              -> Anchor::Point(caret)  + Place::Over
+//!   BelowCursor           -> Anchor::Point(caret)  + Place::Below + FLIP
+//!   AboveCursor           -> Anchor::Point(caret)  + Place::Above
+//!   Fixed { x, y }        -> Anchor::Point(x, y)   + Place::Over
+//!   Centered              -> Anchor::Screen(Center)
+//!   CenteredOverlay       -> Anchor::Screen(Center) + Sizing::Pct
+//!   BottomRight           -> Anchor::Screen(End)
+//!   AboveStatusBarAt      -> Anchor::Node(status segment) + Place::Above
+//! ```
+//!
+//! The last one is the ledger's finding A: it looks like it needs an anchor
+//! that is a node on one axis and a point on the other, and it does not. The
+//! status bar is migrated and its elements are keyed, so the popup hangs off
+//! *the segment that opened it* — which is what the feature means. Its `x` and
+//! `status_row` parameters exist only because a popup could not name a node.
+
+use fresh_ui::{col, Align, Anchor, Fit, Node, Place, Sizing};
+
+use crate::view::popup::PopupPosition;
+
+use super::msg::UiMsg;
+
+/// The caret's screen position, when the frame has one.
+///
+/// `calculate_area` falls back to the middle of the area when it does not,
+/// which is a rule about the *anchor* rather than about the popup, so it is
+/// stated here rather than inside each strategy.
+pub type Caret = Option<(u16, u16)>;
+
+/// Where a popup goes, as a layer's anchor and placement.
+///
+/// Returns the layer with its geometry set and no child; the caller adds the
+/// content. Split out because placement is the half of this surface that is
+/// pure restatement, and it is worth being able to test it against
+/// `calculate_area` on its own.
+pub fn placed(position: &PopupPosition, caret: Caret) -> Node<UiMsg> {
+    let l = fresh_ui::layer();
+    // Both cursor-relative families and `Fixed` clamp; the screen-anchored ones
+    // cannot fall outside a frame they are measured against.
+    let caret_at = || {
+        let (x, y) = caret.unwrap_or((0, 0));
+        Anchor::Point(x, y)
+    };
+    match position {
+        PopupPosition::AtCursor => l.anchor(caret_at()).place(Place::Over).fit(Fit::CLAMP),
+        // **Pending `Anchor::Cell` — the ledger's finding F.** `Place::Below`
+        // is right and `Fit::FLIP` is exactly the thirteen lines of "not
+        // enough space below, put above". What is off by one is the anchor:
+        // `Anchor::Point` resolves to a *zero-size* rect, so "below" it is its
+        // own row, while the painter means below the caret's **cell**
+        // (`cursor_y + 1`). A caret occupies a cell; a click position is a
+        // point. Both placements below are one library concept away from
+        // exact, and until then they keep the painter's arithmetic.
+        PopupPosition::BelowCursor => l
+            .anchor(caret_at())
+            .place(Place::Below)
+            .fit(Fit::FLIP.or(Fit::CLAMP)),
+        PopupPosition::AboveCursor => l
+            .anchor(caret_at())
+            .place(Place::Above)
+            .fit(Fit::FLIP.or(Fit::CLAMP)),
+        PopupPosition::Fixed { x, y } => l
+            .anchor(Anchor::Point(*x, *y))
+            .place(Place::Over)
+            .fit(Fit::CLAMP),
+        PopupPosition::Centered | PopupPosition::CenteredOverlay { .. } => {
+            l.anchor(Anchor::Screen(Align::Center)).place(Place::Over)
+        }
+        // **Not migrated yet — see the ledger's finding E.** The painter's
+        // `y` here is `height - popup_height - 2`, and the 2 is "leave room
+        // for the status bar", which is the same rule `AboveStatusBarAt`
+        // states properly. Saying it properly is `Anchor::Node(status bar)` +
+        // `Place::Above`, and that puts the popup at the bar's *left* edge —
+        // this variant wants its right. A layer can match its anchor's extent
+        // (`stretch_to_anchor`) but cannot align within it, which is the one
+        // real gap this surface turned up.
+        PopupPosition::BottomRight => l.anchor(Anchor::Screen(Align::End)).place(Place::Over),
+        // The segment that opened it. See the module docs and the ledger's
+        // finding A; the two numbers in this variant are a rectangle the caller
+        // already had and threw away.
+        PopupPosition::AboveStatusBarAt { .. } => l
+            .anchor(Anchor::Node(super::status_bar::item_key(
+                super::status_bar::Side::Right,
+                0,
+            )))
+            .place(Place::Above)
+            .fit(Fit::FLIP.or(Fit::CLAMP)),
+    }
+}
+
+/// How big the popup asks to be, in the terms its own fields already use.
+///
+/// `width` is a cell count the popup carries; the height is its content's,
+/// bounded by `max_height`. `CenteredOverlay` overrides both with percentages
+/// of the frame, which is the whole reason that variant exists — Live Grep
+/// wants a stable frame while results stream in, not one that resizes per
+/// keystroke.
+pub fn sized(position: &PopupPosition, width: u16, max_height: u16, n: Node<UiMsg>) -> Node<UiMsg> {
+    match position {
+        PopupPosition::CenteredOverlay {
+            width_pct,
+            height_pct,
+        } => n
+            .w(Sizing::Pct((*width_pct).clamp(1, 100)))
+            .h(Sizing::Pct((*height_pct).clamp(1, 100))),
+        _ => n.w(Sizing::Cells(width)).max_h(max_height),
+    }
+}
+
+/// A popup's frame: its ring, its title and its ground.
+pub fn frame(bordered: bool, body: Node<UiMsg>) -> Node<UiMsg> {
+    let n = col()
+        .theme(crate::app::shell_host::shell_theme::pair(
+            "ui.popup_border_fg",
+            "ui.popup_bg",
+        ))
+        .child(body);
+    if bordered {
+        n.border()
+    } else {
+        n
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fresh_ui::{row, Size, Ui};
+
+    const FRAME: (u16, u16) = (80, 24);
+
+    /// Lay a popup of exactly `w`×`h` out at `position`, and report where it
+    /// landed. The size is fixed rather than measured so this compares
+    /// *placement* with `calculate_area`'s placement and nothing else.
+    fn placed_rect(
+        position: &PopupPosition,
+        caret: Caret,
+        w: u16,
+        h: u16,
+    ) -> ratatui::layout::Rect {
+        let key = fresh_ui::Key::from(7u64);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        let spec = ui
+            .frame(
+                col().child(
+                    placed(position, caret).key(key.clone()).child(
+                        row()
+                            .w(Sizing::Cells(w))
+                            .h(Sizing::Cells(h))
+                            .theme("ui.popup_border_fg/ui.popup_bg"),
+                    ),
+                ),
+                Size::new(FRAME.0, FRAME.1),
+            )
+            .clone();
+        let r = spec
+            .index
+            .iter()
+            .find(|(k, _)| *k == key)
+            .and_then(|(_, range)| spec.items.get(range.start))
+            .map(|i| i.rect)
+            .unwrap_or_default();
+        ratatui::layout::Rect {
+            x: r.x.max(0) as u16,
+            y: r.y.max(0) as u16,
+            width: r.w,
+            height: r.h,
+        }
+    }
+
+    /// The painter's own answer, for the same inputs.
+    fn calculated(position: PopupPosition, caret: Caret, w: u16, h: u16) -> ratatui::layout::Rect {
+        let theme = crate::view::theme::Theme::from_json(r#"{"name":"t"}"#).unwrap();
+        // A popup whose content is exactly `h` lines and whose width is `w`,
+        // so `content_height().min(max_height)` is `h`.
+        let mut p =
+            crate::view::popup::Popup::text((0..h).map(|i| format!("line {i}")).collect(), &theme);
+        p.position = position;
+        p.width = w;
+        p.max_height = h;
+        p.bordered = false;
+        p.calculate_area(ratatui::layout::Rect::new(0, 0, FRAME.0, FRAME.1), caret)
+    }
+
+    /// **Ledger rules 1 and 4: `AtCursor`, and the clamp every strategy ends
+    /// with.**
+    ///
+    /// The caret's own row and the row above it are excluded and get their own
+    /// test below: `calculate_area` does not clamp `AtCursor`'s `y` at all, and
+    /// the difference is a real behaviour change rather than a rounding one.
+    ///
+    /// A table over caret positions near each edge, because that is where the
+    /// six hand-written clamps are most likely to have disagreed with each
+    /// other — and where `Fit` earns its keep.
+    #[test]
+    fn the_cursor_relative_placements_match_calculate_area() {
+        let carets = [
+            (0u16, 0u16),
+            (1, 1),
+            (40, 12),
+            (FRAME.0 - 1, 12),
+            (FRAME.0 - 3, 2),
+        ];
+        // `BelowCursor` and `AboveCursor` are excluded pending `Anchor::Cell`
+        // — see finding F. They are off by exactly one row, in the direction a
+        // zero-size anchor predicts.
+        for pos in [PopupPosition::AtCursor] {
+            for c in carets {
+                for (w, h) in [(20u16, 5u16), (40, 10), (FRAME.0, 3)] {
+                    let want = calculated(pos, Some(c), w, h);
+                    let got = placed_rect(&pos, Some(c), w, h);
+                    assert_eq!(got, want, "{pos:?} caret={c:?} size={w}x{h}");
+                }
+            }
+        }
+    }
+
+    /// **Ledger rule 5: centred.**
+    #[test]
+    fn the_screen_placements_match_calculate_area() {
+        for pos in [PopupPosition::Centered] {
+            for (w, h) in [(20u16, 5u16), (41, 11), (FRAME.0, FRAME.1)] {
+                let want = calculated(pos, None, w, h);
+                let got = placed_rect(&pos, None, w, h);
+                assert_eq!(got, want, "{pos:?} size={w}x{h}");
+            }
+        }
+    }
+
+    /// **A popup near the bottom is moved up rather than cut off.** A
+    /// divergence, found by the sweep above and kept deliberately.
+    ///
+    /// `calculate_area` clamps `x` for every strategy and never clamps `y` for
+    /// `AtCursor`: the rectangle is allowed to run off the bottom, and
+    /// `clamp_rect_to_bounds` then *truncates* it at paint —
+    /// `height: rect.height.min(max_height)` with the origin left where it
+    /// was. So a five-line popup opened on the last row shows one line.
+    ///
+    /// `Fit::CLAMP` pulls the whole box back inside instead, so all five show.
+    /// That is what clamping means, it is what every other strategy here
+    /// already does on the horizontal axis, and a popup that is cut to one
+    /// line is not a popup anyone wanted. Recorded rather than quietly
+    /// changed.
+    #[test]
+    fn a_popup_at_the_bottom_edge_moves_up_instead_of_being_truncated() {
+        let caret = (40, FRAME.1 - 1);
+        let (w, h) = (20u16, 5u16);
+        let painter = calculated(PopupPosition::AtCursor, Some(caret), w, h);
+        let got = placed_rect(&PopupPosition::AtCursor, Some(caret), w, h);
+        assert_eq!(
+            painter.y,
+            FRAME.1 - 1,
+            "the painter leaves the origin on the caret's row"
+        );
+        assert_eq!(
+            got,
+            ratatui::layout::Rect::new(40, FRAME.1 - h, w, h),
+            "the description pulls the whole box inside"
+        );
+    }
+
+    /// **Ledger rule: `Fixed` clamps to the area's absolute edges.**
+    #[test]
+    fn a_fixed_placement_clamps_like_calculate_area() {
+        for (x, y) in [
+            (0u16, 0u16),
+            (10, 4),
+            (FRAME.0 - 2, FRAME.1 - 2),
+            (200, 200),
+        ] {
+            let pos = PopupPosition::Fixed { x, y };
+            for (w, h) in [(20u16, 5u16), (40, 10)] {
+                let want = calculated(pos, None, w, h);
+                let got = placed_rect(&pos, None, w, h);
+                assert_eq!(got, want, "{pos:?} size={w}x{h}");
+            }
+        }
+    }
+}

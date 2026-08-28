@@ -125,6 +125,55 @@ A fourth content variant that is `Text` with a different name. No concept needed
 it is a merge, and it should happen before the description is written rather
 than being carried across.
 
+### D. `AtCursor` never clamped its `y` — *divergence, kept*
+
+`calculate_area` clamps `x` for every strategy and never clamps `y` for
+`AtCursor`. The rectangle is allowed to run off the bottom, and
+`clamp_rect_to_bounds` then **truncates** it at paint — `height:
+rect.height.min(max_height)` with the origin left where it was. A five-line
+popup opened on the last row shows one line.
+
+`Fit::CLAMP` pulls the whole box back inside instead. That is what clamping
+means, it is what every other strategy already does horizontally, and a popup
+cut to one line is not a popup anyone wanted. Kept as a behaviour change with a
+test that names it rather than a silently adjusted expectation.
+
+### E. A layer cannot align within its anchor — *open, one caller here*
+
+`BottomRight` puts the popup at `height - popup_height - 2`, and the 2 is "leave
+room for the status bar" — the same rule `AboveStatusBarAt` states properly.
+Stating it properly is `Anchor::Node(status bar)` + `Place::Above`, and that
+lands the popup at the bar's **left** edge; this variant wants its right.
+
+A layer can already match its anchor's extent on the free axis
+(`stretch_to_anchor`, added for the prompt). What it cannot do is *align* within
+it. Those are the same concept at different settings — `stretch_to_anchor` is
+the `Align::Stretch` case — so the shape is probably `Layer::align(Align)` with
+`stretch_to_anchor` becoming its `Stretch` spelling rather than a second
+builder.
+
+Until then `BottomRight` keeps `Anchor::Screen(Align::End)`, which is right on
+`x` and two rows low on `y`.
+
+### F. `Anchor::Point` is a point; a caret is a cell — *open, two callers here*
+
+`Place::Below` on `Anchor::Point(x, y)` lands on row `y`, because a point
+resolves to a zero-size rect and "below" a zero-height thing is itself. The
+painter means `cursor_y + 1`: below the caret's **cell**. `Fit::FLIP` is off by
+the same one in the other direction (`anchor.y - sh` versus the painter's
+`cursor_y - sh`).
+
+This is not a bug in either — they mean different things, and the library is
+right that a point is zero-size. `Anchor::Point` is what a *click position* is,
+and the context menu uses it correctly. What is missing is the other one: a
+cell. `Anchor::Cell(x, y)` resolving to a 1×1 rect makes `Place::Below` mean
+`y + 1` and the flip mean `y - sh`, both exactly the painter's arithmetic, with
+no arm anywhere reading "+1".
+
+`BelowCursor` and `AboveCursor` are the two callers, and every completion,
+hover and signature-help popup goes through them. Held out of the migrated set
+until the concept exists; the parity sweep covers only what is claimed exact.
+
 ## What this retires
 
 * `ChromeLayout::popup_areas` and `global_popup_areas` — the last two entries in
