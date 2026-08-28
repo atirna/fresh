@@ -1190,6 +1190,54 @@ mod tests {
         assert_eq!(over.x, 39, "at the list's right edge");
     }
 
+    /// **The prompt owns the keyboard; the list is driven, not driving.**
+    ///
+    /// The regression this exists for: with the list in the frame,
+    /// `e2e::prompt_editing::test_typing_deletes_selection` lost exactly one
+    /// `Right`. `>replace me` with Home, Right, then seven Shift+Rights
+    /// selected `>replac` instead of `replace`, so typing over it ate the `>`
+    /// prefix and left `fixede me`.
+    ///
+    /// Every key in a prompt belongs to the prompt's own input handling. The
+    /// list has no keyboard of its own — the editor moves
+    /// `selected_suggestion` and hands the new value down each frame — so
+    /// nothing the tree contains may claim one.
+    #[test]
+    fn the_suggestion_layer_claims_no_keys() {
+        use crate::view::shell::frame::{frame_tree, Frame};
+        use fresh_ui::{Input, KeyCode, KeyPress, Mods};
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            frame_tree(Frame {
+                prompt_line: true,
+                suggestions: Some(Suggestions {
+                    rows: rows(5),
+                    selected: Some(0),
+                    place: Place::AbovePrompt,
+                    hints: None,
+                }),
+                ..Frame::default()
+            }),
+            Size::new(80, 24),
+        );
+        for code in [
+            KeyCode::Right,
+            KeyCode::Left,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Enter,
+        ] {
+            let got = ui.dispatch(Input::Key(KeyPress::with(code, Mods::NONE)));
+            assert!(
+                !got.claimed,
+                "{code:?} must reach the prompt, not the list — got {:?}",
+                got.msgs
+            );
+        }
+    }
+
     /// **Ledger finding A: the column yield order.** The name is sized before
     /// the description, so a row too narrow for both keeps the whole command
     /// name and truncates the description — never the other way round. This is
