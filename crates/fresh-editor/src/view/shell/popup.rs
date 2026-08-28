@@ -659,4 +659,81 @@ mod tests {
             }
         }
     }
+
+    /// **Ledger finding H: a popup is bounded by the window, not by the
+    /// chrome column.** A divergence, and the deliberate direction of it.
+    ///
+    /// `calculate_area` is handed the chrome area — the column right of a left
+    /// dock — and clamps into it. A layer is placed against the frame. With no
+    /// dock the two are the same rectangle and nothing here differs; with one,
+    /// they part company in exactly two places, and a sweep over every
+    /// reachable caret column and a range of widths says they are the only two.
+    ///
+    /// **Centred popups.** The painter centres them in the chrome column, so a
+    /// modal slides sideways when a dock opens and sits off-centre in the
+    /// window while it is there. The surfaces that use `Centered` and
+    /// `CenteredOverlay` are modals — workspace trust, Live Grep's 80% overlay
+    /// — and a modal centres on the window everywhere else in software. The
+    /// tree's answer is the conventional one.
+    ///
+    /// **A popup wider than the chrome column.** The painter pins it to the
+    /// column's left edge and lets `clamp_rect_to_bounds` cut the right end
+    /// off; the tree pushes it flush to the window's right edge, whole, lying
+    /// over the dock. Truncation loses content and overlap loses nothing — a
+    /// floating surface over a panel is what floating means.
+    ///
+    /// Not a divergence: a caret to the *left* of the dock's edge. The painter
+    /// guards against it with a `.max(area.x)`, but the caret is in the buffer
+    /// and the buffer is inside the chrome, so the input is unreachable.
+    #[test]
+    fn a_popup_is_bounded_by_the_window_not_by_the_chrome_column() {
+        const DOCK: u16 = 20;
+        let chrome = ratatui::layout::Rect::new(DOCK, 0, FRAME.0 - DOCK, FRAME.1);
+        let painter = |pos: PopupPosition, caret: Caret, w: u16| {
+            let theme = crate::view::theme::Theme::from_json(r#"{"name":"t"}"#).unwrap();
+            let mut p = crate::view::popup::Popup::text(vec!["l".into()], &theme);
+            p.position = pos;
+            p.width = w;
+            p.max_height = 1;
+            p.bordered = false;
+            p.calculate_area(chrome, caret)
+        };
+
+        // Centred: the window's centre, not the column's.
+        let w = 30;
+        assert_eq!(
+            placed_rect(&PopupPosition::Centered, None, w, 1).x,
+            (FRAME.0 - w) / 2
+        );
+        assert_eq!(
+            painter(PopupPosition::Centered, None, w).x,
+            DOCK + (chrome.width - w) / 2
+        );
+
+        // Wider than the column: whole and overlapping, not pinned and cut.
+        let wide = chrome.width + 10;
+        let caret = Some((FRAME.0 - 2, 5));
+        assert_eq!(
+            placed_rect(&PopupPosition::BelowCursor, caret, wide, 1).x,
+            FRAME.0 - wide,
+            "the whole popup is on screen"
+        );
+        assert_eq!(
+            painter(PopupPosition::BelowCursor, caret, wide).x,
+            DOCK,
+            "the painter pinned it to the column and cut the right end off"
+        );
+
+        // Everything that fits in the column agrees, at every reachable caret.
+        for w in [10u16, 30, chrome.width] {
+            for cx in DOCK..FRAME.0 {
+                let caret = Some((cx, 5));
+                assert_eq!(
+                    placed_rect(&PopupPosition::BelowCursor, caret, w, 1).x,
+                    painter(PopupPosition::BelowCursor, caret, w).x,
+                    "width {w}, caret column {cx}"
+                );
+            }
+        }
+    }
 }

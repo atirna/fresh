@@ -203,6 +203,41 @@ anchored to is the bug `Anchor::Cell` exists to make unsayable, and the
 asymmetry between the two siblings is the kind of thing that survives only
 because the two arms were written as separate arithmetic.
 
+### H. A popup is bounded by the window, not by the chrome column — *divergence, taken deliberately*
+
+`calculate_area` is handed the *chrome area* — the column right of a left dock —
+and every one of its six strategies clamps into it. A `fresh-ui` layer is placed
+against the frame. With no dock the two are the same rectangle; with one, a
+sweep over every reachable caret column and a range of widths says they part
+company in exactly two places, and only two.
+
+**Centred popups, whenever a dock is open.** The painter centres in the column,
+so a modal slides sideways when a dock opens and sits off-centre in the window
+for as long as it is there. The surfaces that use `Centered` and
+`CenteredOverlay` are modals — workspace trust, Live Grep's 80% overlay — and a
+modal centres on the window in every other piece of software. Taking the frame
+is the conventional answer, and it also stops the popup moving because of
+something unrelated to it.
+
+**A popup wider than the chrome column.** The painter pins `x` to the column's
+left edge, and `clamp_rect_to_bounds` then cuts the right end off. The tree
+pushes it flush to the window's right edge: whole, lying over the dock.
+Truncation loses content; overlap loses none. A floating surface over a panel is
+what floating means.
+
+*Not* a divergence, though it looks like one: a caret to the **left** of the
+dock's edge, which the painter guards with `.max(area.x)`. The caret is in the
+buffer and the buffer is inside the chrome column, so the input is unreachable —
+the guard defends against a state that cannot occur.
+
+This is the one finding where the ledger's usual instinct is inverted. Elsewhere
+a difference is a thing to justify or undo; here the painter's rule is the
+accident — it follows from *which rectangle happened to be passed in*, not from
+a decision anyone made about popups — and matching it would have meant adding a
+"confine this layer to that region" concept to `fresh-ui` with no other caller.
+The probe is what settled it: the concept looked necessary until the sweep
+showed the disagreement was two rules wide, both of them improvements.
+
 ## What this retires
 
 * `ChromeLayout::popup_areas` and `global_popup_areas` — the last two entries in
