@@ -2775,6 +2775,7 @@ impl Editor {
                 ),
                 selected_hint: p.accept_key_hint.clone(),
             },
+            transient: p.transient,
         };
         let mut out: Vec<Placed> = Vec::new();
         let state = self.active_state();

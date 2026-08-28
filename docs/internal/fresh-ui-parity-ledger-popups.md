@@ -238,37 +238,35 @@ a decision anyone made about popups — and matching it would have meant adding 
 The probe is what settled it: the concept looked necessary until the sweep
 showed the disagreement was two rules wide, both of them improvements.
 
-### I. Dismissal claims the press, and a transient popup's must not — *open*
+### I. Dismissal claims the press, and a transient popup's must not — *closed*
 
-The two guards (`chrome:transient_guard`, `chrome:popup_guard`) are the last
-part of this surface still answered outside the tree, and `Dismiss` is the
-concept that should replace them. It does not fit yet, for one reason.
+The two guards (`chrome:transient_guard`, `chrome:popup_guard`) were the last
+part of this surface answered outside the tree, and `Dismiss` was the concept
+that should replace them. It did not fit, for one reason.
 
 `dismiss_for_pointer` runs for any button and *claims* for the primary one, and
 the comment at that site says why: "a left click outside a menu is spent closing
 it — that is the whole gesture." True for a menu. Not true for a hover popup:
-the guards dismiss and return `PassAfter`, so clicking into the buffer while a
-tooltip is up both dismisses it and places the cursor. Under `Dismiss` the first
-click would be eaten, which is a tooltip charging the user a click to get rid of
-it.
+the guards dismissed and returned `PassAfter`, so clicking into the buffer while
+a tooltip is up both dismisses it and places the cursor. Under `Dismiss` that
+first click would have been eaten — a tooltip charging the user a click to get
+rid of it.
 
-So this needs `Dismiss` to be able to say "act, do not claim" — the rule the
-wheel already follows two hundred lines above it ("act, and claim only when the
-act was the whole of it"), applied to the pointer. That is a small addition and
-it meets the base-PR test — no caller can correct a claim after the fact — but
-it is a *fourth* library change for one wave, so it is written down here rather
-than made in passing.
+So `Dismiss` says which of the two it is. `pass_through` is the rule the wheel
+already follows two hundred lines above it — act, and claim only when the act
+was the whole of it — applied to the pointer, and it is what a transient popup's
+layer declares. The claim is what the *host* is told; the tree's own handlers
+run either way, which is the distinction the test pins.
 
-Until then the guards stay, and are correct where they are: they run in the
-walk beneath the tree, which is where an unmigrated rule belongs.
+Both guards are gone, and `is_mouse_over_any_popup` with them.
 
-**One thing to fix at the same time.** `dismiss_for_pointer` decides "inside the
-layer" with `hit_test`, which is the topmost path only — the same first-path
-assumption that was wrong in `scroll_chain` and `scrollbar_hit`. It is not
-reachable today (a press on a popup's own transparent title strip still yields a
-path through the layer), so it is recorded rather than changed: a speculative
-fix with no failing test is what §6's "start writing an executable probe" is
-against.
+**One thing fixed at the same time.** `dismiss_for_pointer` decided "inside the
+layer" from `hit_test`, the topmost path only — the same first-path assumption
+that was wrong in `scroll_chain` and `scrollbar_hit`. A popup whose own title
+strip is transparent puts the press on a path that reaches behind it too, and
+only one of the two says the press was inside; this now asks every path. It was
+recorded as unreachable when the guards still stood, and became reachable the
+moment the layer started declaring its own dismissal.
 
 ## What this retires
 
@@ -295,8 +293,8 @@ Written before the wave; what follows each item is what actually happened.
   draws. What did change is its rank: `z = 150` was there to beat the shell's
   background surfaces, and anything above `SHELL_BACKGROUND_Z` now makes the
   tree be skipped for every point inside a popup. It runs as the floor beneath
-  the tree, which is where an unmigrated part belongs. The two dismissal guards
-  are still live and are the next thing to move.
+  the tree, which is where an unmigrated part belongs. **The two dismissal
+  guards are gone** — see finding I.
 * `ChromeLayout::popup_areas` and `global_popup_areas` — the last two entries in
   the paint-recorded roster that this migration can reach. (`workspace_trust_dialog`
   and `Window::file_browser_layout` are the two modals, which come after.)

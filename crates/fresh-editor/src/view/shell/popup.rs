@@ -176,6 +176,9 @@ pub struct Placed {
     pub size: (u16, u16),
     /// What it shows.
     pub body: Body,
+    /// Whether a pointer landing outside it dismisses it — a hover popup or
+    /// signature help, as against an action popup that waits to be answered.
+    pub transient: bool,
 }
 
 /// A popup's content, as the shell describes it.
@@ -221,7 +224,18 @@ pub fn placed_layers(ps: &[Placed]) -> Vec<Node<UiMsg>> {
     ps.iter()
         .enumerate()
         .map(|(i, p)| {
-            placed(&p.position, p.at).key(popup_key(i)).child(
+            let mut l = placed(&p.position, p.at).key(popup_key(i));
+            if p.transient {
+                // **Dismissed by a press outside, and the press goes on.**
+                // The guards this replaces returned `PassAfter` for exactly
+                // this reason: clicking into the buffer while a tooltip is up
+                // hides it *and* moves the caret. Spending the press would
+                // charge the user a click to get rid of a tooltip.
+                l = l
+                    .dismiss(fresh_ui::Dismiss::OUTSIDE_POINTER.passing_through())
+                    .on_dismiss(|_| UiMsg::Ui(UiFact::PopupDismissTransient));
+            }
+            l.child(
                 body(&p.body)
                     .w(Sizing::Cells(p.size.0))
                     .h(Sizing::Cells(p.size.1)),

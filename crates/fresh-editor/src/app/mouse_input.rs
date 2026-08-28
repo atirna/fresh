@@ -982,28 +982,6 @@ impl Editor {
         hit_tester.is_over_transient_popup(col, row)
     }
 
-    /// Check if mouse position is over any popup (including non-transient ones like completion)
-    pub(super) fn is_mouse_over_any_popup(&self, col: u16, row: u16) -> bool {
-        // Editor-level popup overlays absorb every click within their outer
-        // rect so the buffer below doesn't receive a stray cursor placement.
-        for (_, popup_area, _, _, _) in &self.active_chrome().global_popup_areas {
-            if in_rect(col, row, *popup_area) {
-                return true;
-            }
-        }
-        // The prompt's suggestions popup also absorbs clicks across its full
-        // outer rect (border + items): clicking the chrome must not move the
-        // buffer cursor below.
-        if let Some(outer) = self.active_chrome().suggestions_outer_area {
-            if in_rect(col, row, outer) {
-                return true;
-            }
-        }
-        let layouts = popup_areas_to_layout_info(&self.active_chrome().popup_areas);
-        let hit_tester = PopupHitTester::new(&layouts, &self.active_state().popups);
-        hit_tester.is_over_popup(col, row)
-    }
-
     /// Check if mouse position is over the file browser popup
     pub(super) fn is_mouse_over_file_browser(&self, col: u16, row: u16) -> bool {
         self.active_window()

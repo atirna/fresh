@@ -892,6 +892,7 @@ impl Editor {
             // resolved a row.
             UiFact::ExplorerBodyPress => self.take_focus_for_file_explorer(),
             UiFact::PopupSelect(i) => self.select_popup_item(i),
+            UiFact::PopupDismissTransient => self.dismiss_transient_popups(),
             // The list row knew its own index; both of these used to be a
             // coordinate hit-test that resolved one.
             UiFact::SuggestionSelect(i) => {

@@ -15,7 +15,10 @@ pub(crate) struct Popups;
 
 impl ChromeComponent for Popups {
     fn collect(&self, ed: &Editor, t: &mut ChromeTreeBuilder) {
-        t.full("chrome:transient_guard", 175);
+        // No dismiss guards. A transient popup's layer declares
+        // `Dismiss::OUTSIDE_POINTER.passing_through()`, which is these two
+        // boxes exactly: dismissed by a press outside it, and the press goes
+        // on to what it was aimed at — the `PassAfter` both arms returned.
         // No scrollbar box. The bar is the viewport's, and `hit.rs` owns the
         // press on its gutter and the drag that follows — the same rail the
         // prompt's list stopped carrying.
@@ -51,9 +54,6 @@ impl ChromeComponent for Popups {
         for area in &ed.active_chrome().popup_areas {
             opaque_popup(t, area.1);
         }
-        // Block-or-dismiss guard for transient popups on double/
-        // triple-click: outside every popup, dismiss and keep routing.
-        t.full("chrome:popup_guard", 140);
     }
 
     fn hover(&self, ed: &mut Editor, bx: &LayoutBox, col: u16, row: u16) -> Option<HoverTarget> {
@@ -84,15 +84,6 @@ impl ChromeComponent for Popups {
     ) -> AnyhowResult<Disposition> {
         if ev.press == PointerPress::Left {
             return match bx.kind {
-                // Outside every popup: dismiss transients, keep
-                // routing (act-then-continue guard).
-                "chrome:transient_guard" => {
-                    if !ed.is_mouse_over_any_popup(ev.col, ev.row) {
-                        ed.dismiss_transient_popups();
-                        return Ok(Disposition::PassAfter);
-                    }
-                    Ok(Disposition::Pass)
-                }
                 "chrome:popups" => {
                     if let Some(r) = ed
                         .handle_click_global_popups(ev.col, ev.row)
@@ -116,17 +107,6 @@ impl ChromeComponent for Popups {
             // would also stop them, but an explicit block keeps the
             // guard's dismiss half unambiguous).
             "chrome:popups" => Ok(Disposition::Consumed),
-            // Outside every popup: dismiss transients and keep
-            // routing (act-then-continue guard).
-            "chrome:popup_guard" => {
-                if ed.is_mouse_over_any_popup(ev.col, ev.row) {
-                    // Defensive: rect sources for the boxes and this
-                    // check could drift; blocking stays correct.
-                    return Ok(Disposition::Consumed);
-                }
-                ed.dismiss_transient_popups();
-                Ok(Disposition::PassAfter)
-            }
             _ => Ok(Disposition::Pass),
         }
     }

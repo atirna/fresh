@@ -137,6 +137,9 @@ pub enum UiFact {
     /// it is — the coordinate hit-test in `chrome::Popups` recovered an index
     /// the row already had.
     PopupSelect(usize),
+    /// A pointer landed outside a transient popup, which is what dismisses one.
+    /// The layer declares the condition; hiding the popup is the app's move.
+    PopupDismissTransient,
     /// A pointer moved the suggestion selection to this row.
     SuggestionSelect(usize),
     /// A double-click confirmed this suggestion — the same path Enter takes.
