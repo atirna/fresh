@@ -264,7 +264,7 @@ use crate::types::{LspLanguageConfig, LspServerConfig};
 use crate::view::file_tree::{FileTree, FileTreeView};
 use crate::view::prompt::PromptType;
 use crate::view::split::{SplitManager, SplitViewState};
-use crate::view::ui::{SplitRenderer, StatusBarRenderer, SuggestionsRenderer};
+use crate::view::ui::{SplitRenderer, StatusBarRenderer};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
