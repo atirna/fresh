@@ -1726,6 +1726,27 @@ list.
    They do mean the wave is "the grid **and** the pane", not "the grid, then
    the pane later".
 
+   **And the real blocker is the model's query, not the description.** A tree
+   that recursed over `SplitNode` calling `split_rect_ext` would agree with
+   `get_leaves_with_rects` by construction — one rule, two walks — but it would
+   still be two walks, and the goal is not to add one. The end state is that
+   the tree *is* the layout and `get_leaves_with_rects` becomes a read of it;
+   `WindowLayoutCache::split_areas` already holds exactly that answer.
+
+   What stops the swap is that `SplitManager::get_visible_buffers` has around
+   eight callers outside the render path — `plugin_dispatch`, `window`,
+   `composite_buffer_actions`, `lifecycle`, `terminal`, `app::mod` — and they
+   are not all asking the same question. Most want "where are the leaves right
+   now", which is a read. At least one (`composite_buffer_actions`) passes a
+   *constructed* rectangle and wants the pure function: "where would they be in
+   a box this size". Those two need different answers, and today one signature
+   serves both by being a pure function everybody re-runs.
+
+   So S5 opens with a model-side decision — split that query into a read and a
+   hypothetical — and only then does the description land. Attempting the
+   description first is what produces the second walk this entry exists to
+   forbid.
+
    **The order, therefore:**
    1. A leaf host id space (`HostRegion` is a small fixed enum; a leaf's id is
       its `LeafId`, tagged) and a `HostTarget::{Region, Leaf}` for the fold's
