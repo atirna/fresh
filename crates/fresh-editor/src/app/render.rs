@@ -2752,19 +2752,19 @@ impl Editor {
     /// **Not yet handed to the frame.** `SuggestionsRenderer::render_with_hover`
     /// still draws this list, and only one of the two may draw it: the layer
     /// paints in the overlay band and would land on top of the painter's cells.
-    /// One thing has to move before the painter goes, and it is a concept
-    /// rather than a line count:
+    /// Every rule is now expressed and covered: the rows, the four-column yield
+    /// order with its ellipsis and its truncation direction, the selection, a
+    /// plugin's styled description spans, the scrollbar, single- and
+    /// double-click, the window (`prompt::suggestions_window` reads it back off
+    /// the tree, so `Prompt::scroll_offset` stops being one number that five
+    /// places write to), and the placement above the prompt row.
     ///
-    /// * **The window.** The painter reads `Prompt::scroll_offset`, and so do
-    ///   the wheel and scrollbar handlers and the click rail's `start_idx`. A
-    ///   `List` owns its window through the viewport, so until the rail moves
-    ///   too, the two would disagree about which row a click is on. Needs
-    ///   `List` to accept a controlled offset — `viewport().scroll_at` is
-    ///   already the library's spelling for it — and to report when it changes.
-    /// Everything else is done and covered: the rows, the four-column yield
-    /// order with its ellipsis and its truncation direction, the selection,
-    /// a plugin's styled description spans, the scrollbar, the click, and the
-    /// placement above the prompt row.
+    /// What is left is a swap rather than a concept: the popup's own chrome —
+    /// its border, its two-cell left margin, the background under its unused
+    /// rows — and moving the click rail off the recorded rectangles in
+    /// `ChromeLayout` and onto the layer. Both prompts have to move together,
+    /// because the overlay one shares `suggestions_scrollbar_rect` and the
+    /// scroll offset with this one.
     #[allow(dead_code)]
     fn suggestions_description(&self) -> Option<crate::view::shell::prompt::Suggestions> {
         use crate::view::shell::prompt::{SuggestionRow, Suggestions};
