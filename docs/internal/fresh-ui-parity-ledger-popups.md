@@ -238,6 +238,38 @@ a decision anyone made about popups — and matching it would have meant adding 
 The probe is what settled it: the concept looked necessary until the sweep
 showed the disagreement was two rules wide, both of them improvements.
 
+### I. Dismissal claims the press, and a transient popup's must not — *open*
+
+The two guards (`chrome:transient_guard`, `chrome:popup_guard`) are the last
+part of this surface still answered outside the tree, and `Dismiss` is the
+concept that should replace them. It does not fit yet, for one reason.
+
+`dismiss_for_pointer` runs for any button and *claims* for the primary one, and
+the comment at that site says why: "a left click outside a menu is spent closing
+it — that is the whole gesture." True for a menu. Not true for a hover popup:
+the guards dismiss and return `PassAfter`, so clicking into the buffer while a
+tooltip is up both dismisses it and places the cursor. Under `Dismiss` the first
+click would be eaten, which is a tooltip charging the user a click to get rid of
+it.
+
+So this needs `Dismiss` to be able to say "act, do not claim" — the rule the
+wheel already follows two hundred lines above it ("act, and claim only when the
+act was the whole of it"), applied to the pointer. That is a small addition and
+it meets the base-PR test — no caller can correct a claim after the fact — but
+it is a *fourth* library change for one wave, so it is written down here rather
+than made in passing.
+
+Until then the guards stay, and are correct where they are: they run in the
+walk beneath the tree, which is where an unmigrated rule belongs.
+
+**One thing to fix at the same time.** `dismiss_for_pointer` decides "inside the
+layer" with `hit_test`, which is the topmost path only — the same first-path
+assumption that was wrong in `scroll_chain` and `scrollbar_hit`. It is not
+reachable today (a press on a popup's own transparent title strip still yields a
+path through the layer), so it is recorded rather than changed: a speculative
+fix with no failing test is what §6's "start writing an executable probe" is
+against.
+
 ## What this retires
 
 Written before the wave; what follows each item is what actually happened.
