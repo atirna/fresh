@@ -1003,6 +1003,26 @@ impl Editor {
             // places used to make: an outside-press guard returning
             // `PassAfter`, an `on_key` that cleared the field and returned
             // `None`, and the popup's own opacity in between.
+            // The file-open dialog. Each body is the arm
+            // `chrome::FileBrowser` ran; the box that decided *which* — and
+            // its full-frame stand-in for the frame before the first paint —
+            // is gone.
+            UiFact::BrowserPress { x, y, double } => {
+                if double {
+                    self.handle_file_open_double_click(x, y);
+                } else {
+                    self.handle_file_open_click(x, y);
+                }
+            }
+            UiFact::BrowserHover { x, y } => {
+                let target = self.compute_file_browser_hover(x, y);
+                if self.active_window().mouse_state.hover_target != target {
+                    self.active_window_mut().mouse_state.hover_target = target;
+                }
+            }
+            UiFact::BrowserScroll(delta) => {
+                self.handle_file_open_scroll(delta);
+            }
             UiFact::ThemeInfoDismiss => self.active_window_mut().theme_info_popup = None,
             UiFact::ThemeInspect { x, y } => {
                 if let Err(e) = self.show_theme_info_popup(x, y) {

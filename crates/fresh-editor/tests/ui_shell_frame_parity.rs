@@ -190,6 +190,7 @@ fn combos() -> Vec<Frame> {
                             // region, and neither does the theme inspector.
                             popups: Vec::new(),
                             theme_info: None,
+                            browser: None,
                             // The list is a layer, out of flow: it moves no
                             // rectangle in the frame, which is the same reason
                             // `menu` is None above.
@@ -291,6 +292,7 @@ fn squeeze_band_starves_a_different_row_than_ratatui() {
         menu_keys: Vec::new(),
         popups: Vec::new(),
         theme_info: None,
+        browser: None,
         suggestions: None,
         card: None,
     };

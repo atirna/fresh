@@ -1170,7 +1170,7 @@ impl Editor {
 
         // Render file browser popup or suggestions popup AFTER status bar + prompt,
         // so they overlay on top of both (fixes bottom border being overwritten by status bar)
-        self.render_prompt_popups(frame, prompt_line_area, chrome_area);
+        self.render_prompt_popups(frame, chrome_area);
 
         // Render popups from the active buffer state
         // Clone theme to avoid borrow checker issues with active_state_mut()
@@ -2655,6 +2655,13 @@ impl Editor {
             prompt_row_visible,
         } = self.bottom_row_flags();
         let (dock_area, chrome_area) = split;
+        // The dialog's height, which the painter computed from the prompt
+        // row's `y`: the space above it, less the menu bar's row, capped at
+        // 20. Its *placement* is the tree's — above the prompt row and as wide
+        // as it — so this is the one number left.
+        let browser = has_file_browser.then(|| crate::view::shell::file_browser::Browser {
+            height: chrome_area.height.saturating_sub(2).min(20),
+        });
         let menu_bar_visible = self.active_window().menu_bar_visible;
         // One walk for the whole menu: the bar's labels and, when one is open,
         // its dropdown chain. Skipped entirely when the bar is hidden.
@@ -2710,6 +2717,7 @@ impl Editor {
         let theme_info = self.theme_info_description();
         crate::view::shell::frame::Frame {
             theme_info,
+            browser,
             menu_bar: menu_bar_visible,
             status_bar: status_row,
             search_options,
@@ -3634,13 +3642,7 @@ impl Editor {
 
     /// Render file browser or suggestions popup as overlay above the prompt line.
     /// Called after status bar + prompt so the popup draws on top of both.
-    fn render_prompt_popups(
-        &mut self,
-        frame: &mut Frame,
-        prompt_area: ratatui::layout::Rect,
-        chrome: ratatui::layout::Rect,
-    ) {
-        let width = chrome.width;
+    fn render_prompt_popups(&mut self, frame: &mut Frame, chrome: ratatui::layout::Rect) {
         let Some(prompt) = &self.active_window_mut().prompt else {
             return;
         };
@@ -3663,14 +3665,21 @@ impl Editor {
             let keybindings = self.keybindings.read().unwrap();
             let kb_clone = keybindings.clone();
             drop(keybindings);
-            let max_height = prompt_area.y.saturating_sub(1).min(20);
-            let popup_area = ratatui::layout::Rect {
-                // Anchor to the prompt line's x (right of a left dock,
-                // if any) so the picker never overlaps the dock column.
-                x: prompt_area.x,
-                y: prompt_area.y.saturating_sub(max_height),
-                width,
-                height: max_height,
+            // Where the tree put it. The three lines this replaces derived
+            // the same rectangle from the prompt row's own — an `x` copied
+            // from it "so the picker never overlaps the dock column", a
+            // `width` taken from the chrome area beside it, and a `y` that
+            // subtracted the height back off. `Place::Above` with
+            // `stretch_to_anchor` is all three, said once, against the row
+            // itself.
+            let Some(popup_area) = self.shell_ui.as_ref().and_then(|ui| {
+                crate::view::shell::rect_of(
+                    ui,
+                    &crate::view::shell::file_browser::key(),
+                    frame.area(),
+                )
+            }) else {
+                return;
             };
             // Web renders the browser natively from `file_browser_view`; skip
             // its cell drawing (layout, spans and the list viewport are still

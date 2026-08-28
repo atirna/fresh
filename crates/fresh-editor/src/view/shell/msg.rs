@@ -196,6 +196,16 @@ pub enum UiFact {
     ThemeInfoButtonHover(bool),
     /// Ctrl+Right-Click: inspect the theme keys behind this screen cell.
     ThemeInspect { x: u16, y: u16 },
+    /// A left press in the file-open dialog, in screen coordinates. The
+    /// dialog's elements are cell spans its painter recorded, so the tree
+    /// reports where and the hit test is the painter's — the same seam as
+    /// `CardToolbarPress`.
+    BrowserPress { x: u16, y: u16, double: bool },
+    /// The pointer moved over the dialog. The hover target is resolved against
+    /// the same recorded spans.
+    BrowserHover { x: u16, y: u16 },
+    /// The wheel over the dialog. Positive is down.
+    BrowserScroll(i32),
 }
 
 /// What a menu-bar navigation step does to the open chain.

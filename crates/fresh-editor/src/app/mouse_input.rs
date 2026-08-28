@@ -981,14 +981,6 @@ impl Editor {
         hit_tester.is_over_transient_popup(col, row)
     }
 
-    /// Check if mouse position is over the file browser popup
-    pub(super) fn is_mouse_over_file_browser(&self, col: u16, row: u16) -> bool {
-        self.active_window()
-            .file_browser_layout
-            .as_ref()
-            .is_some_and(|layout| layout.contains(col, row))
-    }
-
     // `split_at_position` lives on `impl Window` — call it via
     // `self.active_window().split_at_position(col, row)`.
 

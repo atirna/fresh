@@ -122,6 +122,9 @@ pub struct Frame {
     /// everything: it inspects the cell under *any* chrome, so it has to be
     /// visible over that chrome too.
     pub theme_info: Option<super::theme_info::ThemeInfo>,
+    /// The file-open dialog, when one is open. Its interior is still a
+    /// painter's; what the tree owns is where it goes and what it absorbs.
+    pub browser: Option<super::file_browser::Browser>,
 }
 
 impl Default for Frame {
@@ -142,6 +145,7 @@ impl Default for Frame {
             popups: Vec::new(),
             card: None,
             theme_info: None,
+            browser: None,
         }
     }
 }
@@ -310,6 +314,13 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     };
     let frame = match &f.menu {
         Some(menu) => frame.child(super::context_menu::context_menu(menu)),
+        None => frame,
+    };
+    // The file-open dialog, over the frame and under the inspector — the
+    // order `chrome:file_browser`'s `z = 130` and `chrome:theme_inspect`'s
+    // 190 had.
+    let frame = match &f.browser {
+        Some(b) => frame.child(super::file_browser::layer(b)),
         None => frame,
     };
     // The inspector, over everything — the trigger that opens it fires under
