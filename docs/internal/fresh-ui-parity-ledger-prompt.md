@@ -83,7 +83,7 @@ Two occurrences was a coincidence; three is a missing concept. The options:
 first time the migration would pay to extend the library rather than route
 around it, and it is exactly the check that keeps the thesis honest.
 
-### B. `List` cannot tell a single click from a double — *found while building*
+### B. `List` cannot tell a single click from a double — *closed, `List::activate_on`*
 
 The widget wires rows to `GestureKind::Click` and lets `on_activate` win over
 `on_select` on that same single click:
@@ -105,11 +105,21 @@ double-click rule has **no expression** and is not yet carried.
 editor's own multi-click detector hands it in on every press. So the gap is in
 `List`'s handler signature (`Fn(usize) -> M`), not in the model underneath.
 
-**Recommendation:** an activation handler that receives the click count, so
-"single selects, double commits" is a property of the list rather than a
-coordinate hit-test beside it. Deliberately not done in the same pass as
-`Node::priority`: one library change at a time, each verified in CI before the
-next.
+**Closed by `List::activate_on(Activate::Click | Activate::DoubleClick)`.** Not
+a click-count on the handler, in the end: which click commits is not a property
+of one activation, it is what kind of list this is. A palette row commits on the
+first click because selecting it *is* choosing it; a file list selects on the
+first and opens on the second because the user may want to look at what they
+picked. Stated once, on the list, it also says what the *first* click of a
+double-click list does — which a per-call count would have left to each handler
+to work out.
+
+`Activate::Click` is the default, so every existing caller and every test on
+them is unchanged. The prompt now sets both handlers: `on_select` carries the
+`click_confirms` decision it already carried, and `on_activate` is the
+unconditional commit. `handle_click_suggestions` and
+`handle_click_suggestions_confirm` — the two coordinate hit-tests that recovered
+an index the row already knew — have nothing left to do once the rail moves.
 
 ### C. Position-blind wheel capture
 

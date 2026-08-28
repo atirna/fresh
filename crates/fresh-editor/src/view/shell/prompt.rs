@@ -353,10 +353,14 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
     // editor-side; what the list removes is the coordinate hit-test in front
     // of it (`handle_click_suggestions` recovering an index the row knew).
     //
-    // `on_activate` is deliberately not set. The widget fires it on a *single*
-    // click and lets it win over `on_select`, so setting both would confirm
-    // every click — see the double-click gap in the parity ledger.
-    .on_select(|i| UiMsg::Ui(UiFact::SuggestionSelect(i)));
+    // A double click always commits, `click_confirms` or not: it is the
+    // mouse-only commit path for the prompts that preview on a single click.
+    // Both handlers can be set now that `activate_on` says *which* click
+    // activates — before it, the widget fired activation on the first and let
+    // it win, so setting both confirmed every click.
+    .activate_on(fresh_ui::widgets::Activate::DoubleClick)
+    .on_select(|i| UiMsg::Ui(UiFact::SuggestionSelect(i)))
+    .on_activate(|i| UiMsg::Ui(UiFact::SuggestionConfirm(i)));
     if let Some(i) = selected {
         list = list.selected(i);
     }
@@ -483,6 +487,47 @@ mod tests {
             msgs.iter()
                 .any(|m| matches!(m, UiMsg::Ui(UiFact::SuggestionSelect(2)))),
             "got {msgs:?}"
+        );
+    }
+
+    /// **Ledger rule 3, and finding B closed: a double click confirms.**
+    ///
+    /// The first click selects — `select_suggestion` decides for itself
+    /// whether that also commits — and the second always commits, which is the
+    /// mouse-only commit path for a prompt that previews on a single click.
+    #[test]
+    fn a_double_click_confirms_and_a_single_one_only_selects() {
+        let mut ui = laid_out(
+            Suggestions {
+                rows: rows(5),
+                selected: Some(0),
+            },
+            40,
+            8,
+        );
+        let r = ui.rect_of(ui.find_by_key(&row_key(2)).expect("row 2"));
+        let at = Point::new(r.x + 1, r.y);
+        let mut click = |n: u8| {
+            let mut out = ui
+                .dispatch(Input::press_n(at, MouseButton::Left, Mods::NONE, n))
+                .msgs;
+            out.extend(
+                ui.dispatch(Input::release(at, MouseButton::Left, Mods::NONE))
+                    .msgs,
+            );
+            out
+        };
+        assert!(
+            click(1)
+                .iter()
+                .any(|m| matches!(m, UiMsg::Ui(UiFact::SuggestionSelect(2)))),
+            "the first click selects"
+        );
+        assert!(
+            click(2)
+                .iter()
+                .any(|m| matches!(m, UiMsg::Ui(UiFact::SuggestionConfirm(2)))),
+            "the second confirms"
         );
     }
 
