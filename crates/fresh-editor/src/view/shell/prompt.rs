@@ -132,6 +132,16 @@ impl Place {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Suggestions {
     pub rows: Vec<SuggestionRow>,
+    /// Which rows the list is showing, as `(first, count)`.
+    ///
+    /// Only the column widths use it, and only because they are measured from
+    /// the rows on screen — `ColumnLayout::compute` took
+    /// `visible_suggestions`, so one very long name at the far end of a
+    /// thousand-row list does not squeeze every description above it. The
+    /// window itself belongs to the viewport; this is last frame's, read back
+    /// through `suggestions_window`, which is exact except on the frame a
+    /// scroll lands.
+    pub window: Option<(usize, usize)>,
     /// Which row is selected, if any. Controlled: the editor holds it.
     pub selected: Option<usize>,
     pub place: Place,
@@ -296,9 +306,80 @@ fn span_run(sp: &DescriptionSpan, row: &str) -> Run {
     Run::themed(sp.text.clone(), name)
 }
 
+/// `ColumnLayout`'s widths, ported rather than reconstructed.
+///
+/// An earlier draft of this measured every column from its content, which is
+/// what the columns *look* like they are. They are not: the keybinding and
+/// source columns are fixed cell counts, present whenever any row in the list
+/// has one, and the name column has a floor of thirty. Getting that wrong made
+/// the descriptions ragged, and none of the width tests here noticed — they
+/// each asked about one column. `the_row_matches_the_painters_columns` is the
+/// guard now, and it is a sweep against a port of `ColumnLayout::compute`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Columns {
+    name: u16,
+    keybinding: u16,
+    source: u16,
+}
+
+/// The widths `ColumnLayout` used, with the names it used.
+const BASE_NAME_W: u16 = 30;
+const KEYBINDING_W: u16 = 12;
+const SOURCE_W: u16 = 15;
+
+impl Columns {
+    /// Measured over the rows on screen, which is what `ColumnLayout::compute`
+    /// did.
+    ///
+    /// Measuring the whole list instead is tempting — the columns would hold
+    /// still while scrolling — and it is wrong: one fifty-cell command name
+    /// anywhere in a thousand-row palette would take the name column to fifty
+    /// cells on every row, and every description would elide to nothing. The
+    /// visual snapshot is what showed that; it is a column of `…` where the
+    /// help text used to be.
+    fn of(rows: &[SuggestionRow], window: Option<(usize, usize)>) -> Columns {
+        use crate::primitives::display_width::str_width;
+        let (first, count) = window.unwrap_or((0, MAX_VISIBLE_SUGGESTIONS));
+        let rows: &[SuggestionRow] = rows
+            .get(first..(first + count).min(rows.len()))
+            .unwrap_or(rows);
+        let longest = rows
+            .iter()
+            .map(|r| str_width(&r.name) as u16)
+            .max()
+            .unwrap_or(0);
+        Columns {
+            // "Size the column to the longest name so names are never
+            // truncated while room remains" — with a floor, so a list of short
+            // names still has a column rather than a ragged edge. The cap
+            // against the available width is `priority`'s job.
+            name: longest.max(BASE_NAME_W),
+            // Fixed, and present whenever *any* row has one: a row without a
+            // keybinding still leaves the space, or the descriptions stop
+            // lining up.
+            keybinding: rows
+                .iter()
+                .any(|r| r.keybinding.is_some())
+                .then_some(KEYBINDING_W)
+                .unwrap_or(0),
+            source: rows
+                .iter()
+                .any(|r| r.source.is_some())
+                .then_some(SOURCE_W)
+                .unwrap_or(0),
+        }
+    }
+}
+
 /// One row's four columns, in paint order, each carrying the priority that says
 /// when it yields.
-fn node_row(index: usize, r: &SuggestionRow, st: RowState, name_elide: Elide) -> Node<UiMsg> {
+fn node_row(
+    index: usize,
+    r: &SuggestionRow,
+    st: RowState,
+    name_elide: Elide,
+    cols: Columns,
+) -> Node<UiMsg> {
     let t = theme(r.disabled, st);
     // `ColumnLayout::left_margin`, as a cell rather than as two leading spaces
     // in a span. It carries the row's own fill because the row container
@@ -310,52 +391,73 @@ fn node_row(index: usize, r: &SuggestionRow, st: RowState, name_elide: Elide) ->
             .theme(t.clone())
             .key(name_key(index))
             .elide(name_elide)
+            .w(Sizing::Cells(cols.name))
             .priority(yields_last::NAME),
     );
 
-    // A flexible gap rather than padding: it is what puts the trailing columns
-    // at the right edge, and it is also `ColumnLayout::column_spacing` — the
-    // painter's fixed two cells between columns, here as whatever is left over,
-    // with `min_w` keeping the painter's floor when the row is tight.
-    cells.push(row().flex(1).min_w(COLUMN_SPACING));
-
-    // The description carries no colour of its own: the painter draws it in
-    // `base_style`, so it is the row. A plugin's styled description is the
-    // same run with its pieces named — one node either way, because the pieces
-    // are one logical string and must wrap and elide as one.
+    // `ColumnLayout`'s order, which is not the order the fields happen to be
+    // declared in: name, keybinding, description, source. An earlier draft
+    // emitted the description second and put one flexible gap after the name,
+    // which jammed every trailing column against its neighbour —
+    // `...action)welcome` — and swapped two of them. The visual snapshot is
+    // what caught it; the width tests here could not, because each was about
+    // one column at a time.
+    let gap = || row().w(Sizing::Cells(COLUMN_SPACING));
+    // The gap and the column are pushed whether or not *this* row has a
+    // keybinding: the column exists because some row in the list does, and a
+    // row that omits it still has to leave the space or the descriptions stop
+    // lining up. `ColumnLayout` said the same with `has_keybinding`.
+    if cols.keybinding > 0 {
+        cells.push(gap());
+        cells.push(
+            text(r.keybinding.clone().unwrap_or_default())
+                .theme(keybinding_theme(r.disabled, st))
+                .w(Sizing::Cells(cols.keybinding))
+                .priority(yields_last::KEYBINDING),
+        );
+    }
+    cells.push(gap());
+    // The description is the column that *fills*: it takes what the fixed ones
+    // leave, which is what puts the source at the right edge, and it is first
+    // to yield when there is nothing left to take. The painter said the same
+    // thing as `available - fixed - source_reserved`.
     match (&r.description_spans, &r.description) {
         (Some(spans), _) => cells.push(
             text_runs(spans.iter().map(|sp| span_run(sp, &t)))
                 .theme(t.clone())
                 .elide(Elide::Tail)
+                .flex(1)
                 .priority(yields_last::DESCRIPTION),
         ),
         (None, Some(d)) => cells.push(
             text(d.clone())
                 .theme(t.clone())
                 .elide(Elide::Tail)
+                .flex(1)
                 .priority(yields_last::DESCRIPTION),
         ),
-        (None, None) => {}
+        (None, None) => cells.push(row().flex(1)),
     }
-    if let Some(k) = &r.keybinding {
+    if cols.source > 0 {
+        cells.push(gap());
+        // Right-aligned within its column, which is what `push_source_column`
+        // did by emitting `width - display_width` spaces before the text. A
+        // flexible spacer is that, and it is a *box* — `align` is a box
+        // property and calling it on a text run panics, which is how this was
+        // found: the palette has sources and the width tests here did not.
         cells.push(
-            text(k.clone())
-                .theme(keybinding_theme(r.disabled, st))
-                .priority(yields_last::KEYBINDING),
-        );
-    }
-    if let Some(sc) = &r.source {
-        cells.push(
-            text(sc.clone())
-                .theme(source_theme(r.disabled, st))
-                .elide(Elide::Tail)
-                .priority(yields_last::SOURCE),
+            row()
+                .w(Sizing::Cells(cols.source))
+                .priority(yields_last::SOURCE)
+                .children([
+                    row().flex(1),
+                    text(r.source.clone().unwrap_or_default())
+                        .theme(source_theme(r.disabled, st))
+                        .elide(Elide::Tail),
+                ]),
         );
     }
 
-    // No theme on the row itself: `row_theme` names it, and a name here would
-    // be overwritten anyway.
     row().h(Sizing::Cells(1)).children(cells)
 }
 
@@ -398,6 +500,7 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
     let rows_for_key = rows_for_row.clone();
     let rows_for_theme = rows_for_row.clone();
     let name_elide = s.name_elide();
+    let cols = Columns::of(&s.rows, s.window);
 
     // `List` reports the state it holds; the names are this module's. Both the
     // row builder and `row_theme` need the state, and only the latter is given
@@ -425,6 +528,7 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
                     RowState::Normal
                 },
                 name_elide,
+                cols,
             ),
             None => row().h(Sizing::Cells(1)),
         },
@@ -686,6 +790,7 @@ mod tests {
                 selected: Some(0),
                 place: Place::AbovePrompt,
                 hints: None,
+                window: None,
             },
             40,
             8,
@@ -719,6 +824,7 @@ mod tests {
                 selected: Some(0),
                 place: Place::AbovePrompt,
                 hints: None,
+                window: None,
             },
             40,
             8,
@@ -766,6 +872,7 @@ mod tests {
                 selected: Some(0),
                 place: Place::AbovePrompt,
                 hints: None,
+                window: None,
             })
         };
         ui.frame(tree(), Size::new(40, 8));
@@ -801,6 +908,7 @@ mod tests {
                 selected: Some(0),
                 place: Place::AbovePrompt,
                 hints: None,
+                window: None,
             },
             40,
             MAX_VISIBLE_SUGGESTIONS as u16,
@@ -831,6 +939,7 @@ mod tests {
             selected: Some(0),
             place: Place::AbovePrompt,
             hints: None,
+            window: None,
         };
         let spec = ui.frame(popup(&s), Size::new(40, 6)).clone();
         assert!(
@@ -870,6 +979,7 @@ mod tests {
                         selected: Some(0),
                         place: Place::AbovePrompt,
                         hints: None,
+                        window: None,
                     }),
                     ..Frame::default()
                 }),
@@ -900,6 +1010,7 @@ mod tests {
                 selected: Some(0),
                 place: Place::AbovePrompt,
                 hints: None,
+                window: None,
             };
             let ui = laid_out(s, 16, 4);
             let spec = ui.spec();
@@ -965,8 +1076,11 @@ mod tests {
             selected: Some(0),
             place: Place::AbovePrompt,
             hints: None,
+            window: None,
         };
-        let ui = laid_out(s, 40, 4);
+        // Wide enough that the description is not elided: the name column has
+        // a thirty-cell floor, and this test is about the span's ink.
+        let ui = laid_out(s, 70, 4);
         let themes: Vec<(String, String)> = ui
             .spec()
             .items
@@ -1027,6 +1141,7 @@ mod tests {
                         selected: Some(0),
                         place: Place::InCard,
                         hints: None,
+                        window: None,
                     }),
                     ..Frame::default()
                 }),
@@ -1075,6 +1190,7 @@ mod tests {
                         selected: Some(0),
                         place: Place::AbovePrompt,
                         hints: None,
+                        window: None,
                     }),
                     ..Frame::default()
                 }),
@@ -1100,6 +1216,7 @@ mod tests {
                     selected: Some(0),
                     place: Place::AbovePrompt,
                     hints: None,
+                    window: None,
                 })),
                 Size::new(60, 40),
             );
@@ -1141,6 +1258,7 @@ mod tests {
                 selected: Some(0),
                 place: Place::AbovePrompt,
                 hints: None,
+                window: None,
             })),
             Size::new(60, 20),
         );
@@ -1179,6 +1297,7 @@ mod tests {
                     selected: Some(0),
                     place: Place::AbovePrompt,
                     hints: None,
+                    window: None,
                 }),
                 Size::new(40, 6),
             );
@@ -1215,6 +1334,7 @@ mod tests {
                     selected: Some(0),
                     place: Place::AbovePrompt,
                     hints: None,
+                    window: None,
                 }),
                 ..Frame::default()
             }),
@@ -1255,17 +1375,19 @@ mod tests {
                 selected: Some(0),
                 place: Place::AbovePrompt,
                 hints: None,
+                window: None,
             };
             let ui = laid_out(s, w, 4);
             ui.rect_of(ui.find_by_key(&name_key(0)).expect("the name column"))
                 .w
         };
-        // Wide enough for both: the name is whole.
-        assert_eq!(one(60), 19, "the name fits at its natural width");
-        // Too narrow for both: the name is still whole — the description gave
-        // up its cells first. 28 rather than 24 because the row now carries
-        // the painter's own gutters: two cells of `left_margin` and two of
-        // `column_spacing` are not the name's to give.
-        assert_eq!(one(28), 19, "the name kept its width; the description paid");
+        // The name column is `max(longest name, 30)` — `ColumnLayout`'s
+        // `actual_max_name_width.max(base_name_width)`, where the floor keeps
+        // a list of short names from having a ragged right edge. The name here
+        // is nineteen cells, so the column is the floor.
+        assert_eq!(one(60), BASE_NAME_W, "the column is its floor");
+        // Squeezed: the name column holds and the description pays, which is
+        // the whole point of `priority`.
+        assert_eq!(one(40), BASE_NAME_W, "the name kept its column");
     }
 }
