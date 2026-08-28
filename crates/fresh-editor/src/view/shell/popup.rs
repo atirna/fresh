@@ -166,7 +166,7 @@ pub fn placed(position: &PopupPosition, at: CaretAnchor) -> Node<UiMsg> {
 /// means the content nodes have to be *in* the tree, which is the step where
 /// the painter stops painting — and doing both at once would leave a
 /// disagreement with nowhere to localise it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Placed {
     pub position: PopupPosition,
     /// Which buffer point the cursor-anchored strategies hang off. The
@@ -174,6 +174,24 @@ pub struct Placed {
     pub at: CaretAnchor,
     /// What the popup asks to occupy, in cells: `(width, height)`.
     pub size: (u16, u16),
+    /// What it shows.
+    pub body: Body,
+}
+
+/// A popup's content, as the shell describes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Body {
+    /// Drawn into the top border. `render_title` already resolved it.
+    pub title: Option<String>,
+    /// A line of muted text above the content, and a blank one after it.
+    pub description: Option<String>,
+    pub content: PopupContent,
+    pub bordered: bool,
+    /// Whether the `[×]` shows. The workspace-trust prompt is a forced choice
+    /// with no dismiss, so it has none.
+    pub dismissible: bool,
+    /// The hint appended to the selected row of a list.
+    pub selected_hint: Option<String>,
 }
 
 /// The region a popup may occupy when it must leave the editor's vertical
@@ -203,11 +221,92 @@ pub fn placed_layers(ps: &[Placed]) -> Vec<Node<UiMsg>> {
     ps.iter()
         .enumerate()
         .map(|(i, p)| {
-            placed(&p.position, p.at)
-                .key(popup_key(i))
-                .child(col().w(Sizing::Cells(p.size.0)).h(Sizing::Cells(p.size.1)))
+            placed(&p.position, p.at).key(popup_key(i)).child(
+                body(&p.body)
+                    .w(Sizing::Cells(p.size.0))
+                    .h(Sizing::Cells(p.size.1)),
+            )
         })
         .collect()
+}
+
+/// A popup: its ring, its ground, the strip on its top border, and its content.
+///
+/// The strip is the library's own answer to a title on a border — "an overlay
+/// strip carrying a title", transparent to the pointer except where the close
+/// button is. `Block::title` put the text *in* the ring and a second
+/// `Paragraph` put `[×]` over it three cells from the right; both are one row
+/// stacked over the frame, and the row says where each sits instead of two
+/// widgets each computing an `x`.
+pub fn body(b: &Body) -> Node<UiMsg> {
+    let inner = col().children([
+        match &b.description {
+            Some(d) => description(d),
+            None => col().h(Sizing::Cells(0)),
+        },
+        content(&b.content, b.selected_hint.as_deref()).flex(1),
+    ]);
+    let framed = frame(b.bordered, inner);
+    // Only a bordered popup has a border to write on.
+    if !b.bordered {
+        return framed;
+    }
+    fresh_ui::stack().children([framed, border_strip(b)])
+}
+
+/// The top border's overlay: the title where `Block::title` put it, and the
+/// close button where the painter's `area.width - 4` put it.
+fn border_strip(b: &Body) -> Node<UiMsg> {
+    let ring = pair("ui.popup_border_fg", "ui.popup_bg");
+    let mut cells: Vec<Node<UiMsg>> = vec![
+        // `Block::title` starts one cell in from the corner.
+        row().w(Sizing::Cells(1)),
+        match &b.title {
+            Some(t) => fresh_ui::text(t.clone()).theme(ring.clone()),
+            None => row().w(Sizing::Cells(0)),
+        },
+        row().flex(1),
+    ];
+    if b.dismissible {
+        cells.push(
+            fresh_ui::gesture(fresh_ui::text("[×]").theme(ring.clone()))
+                .key(CLOSE_KEY.with(|k| k.clone()))
+                .on(
+                    fresh_ui::GestureKind::Press,
+                    Rc::new(|ev: &fresh_ui::Event| {
+                        if ev.button != fresh_ui::MouseButton::Left {
+                            return None;
+                        }
+                        ev.stop();
+                        Some(UiMsg::Action(
+                            crate::input::keybindings::Action::PopupCancel,
+                        ))
+                    }),
+                ),
+        );
+        // The painter left the last column clear.
+        cells.push(row().w(Sizing::Cells(1)));
+    }
+    // **Transparent all the way down, container included.** The strip lies
+    // over the whole popup so its one row can sit on the top border, and the
+    // hit walk stops at the first child that blocks — so an opaque container
+    // here hides the content behind it entirely: no wheel, no row clicks, no
+    // scrollbar. Every node of the strip but the close button is decoration.
+    col()
+        .pointer_mode(fresh_ui::PointerMode::Transparent)
+        .children([
+            row()
+                .h(Sizing::Cells(1))
+                .pointer_mode(fresh_ui::PointerMode::Transparent)
+                .children(cells),
+            row()
+                .flex(1)
+                .pointer_mode(fresh_ui::PointerMode::Transparent),
+        ])
+}
+
+thread_local! {
+    static CLOSE_KEY: Key = Key::Str("popup_close".into());
 }
 
 /// Where the tree put each popup, in the order they were declared.
@@ -230,25 +329,6 @@ pub fn rects_of(ui: &fresh_ui::Ui<UiMsg>, n: usize) -> Vec<ratatui::layout::Rect
             }
         })
         .collect()
-}
-
-/// How big the popup asks to be, in the terms its own fields already use.
-///
-/// `width` is a cell count the popup carries; the height is its content's,
-/// bounded by `max_height`. `CenteredOverlay` overrides both with percentages
-/// of the frame, which is the whole reason that variant exists — Live Grep
-/// wants a stable frame while results stream in, not one that resizes per
-/// keystroke.
-pub fn sized(position: &PopupPosition, width: u16, max_height: u16, n: Node<UiMsg>) -> Node<UiMsg> {
-    match position {
-        PopupPosition::CenteredOverlay {
-            width_pct,
-            height_pct,
-        } => n
-            .w(Sizing::Pct((*width_pct).clamp(1, 100)))
-            .h(Sizing::Pct((*height_pct).clamp(1, 100))),
-        _ => n.w(Sizing::Cells(width)).max_h(max_height),
-    }
 }
 
 /// A popup's frame: its ring and its ground.
@@ -351,11 +431,18 @@ fn list_row(item: &PopupListItem, row_theme: &str, hint: Option<&str>) -> Node<U
 /// overflows.
 pub fn content(c: &PopupContent, selected_hint: Option<&str>) -> Node<UiMsg> {
     match c {
-        PopupContent::Text(lines) => fresh_ui::viewport(
-            fresh_ui::text(lines.join("\n"))
+        // A row per line, not one text node carrying newlines: a viewport
+        // measures its child against the window, so a single node reports the
+        // window's height and the content never overflows — no scrollbar, and
+        // a wheel with nowhere to go. A column's natural height is the sum of
+        // its children, which is what the window has to be compared against.
+        // Each line still wraps on its own, so a long one takes the rows it
+        // needs and the sum stays honest.
+        PopupContent::Text(lines) => fresh_ui::viewport(col().children(lines.iter().map(|l| {
+            fresh_ui::text(l.clone())
                 .wrap()
-                .theme(pair("ui.popup_text_fg", "ui.popup_bg")),
-        )
+                .theme(pair("ui.popup_text_fg", "ui.popup_bg"))
+        })))
         .scrollbar(),
         PopupContent::Markdown(lines) => fresh_ui::viewport(
             col().children(
@@ -384,6 +471,12 @@ pub fn content(c: &PopupContent, selected_hint: Option<&str>) -> Node<UiMsg> {
             )
             .selected(sel)
             .scrollbar()
+            // **The keyboard is the popup's, and the popup is not in this
+            // tree.** Its selection is set here every frame and its keys —
+            // Up, Down, Home, End, Tab to accept — are answered by
+            // `dispatch_popup_keys`. A list in the focus ring would only be
+            // somewhere for Tab to land, and Tab accepts a completion.
+            .focusable(false)
             .row_theme(move |i, st| row_theme(i == sel, st == RowState::Hover))
             .on_select(|i| UiMsg::Ui(UiFact::PopupSelect(i)));
             col().child(fresh_ui::ComponentExt::node(list))

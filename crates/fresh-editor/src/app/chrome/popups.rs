@@ -16,16 +16,23 @@ pub(crate) struct Popups;
 impl ChromeComponent for Popups {
     fn collect(&self, ed: &Editor, t: &mut ChromeTreeBuilder) {
         t.full("chrome:transient_guard", 175);
-        // Each popup's scrollbar track at its painted rect.
-        for area in &ed.active_chrome().popup_areas {
-            if let Some(r) = area.5 {
-                t.rect("chrome:popup_scrollbar", 170, r);
-            }
-        }
+        // No scrollbar box. The bar is the viewport's, and `hit.rs` owns the
+        // press on its gutter and the drag that follows — the same rail the
+        // prompt's list stopped carrying.
+        //
         // Popups are rect-bounded, OPAQUE surfaces: a pointer event
         // inside a popup that its handlers decline dies at the popup
         // box (the scan's opacity gate) instead of falling to content
         // beneath — absorb is a tree property, not a guard box.
+        //
+        // **At the shell's own rank, not above it.** `z = 150` was there to
+        // beat the shell's *background* surfaces back when a popup was a
+        // painted overlay and they were boxes. The popup is a layer in the
+        // shell's tree now, so a rank above `SHELL_BACKGROUND_Z` would make
+        // `placed_surface_outranks_shell` skip the tree for every point inside
+        // a popup — its own rows, its own wheel, its own scrollbar. What is
+        // left here runs as the floor beneath the tree, which is where the
+        // parts that have not migrated belong.
         let opaque_popup = |t: &mut ChromeTreeBuilder, r: ratatui::layout::Rect| {
             let mut b = LayoutBox::plain(
                 "chrome:popups",
@@ -34,7 +41,7 @@ impl ChromeComponent for Popups {
                 r.width as u32,
                 r.height as u32,
             );
-            b.z = 150;
+            b.z = super::SHELL_BACKGROUND_Z;
             b.pointer_opaque = true;
             t.push(b);
         };
@@ -86,13 +93,6 @@ impl ChromeComponent for Popups {
                     }
                     Ok(Disposition::Pass)
                 }
-                "chrome:popup_scrollbar" => {
-                    if let Some(r) = ed.handle_click_popup_scrollbar(ev.col, ev.row) {
-                        r?;
-                        return Ok(Disposition::Consumed);
-                    }
-                    Ok(Disposition::Pass)
-                }
                 "chrome:popups" => {
                     if let Some(r) = ed
                         .handle_click_global_popups(ev.col, ev.row)
@@ -131,44 +131,10 @@ impl ChromeComponent for Popups {
         }
     }
 
-    fn on_wheel(
-        &self,
-        ed: &mut Editor,
-        bx: &LayoutBox,
-        col: u16,
-        row: u16,
-        delta: i32,
-    ) -> AnyhowResult<Disposition> {
-        if bx.kind != "chrome:popups" {
-            return Ok(Disposition::Pass);
-        }
-        // The popup stack scrolls under the wheel. (The file browser's
-        // wheel lives on ITS box — the z bands disambiguate the two
-        // surfaces now, so the historically shared arm is un-shared.)
-        if !ed.is_mouse_over_any_popup(col, row) {
-            return Ok(Disposition::Pass);
-        }
-        ed.scroll_popup(delta);
-        Ok(Disposition::Consumed)
-    }
-
-    fn on_hwheel(
-        &self,
-        ed: &mut Editor,
-        bx: &LayoutBox,
-        col: u16,
-        row: u16,
-        _delta: i32,
-    ) -> AnyhowResult<Disposition> {
-        // Popups have no horizontal axis: over a popup the horizontal
-        // delta is ABSORBED, mirroring the vertical arm's modal claim
-        // — it must not pan the buffer hidden beneath (the wheel walk
-        // has no opacity gate, so without this arm it did).
-        if bx.kind == "chrome:popups" && ed.is_mouse_over_any_popup(col, row) {
-            return Ok(Disposition::Consumed);
-        }
-        Ok(Disposition::Pass)
-    }
+    // No wheel arm. The popup's window is a viewport in the shell's tree and
+    // takes its own wheel, vertical and horizontal — which is also what stops
+    // a horizontal delta panning the buffer underneath, since a layer's
+    // content claims the event rather than a guard absorbing it.
 
     fn layers(&self, ed: &Editor, out: &mut Vec<(u16, crate::app::overlay::Layer)>) {
         use crate::app::overlay::{Layer, LayerKind};
@@ -291,58 +257,6 @@ impl Editor {
         }
 
         None
-    }
-
-    pub(super) fn handle_click_popup_scrollbar(
-        &mut self,
-        col: u16,
-        row: u16,
-    ) -> Option<AnyhowResult<()>> {
-        // Collect all needed data before mutating self.
-        let scrollbar_info: Option<(usize, i32)> =
-            self.active_chrome().popup_areas.iter().rev().find_map(
-                |(popup_idx, _popup_rect, inner_rect, _scroll, _n, scrollbar_rect, total_lines)| {
-                    let sb_rect = scrollbar_rect.as_ref()?;
-                    if col >= sb_rect.x
-                        && col < sb_rect.x + sb_rect.width
-                        && row >= sb_rect.y
-                        && row < sb_rect.y + sb_rect.height
-                    {
-                        let relative_row = (row - sb_rect.y) as usize;
-                        let track_height = sb_rect.height as usize;
-                        let visible_lines = inner_rect.height as usize;
-                        if track_height > 0 && *total_lines > visible_lines {
-                            let max_scroll = total_lines.saturating_sub(visible_lines);
-                            let target = if track_height > 1 {
-                                (relative_row * max_scroll) / (track_height.saturating_sub(1))
-                            } else {
-                                0
-                            };
-                            Some((*popup_idx, target as i32))
-                        } else {
-                            Some((*popup_idx, 0))
-                        }
-                    } else {
-                        None
-                    }
-                },
-            );
-        let (popup_idx, target_scroll) = scrollbar_info?;
-        self.active_window_mut()
-            .mouse_state
-            .dragging_popup_scrollbar = Some(popup_idx);
-        self.active_window_mut().mouse_state.drag_start_row = Some(row);
-        let current_scroll = self
-            .active_state()
-            .popups
-            .get(popup_idx)
-            .map(|p| p.scroll_offset)
-            .unwrap_or(0);
-        let state = self.active_state_mut();
-        if let Some(popup) = state.popups.get_mut(popup_idx) {
-            popup.scroll_by(target_scroll - current_scroll as i32);
-        }
-        Some(Ok(()))
     }
 
     /// Choose a row of the topmost popup, then confirm it.
@@ -524,44 +438,6 @@ impl Editor {
                     let state = self.active_state_mut();
                     if let Some(popup) = state.popups.get_mut(popup_idx) {
                         popup.extend_selection(line, relative_col);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Popup scrollbar drag (`PointerGrab::PopupScrollbar`): map the
-    /// track row to the grabbed popup's scroll position.
-    pub(crate) fn handle_popup_scrollbar_drag(&mut self, row: u16) {
-        if let Some(popup_idx) = self
-            .active_window_mut()
-            .mouse_state
-            .dragging_popup_scrollbar
-        {
-            // Find the popup's scrollbar rect from cached layout
-            if let Some((_, _, inner_rect, _, _, Some(sb_rect), total_lines)) = self
-                .active_chrome()
-                .popup_areas
-                .iter()
-                .find(|(idx, _, _, _, _, _, _)| *idx == popup_idx)
-            {
-                let track_height = sb_rect.height as usize;
-                let visible_lines = inner_rect.height as usize;
-
-                if track_height > 0 && *total_lines > visible_lines {
-                    let relative_row = row.saturating_sub(sb_rect.y) as usize;
-                    let max_scroll = total_lines.saturating_sub(visible_lines);
-                    let target_scroll = if track_height > 1 {
-                        (relative_row * max_scroll) / (track_height.saturating_sub(1))
-                    } else {
-                        0
-                    };
-
-                    let state = self.active_state_mut();
-                    if let Some(popup) = state.popups.get_mut(popup_idx) {
-                        let current_scroll = popup.scroll_offset as i32;
-                        let delta = target_scroll as i32 - current_scroll;
-                        popup.scroll_by(delta);
                     }
                 }
             }

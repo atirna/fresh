@@ -62,7 +62,9 @@ impl From<HostRegion> for HostId {
 /// decisions that today read `size` at the top of `render` — the dock's
 /// bail-out, the explorer's column count — are resolved from state before the
 /// description is built. See [`Frame::resolve_dock`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+// Not `Eq`: a popup carries its content, and a markdown span's `Style` is only
+// `PartialEq`. Nothing compares frames for total equality.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
     pub menu_bar: bool,
     pub status_bar: bool,

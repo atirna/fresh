@@ -64,8 +64,6 @@ pub struct MouseState {
     pub drag_selection_word_end: Option<usize>,
     /// Tab drag state (for drag-to-split functionality)
     pub dragging_tab: Option<TabDragState>,
-    /// Whether we're currently dragging a popup scrollbar (popup index)
-    pub dragging_popup_scrollbar: Option<usize>,
     /// Whether we're currently dragging the prompt's suggestion-list
     /// scrollbar (Live Grep floating overlay, issue #1796). The
     /// rect is held in `ChromeLayout::suggestions_scrollbar_rect`

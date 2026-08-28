@@ -1230,10 +1230,6 @@ impl Editor {
             PointerGrab::PopupSelect => {
                 self.handle_popup_select_drag(col, row);
             }
-            // A buffer popup's scrollbar: update its scroll position.
-            PointerGrab::PopupScrollbar => {
-                self.handle_popup_scrollbar_drag(row);
-            }
             // Split-separator drag: update the split ratio.
             PointerGrab::SplitSeparator => {
                 if let Some((split_id, direction)) =
@@ -1313,7 +1309,6 @@ impl Editor {
         ms.drag_selection_by_words = false;
         ms.drag_selection_word_end = None;
         ms.terminal_drag_pending = None;
-        ms.dragging_popup_scrollbar = None;
         ms.selecting_in_popup = None;
     }
 }

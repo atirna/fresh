@@ -98,15 +98,7 @@ impl Editor {
     /// click region in `global_popup_areas`. Shared by the generic
     /// global-popup slot and the workspace-trust modal band so the area math
     /// lives in exactly one place.
-    fn render_top_global_popup(
-        &mut self,
-        frame: &mut Frame,
-        theme: &crate::view::theme::Theme,
-        hover_target: Option<&crate::app::HoverTarget>,
-        // When false, compute + cache the popup area but draw no cells (the web
-        // renders popups natively from `popups_view`). TUI passes `true`.
-        draw: bool,
-    ) {
+    fn cache_top_global_popup_area(&mut self) {
         if self.global_popups.top().is_none() {
             return;
         }
@@ -141,9 +133,6 @@ impl Editor {
             _ => 0,
         };
         let scroll_offset = popup.scroll_offset;
-        if draw {
-            popup.render_with_hover(frame, popup_area, theme, hover_target);
-        }
         self.active_chrome_mut().global_popup_areas.push((
             top_idx,
             popup_area,
@@ -1187,11 +1176,10 @@ impl Editor {
         // Render popups from the active buffer state
         // Clone theme to avoid borrow checker issues with active_state_mut()
         let theme_clone = self.theme.read().unwrap().clone();
-        let hover_target = self.active_window_mut().mouse_state.hover_target.clone();
 
         // Cursor-anchored buffer popups (completion, hover, signature help):
         // recompute their areas for hit-testing and paint them.
-        self.render_buffer_popups(frame, &theme_clone, &hover_target);
+        self.cache_buffer_popup_areas();
 
         // Render editor-level popups (e.g. plugin action popups) on top of any
         // buffer content so they stay visible across buffer switches and over
@@ -1210,15 +1198,7 @@ impl Editor {
         // Everything else on the global stack renders here, above buffer content.
         let top_is_trust_modal = self.workspace_trust_on_top();
         if !top_is_trust_modal {
-            // Global popups render within the chrome area (right of a
-            // left dock) so corner/centred popups don't overrun it.
-            let draw_global_popup = !self.suppress_chrome_cells;
-            self.render_top_global_popup(
-                frame,
-                &theme_clone,
-                hover_target.as_ref(),
-                draw_global_popup,
-            );
+            self.cache_top_global_popup_area();
         }
 
         // The full-screen modals (settings, calibration wizard, keybinding
@@ -1698,12 +1678,7 @@ impl Editor {
         }
     }
 
-    fn render_buffer_popups(
-        &mut self,
-        frame: &mut Frame,
-        theme_clone: &crate::view::theme::Theme,
-        hover_target: &Option<HoverTarget>,
-    ) {
+    fn cache_buffer_popup_areas(&mut self) {
         self.active_chrome_mut().popup_areas.clear();
         if !self.active_state().popups.is_visible() {
             return;
@@ -1771,18 +1746,9 @@ impl Editor {
         // Store popup areas for mouse hit testing
         self.active_chrome_mut().popup_areas = popup_info.clone();
 
-        // Now render popups (cells only when this frontend draws chrome itself;
-        // the web renders them natively from `popups_view`, but the area cache
-        // above is always populated for hit-routing).
-        if self.suppress_chrome_cells {
-            return;
-        }
-        let state = self.active_state_mut();
-        for (popup_idx, popup) in state.popups.all().iter().enumerate() {
-            if let Some((_, popup_area, _, _, _, _, _)) = popup_info.get(popup_idx) {
-                popup.render_with_hover(frame, *popup_area, theme_clone, hover_target.as_ref());
-            }
-        }
+        // Nothing is painted here any more: a popup is a layer in the shell's
+        // tree, and the overlay band draws it. What survives is the area cache
+        // above, which the not-yet-migrated hit-testing still reads.
     }
 
     /// Draw the software mouse cursor (GPM, which can't paint its own caret on
@@ -2791,11 +2757,24 @@ impl Editor {
         &self,
         chrome: ratatui::layout::Rect,
     ) -> Vec<crate::view::shell::popup::Placed> {
-        use crate::view::shell::popup::{CaretAnchor, Placed};
+        use crate::view::shell::popup::{Body, CaretAnchor, Placed};
         let describe = |p: &crate::view::popup::Popup| Placed {
             position: p.position,
             at: CaretAnchor::for_kind(p.kind),
             size: p.asked_size(chrome),
+            body: Body {
+                title: p.render_title(),
+                description: p.description.clone(),
+                content: p.content.clone(),
+                bordered: p.bordered,
+                // The workspace-trust prompt is a forced choice, so it has no
+                // close button — the painter's `dismissible`.
+                dismissible: !matches!(
+                    p.resolver,
+                    crate::view::popup::PopupResolver::WorkspaceTrust
+                ),
+                selected_hint: p.accept_key_hint.clone(),
+            },
         };
         let mut out: Vec<Placed> = Vec::new();
         let state = self.active_state();

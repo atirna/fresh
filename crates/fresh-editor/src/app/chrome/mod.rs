@@ -247,9 +247,6 @@ pub(crate) enum PointerGrab {
     HScrollbar,
     /// Text selection inside an info popup.
     PopupSelect,
-    /// The prompt's suggestion-list scrollbar (overlay and dropdown).
-    /// A buffer popup's scrollbar.
-    PopupScrollbar,
     /// Split-separator resize.
     SplitSeparator,
     /// File-explorer width resize from its border.
@@ -301,9 +298,6 @@ pub(crate) fn pointer_grab(ed: &Editor) -> Option<PointerGrab> {
     }
     if ms.selecting_in_popup.is_some() {
         return Some(PointerGrab::PopupSelect);
-    }
-    if ms.dragging_popup_scrollbar.is_some() {
-        return Some(PointerGrab::PopupScrollbar);
     }
     if ms.dragging_separator.is_some() {
         return Some(PointerGrab::SplitSeparator);
