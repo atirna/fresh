@@ -159,6 +159,11 @@ let finderCursor = 0;
 let repoFiles: string[] | null = null;
 let repoFilesLoading = false;
 let finderHits: FinderItem[] = [];
+
+/** How many finder results the card shows at once. The list scrolls
+ *  within this window rather than growing, so the card keeps its height
+ *  whatever the query matches. */
+const FINDER_ROWS = 6;
 let finderIndex = 0;
 
 let themeNames: string[] = [];
@@ -823,7 +828,24 @@ function finderCard(): WidgetSpec {
       // rows are padded to the section by the host, so the card stays a
       // card. Selection is ours to track either way — `finderIndex` was
       // already the model.
-      for (let i = 0; i < Math.min(finderHits.length, 6); i++) {
+      // Window the visible slice around the selection. The list drew
+      // hits 0..5 unconditionally, so walking the selection past the
+      // sixth moved a marker that was never on screen — the list did
+      // not follow it, and `Enter` then opened a file the reader could
+      // not see. `i` stays the ABSOLUTE index so `hit:<i>` keeps naming
+      // the same result a click means.
+      const shown = Math.min(finderHits.length, FINDER_ROWS);
+      const start = Math.max(
+        0,
+        Math.min(
+          finderIndex - FINDER_ROWS + 1 > 0 ? finderIndex - FINDER_ROWS + 1 : 0,
+          finderHits.length - FINDER_ROWS,
+        ),
+      );
+      if (start > 0) {
+        rows.push(plain(`    … ${start} above`, C.muted));
+      }
+      for (let i = start; i < start + shown && i < finderHits.length; i++) {
         const h = finderHits[i];
         const on = i === finderIndex;
         // A result you can see is a result you should be able to click.
@@ -849,8 +871,9 @@ function finderCard(): WidgetSpec {
           ),
         );
       }
-      if (finderHits.length > 6) {
-        rows.push(plain(`    … and ${finderHits.length - 6} more`, C.muted));
+      const below = finderHits.length - (start + shown);
+      if (below > 0) {
+        rows.push(plain(`    … and ${below} more`, C.muted));
       }
     }
     rows.push(blank());
@@ -1824,10 +1847,24 @@ function activateKey(k: string): void {
     case "act_ws_dock":
       editor.executeAction("toggle_dock_focus");
       return;
-    case "startupToggle":
-      editor.setGlobalState("showOnStartup", !showOnStartup());
+    case "startupToggle": {
+      // Say so. This is the one control on the page that changes a
+      // persisted setting, it is reachable from the keyboard, and the
+      // only feedback used to be the checkbox glyph itself — which is
+      // no feedback at all if the switch is off screen. Revealing the
+      // focused widget (see the `focus` branch) means it no longer can
+      // be, but a setting that survives the session should confirm
+      // itself either way.
+      const next = !showOnStartup();
+      editor.setGlobalState("showOnStartup", next);
+      // Kept short: the status field clips well under 40 columns, and a
+      // message that ends in `reo...` is worse than a shorter one.
+      editor.setStatus(
+        next ? "Welcome: shown on startup" : "Welcome: hidden — reopen via palette",
+      );
       render();
       return;
+    }
     default:
       return;
   }
@@ -1856,9 +1893,21 @@ editor.on("widget_event", (args) => {
     // the document threw the reader back to the wordmark, with the
     // thing they had just focused off screen. Which is what a focus
     // move must never do.
+    // Prefer the enclosing card, so focusing one control inside a card
+    // reveals the whole card rather than a single line of it. A control
+    // that is not in a card is its own target.
+    //
+    // That fallback is the whole point: `cardForWidget` answers `null`
+    // for the startup switch, the three doors and the three verbs, and
+    // the old branch simply did not scroll for those seven. They are
+    // the top of the document, so from anywhere below the fold seven
+    // consecutive Tabs moved focus with nothing changing on screen —
+    // and `Enter` at one of them acted on a control the reader could
+    // not see. On the switch that silently turned off "Show this screen
+    // on startup", which is a setting change with no feedback at all.
     const id = cardForWidget(k);
-    if (bufferId !== null && id !== null) {
-      editor.scrollToWidget(bufferId, `fold:${id}`);
+    if (bufferId !== null && k.length > 0) {
+      editor.scrollToWidget(bufferId, id !== null ? `fold:${id}` : k);
     }
     return;
   }
