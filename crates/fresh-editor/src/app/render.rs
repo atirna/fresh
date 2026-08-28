@@ -2796,6 +2796,10 @@ impl Editor {
                 .collect(),
             selected: prompt.selected_suggestion,
             place: crate::view::shell::prompt::Place::default(),
+            // The row the painter drew under the popup, now stacked in the
+            // layer with it. `render_quick_open_hints` is what this replaces.
+            hints: (prompt.prompt_type == crate::view::prompt::PromptType::QuickOpen)
+                .then(|| rust_i18n::t!("quick_open.mode_hints").to_string()),
         })
     }
 

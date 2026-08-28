@@ -130,6 +130,14 @@ pub struct Suggestions {
     /// Which row is selected, if any. Controlled: the editor holds it.
     pub selected: Option<usize>,
     pub place: Place,
+    /// The quick-open mode hints, when the prompt is quick-open.
+    ///
+    /// Part of the list rather than beside it, because that is what it is:
+    /// the painter drew it into a rectangle it computed as "the prompt row
+    /// minus one", and the popup above it computed its own `y` as "the prompt
+    /// row minus the popup minus that same one". Two subtractions that had to
+    /// agree. Stacked in the layer, the agreement is the stacking.
+    pub hints: Option<String>,
 }
 
 impl Suggestions {
@@ -428,6 +436,7 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
 /// fills before its content, so the padding rows are what the fill does anyway.
 fn popup(s: &Suggestions) -> Node<UiMsg> {
     let body = col()
+        .key(POPUP_KEY.with(|k| k.clone()))
         .theme(pair("ui.popup_border_fg", "ui.suggestion_bg"))
         .child(suggestions(s));
     if s.place.bordered() {
@@ -469,22 +478,49 @@ pub fn suggestions_layer(s: &Suggestions) -> Node<UiMsg> {
     if let Place::Inside(r) = &s.place {
         card = card.w(Sizing::Cells(r.w)).h(Sizing::Cells(r.h));
     }
-    l.child(card)
+    match &s.hints {
+        Some(h) => l.child(col().children([card, hints_row(h)])),
+        None => l.child(card),
+    }
+}
+
+/// The quick-open mode hints, as the row under the popup.
+///
+/// `render_quick_open_hints`, which was a `Paragraph` of three spans — a
+/// two-cell margin, the string, and enough trailing spaces to reach the right
+/// edge — all in one style. The padding spans are what a themed box fills with,
+/// and the margin is the same fixed cell the rows use, so what is left is the
+/// text and its name.
+fn hints_row(text_of: &str) -> Node<UiMsg> {
+    let t = attrs(
+        "editor.line_number_fg",
+        "ui.suggestion_selected_bg",
+        &["dim"],
+    );
+    row().h(Sizing::Cells(1)).theme(t.clone()).children([
+        row().w(Sizing::Cells(LEFT_MARGIN)),
+        text(text_of.to_string()).theme(t).elide(Elide::Tail),
+    ])
 }
 
 thread_local! {
     static LAYER_KEY: Key = Key::Str("prompt_suggestions".into());
     static LIST_KEY: Key = Key::Str("prompt_suggestion_list".into());
+    static POPUP_KEY: Key = Key::Str("prompt_suggestion_popup".into());
 }
 
-/// Where the list landed, read back off the laid-out tree.
+/// Where the popup landed, read back off the laid-out tree.
+///
+/// The box, not the layer: with quick-open hints the layer is one row taller,
+/// and every consumer of this — the click rail's absorb rect, the web `Scene`
+/// — means the box.
 ///
 /// The partner of `frame::regions_of` for a surface that is not a host region,
 /// the same shape as `context_menu::menu_rect`. It replaces
 /// `ChromeLayout::suggestions_outer_area`, which `render` recorded and the
 /// click rail and the web `Scene` read back.
 pub fn suggestions_rect(spec: &fresh_ui::LayoutSpec) -> Option<fresh_ui::Rect> {
-    let key = LAYER_KEY.with(|k| k.clone());
+    let key = POPUP_KEY.with(|k| k.clone());
     spec.index
         .iter()
         .find(|(k, _)| *k == key)
@@ -580,6 +616,7 @@ mod tests {
                 rows: rows(5),
                 selected: Some(0),
                 place: Place::AbovePrompt,
+                hints: None,
             },
             40,
             8,
@@ -612,6 +649,7 @@ mod tests {
                 rows: rows(5),
                 selected: Some(0),
                 place: Place::AbovePrompt,
+                hints: None,
             },
             40,
             8,
@@ -658,6 +696,7 @@ mod tests {
                 rows: rows(100),
                 selected: Some(0),
                 place: Place::AbovePrompt,
+                hints: None,
             })
         };
         ui.frame(tree(), Size::new(40, 8));
@@ -692,6 +731,7 @@ mod tests {
                 rows: rows(1000),
                 selected: Some(0),
                 place: Place::AbovePrompt,
+                hints: None,
             },
             40,
             MAX_VISIBLE_SUGGESTIONS as u16,
@@ -721,6 +761,7 @@ mod tests {
             rows: rows(3),
             selected: Some(0),
             place: Place::AbovePrompt,
+            hints: None,
         };
         let spec = ui.frame(popup(&s), Size::new(40, 6)).clone();
         assert!(
@@ -759,6 +800,7 @@ mod tests {
                         rows: rows(3),
                         selected: Some(0),
                         place: Place::AbovePrompt,
+                        hints: None,
                     }),
                     ..Frame::default()
                 }),
@@ -788,6 +830,7 @@ mod tests {
                 rows: vec![r],
                 selected: Some(0),
                 place: Place::AbovePrompt,
+                hints: None,
             };
             let ui = laid_out(s, 16, 4);
             let spec = ui.spec();
@@ -852,6 +895,7 @@ mod tests {
             }],
             selected: Some(0),
             place: Place::AbovePrompt,
+            hints: None,
         };
         let ui = laid_out(s, 40, 4);
         let themes: Vec<(String, String)> = ui
@@ -901,6 +945,7 @@ mod tests {
                     rows: rows(3),
                     selected: Some(0),
                     place: Place::Inside(at),
+                    hints: None,
                 })),
                 Size::new(60, 20),
             )
@@ -919,6 +964,51 @@ mod tests {
         );
     }
 
+    /// **The quick-open hints sit between the popup and the prompt row.**
+    ///
+    /// The painter computed that twice: the hints at "the prompt row minus
+    /// one", and the popup's `y` at "the prompt row minus the popup minus that
+    /// same one". Stacked in the layer, the agreement is the stacking — and
+    /// the popup rises by exactly the row the hints occupy, with no second
+    /// subtraction to keep in step.
+    #[test]
+    fn the_hints_row_sits_under_the_popup_and_lifts_it() {
+        use crate::view::shell::frame::{frame_tree, region_key, Frame, HostRegion};
+        let build = |hints: Option<String>| {
+            let mut ui: Ui<UiMsg> = Ui::new();
+            let spec = ui
+                .frame(
+                    frame_tree(Frame {
+                        prompt_line: true,
+                        suggestions: Some(Suggestions {
+                            rows: rows(3),
+                            selected: Some(0),
+                            place: Place::AbovePrompt,
+                            hints,
+                        }),
+                        ..Frame::default()
+                    }),
+                    Size::new(60, 20),
+                )
+                .clone();
+            let prompt = ui.rect_of(ui.find_by_key(&region_key(HostRegion::PromptLine)).unwrap());
+            (suggestions_rect(&spec).expect("placed"), prompt)
+        };
+        let (bare, prompt) = build(None);
+        let (with, _) = build(Some("^F files  ^S symbols".into()));
+        assert_eq!(
+            bare.bottom(),
+            prompt.y,
+            "with no hints the popup meets the prompt row"
+        );
+        assert_eq!(
+            with.bottom(),
+            prompt.y - 1,
+            "the hints row is the cell between them"
+        );
+        assert_eq!(with.h, bare.h, "and the popup itself is unchanged");
+    }
+
     /// **Ledger finding A: the column yield order.** The name is sized before
     /// the description, so a row too narrow for both keeps the whole command
     /// name and truncates the description — never the other way round. This is
@@ -935,6 +1025,7 @@ mod tests {
                 }],
                 selected: Some(0),
                 place: Place::AbovePrompt,
+                hints: None,
             };
             let ui = laid_out(s, w, 4);
             ui.rect_of(ui.find_by_key(&name_key(0)).expect("the name column"))
