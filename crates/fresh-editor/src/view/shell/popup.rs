@@ -401,7 +401,7 @@ fn description(text: &str) -> Node<UiMsg> {
         // room for by hand; `pad` states it and the wrap follows the width it
         // is given.
         fresh_ui::text(text.to_string())
-            .wrap()
+            .wrap_hanging()
             .theme(pair("ui.help_separator_fg", "ui.popup_bg")),
         row().h(Sizing::Cells(1)),
     ])
@@ -486,7 +486,7 @@ pub fn content(c: &PopupContent, selected_hint: Option<&str>) -> Node<UiMsg> {
         PopupContent::Text(lines) => {
             fresh_ui::viewport(selectable(col().children(lines.iter().map(|l| {
                 fresh_ui::text(l.clone())
-                    .wrap()
+                    .wrap_hanging()
                     .theme(pair("ui.popup_text_fg", "ui.popup_bg"))
             }))))
             .scrollbar()
@@ -495,7 +495,7 @@ pub fn content(c: &PopupContent, selected_hint: Option<&str>) -> Node<UiMsg> {
             col().children(
                 lines
                     .iter()
-                    .map(|l| fresh_ui::text_runs(styled_runs(l)).wrap()),
+                    .map(|l| fresh_ui::text_runs(styled_runs(l)).wrap_hanging()),
             ),
         ))
         .scrollbar(),
