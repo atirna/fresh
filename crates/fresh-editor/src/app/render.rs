@@ -2647,7 +2647,6 @@ impl Editor {
         self.shell_frame_status_bar = status_bar_items.clone();
         let menu_keys = self.menu_shortcuts();
         let suggestions = self.suggestions_description();
-        self.shell_owns_suggestions = suggestions.is_some();
         let card = self.overlay_card_description(chrome_area);
         let popups = self.popup_descriptions(chrome_area);
         let theme_info = self.theme_info_description();

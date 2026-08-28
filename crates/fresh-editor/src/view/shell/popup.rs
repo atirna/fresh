@@ -214,12 +214,13 @@ pub fn popup_key(i: usize) -> Key {
     Key::Pair("popup".into(), i as u64)
 }
 
-/// Each popup as a layer that occupies its rectangle and paints nothing.
+/// Each popup as a layer holding its body.
 ///
-/// The overlay prompt's card taught this the hard way: a layer is in the
-/// overlay band, so anything it draws lands *on top of* the painter that still
-/// owns the surface and erases it. Until the content moves, the layer's whole
-/// job is to have a rectangle the painter can be told about.
+/// The doc here used to say the layer "occupies its rectangle and paints
+/// nothing", which was true for one commit: a layer is in the overlay band, so
+/// while the painter still owned the surface anything the layer drew landed on
+/// top of it and erased it. The painter is gone and the body is the layer's
+/// child, so the layer paints the popup outright.
 pub fn placed_layers(ps: &[Placed]) -> Vec<Node<UiMsg>> {
     ps.iter()
         .enumerate()
