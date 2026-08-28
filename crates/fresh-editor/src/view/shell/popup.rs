@@ -34,11 +34,27 @@
 //! *the segment that opened it* — which is what the feature means. Its `x` and
 //! `status_row` parameters exist only because a popup could not name a node.
 
-use fresh_ui::{col, Align, Anchor, Fit, Node, Place, Sizing};
+use std::rc::Rc;
 
-use crate::view::popup::PopupPosition;
+use fresh_ui::widgets::RowState;
+use fresh_ui::{col, row, Align, Anchor, Elide, Fit, Key, Node, Place, Run, Sizing};
 
-use super::msg::UiMsg;
+use crate::app::shell_host::shell_theme::{attrs, pair, with_bg, with_fg};
+use crate::view::popup::{PopupContent, PopupListItem, PopupPosition};
+
+use super::msg::{UiFact, UiMsg};
+
+/// `shell_theme::attrs`, taking a name that is already a pair.
+fn with_attrs(name: &str, a: &[&'static str]) -> String {
+    if a.is_empty() {
+        return name.to_string();
+    }
+    let body = name.split('+').next().unwrap_or(name);
+    match body.split_once('/') {
+        Some((fg, bg)) => attrs(fg, bg, a),
+        None => name.to_string(),
+    }
+}
 
 /// The caret's screen position, when the frame has one.
 ///
@@ -129,19 +145,197 @@ pub fn sized(position: &PopupPosition, width: u16, max_height: u16, n: Node<UiMs
     }
 }
 
-/// A popup's frame: its ring, its title and its ground.
+/// A popup's frame: its ring and its ground.
 pub fn frame(bordered: bool, body: Node<UiMsg>) -> Node<UiMsg> {
     let n = col()
-        .theme(crate::app::shell_host::shell_theme::pair(
-            "ui.popup_border_fg",
-            "ui.popup_bg",
-        ))
+        .theme(pair("ui.popup_border_fg", "ui.popup_bg"))
         .child(body);
     if bordered {
         n.border()
     } else {
         n
     }
+}
+
+/// The row of ink a popup's `description` occupies, plus the blank one after
+/// it.
+///
+/// The painter word-wrapped it to `inner.width - 2`, drew each line into a
+/// one-row rect of its own, and then adjusted a running `content_start_y` by
+/// the line count — arithmetic whose only job was to put the content after it.
+/// A `col()` puts the content after it.
+fn description(text: &str) -> Node<UiMsg> {
+    col().children([
+        // The `- 2` the painter wrapped to was padding it then had to leave
+        // room for by hand; `pad` states it and the wrap follows the width it
+        // is given.
+        fresh_ui::text(text.to_string())
+            .wrap()
+            .theme(pair("ui.help_separator_fg", "ui.popup_bg")),
+        row().h(Sizing::Cells(1)),
+    ])
+}
+
+/// One row of a `PopupContent::List`.
+///
+/// Every style here is the painter's, read off `render_with_hover` rather than
+/// invented — `every_popup_theme_name_is_a_real_key` is the guard, the same one
+/// the prompt's list carries after an earlier draft of *that* module used five
+/// keys that exist nowhere.
+fn list_row(item: &PopupListItem, row_theme: &str, hint: Option<&str>) -> Node<UiMsg> {
+    let muted = with_fg(row_theme, "ui.help_separator_fg");
+    let mut cells: Vec<Node<UiMsg>> = Vec::new();
+    if let Some(icon) = &item.icon {
+        cells.push(fresh_ui::text(format!("{icon} ")).theme(row_theme.to_string()));
+    }
+    // Leading whitespace is kept out of the underline: an indented row is a
+    // nested one, and underlining its indent makes the link look ragged.
+    let trimmed = item.text.trim_start();
+    let indent = item.text.len() - trimmed.len();
+    if indent > 0 {
+        cells.push(fresh_ui::text(&item.text[..indent]).theme(row_theme.to_string()));
+    }
+    // A row with a `data` payload acts on click, so it reads as a link.
+    let mut attrs: Vec<&'static str> = Vec::new();
+    if item.data.is_some() && !item.disabled {
+        attrs.push("underline");
+    }
+    let text_theme = if item.disabled {
+        attrs.push("dim");
+        with_attrs(&muted, &attrs)
+    } else {
+        with_attrs(row_theme, &attrs)
+    };
+    cells.push(fresh_ui::text(trimmed).theme(text_theme).elide(Elide::Tail));
+    if let Some(detail) = &item.detail {
+        cells.push(fresh_ui::text(format!(" {detail}")).theme(muted.clone()));
+    }
+    // The gap that right-aligns the hint. The painter measured every span it
+    // had emitted, subtracted, and emitted that many spaces — and skipped the
+    // hint entirely when the sum did not fit. A flexible gap does both: it
+    // takes what is left, and what is left is nothing when nothing is left.
+    cells.push(row().flex(1).min_w(1));
+    if let Some(h) = hint {
+        cells.push(fresh_ui::text(format!("({h})")).theme(muted));
+    }
+    row().h(Sizing::Cells(1)).children(cells)
+}
+
+/// A popup's content, whichever kind it is.
+///
+/// One viewport around all three: the painter kept a `scroll_offset` on the
+/// `Popup` and sliced by hand — `.skip(self.scroll_offset).take(height)` for
+/// text, a `ListState` offset for a list — and decided separately whether a
+/// scrollbar was needed by re-wrapping the content at a width that assumed one.
+/// A viewport owns the window, and emits the bar exactly when the content
+/// overflows.
+pub fn content(c: &PopupContent, selected_hint: Option<&str>) -> Node<UiMsg> {
+    match c {
+        PopupContent::Text(lines) => fresh_ui::viewport(
+            fresh_ui::text(lines.join("\n"))
+                .wrap()
+                .theme(pair("ui.popup_text_fg", "ui.popup_bg")),
+        )
+        .scrollbar(),
+        PopupContent::Markdown(lines) => fresh_ui::viewport(
+            col().children(
+                lines
+                    .iter()
+                    .map(|l| fresh_ui::text_runs(styled_runs(l)).wrap()),
+            ),
+        )
+        .scrollbar(),
+        PopupContent::List { items, selected } => {
+            let rows: Rc<Vec<PopupListItem>> = Rc::new(items.clone());
+            let for_row = rows.clone();
+            let sel = *selected;
+            let hint = selected_hint.map(str::to_string);
+            let list = fresh_ui::widgets::List::windowed(
+                rows.len(),
+                |i| Key::Pair("popup_item".into(), i as u64),
+                move |i| match for_row.get(i) {
+                    Some(it) => list_row(
+                        it,
+                        &row_theme(i == sel, false),
+                        (i == sel).then(|| hint.as_deref()).flatten(),
+                    ),
+                    None => row().h(Sizing::Cells(1)),
+                },
+            )
+            .selected(sel)
+            .scrollbar()
+            .row_theme(move |i, st| row_theme(i == sel, st == RowState::Hover))
+            .on_select(|i| UiMsg::Ui(UiFact::PopupSelect(i)));
+            col().child(fresh_ui::ComponentExt::node(list))
+        }
+    }
+}
+
+/// The painter's row ladder, in the painter's own keys.
+fn row_theme(selected: bool, hovered: bool) -> String {
+    match (selected, hovered) {
+        (true, _) => pair("ui.popup_selection_fg", "ui.popup_selection_bg"),
+        (false, true) => pair("ui.menu_hover_fg", "ui.menu_hover_bg"),
+        (false, false) => pair("ui.popup_text_fg", "ui.popup_bg"),
+    }
+}
+
+/// A markdown line's spans, as runs.
+///
+/// **Literals, and honestly so.** A `StyledSpan` carries a ratatui `Style` —
+/// the markdown renderer already chose the colours, and there is no theme key
+/// behind them. `shell_theme::literal` writes each as the `#rrggbb` / `#i42` /
+/// `#Name` form the grammar reads back, which loses nothing that exists:
+/// `names()` reports `None` for such a half, and that is the true answer for a
+/// colour nobody named. A span that sets only a foreground keeps the popup's
+/// background, which is what a ratatui `Style` with one field set already
+/// meant.
+fn styled_runs(line: &crate::view::markdown::StyledLine) -> Vec<Run> {
+    use crate::app::shell_host::shell_theme::literal;
+    use ratatui::style::Modifier;
+    line.spans
+        .iter()
+        .map(|s| {
+            let base = pair("ui.popup_text_fg", "ui.popup_bg");
+            let mut name = match s.style.fg {
+                Some(c) => with_fg(&base, &literal(c)),
+                None => base,
+            };
+            if let Some(c) = s.style.bg {
+                name = with_bg(&name, &literal(c));
+            }
+            let mut a: Vec<&'static str> = Vec::new();
+            for (m, n) in [
+                (Modifier::BOLD, "bold"),
+                (Modifier::ITALIC, "italic"),
+                (Modifier::UNDERLINED, "underline"),
+                (Modifier::CROSSED_OUT, "strikethrough"),
+                (Modifier::DIM, "dim"),
+            ] {
+                if s.style.add_modifier.contains(m) {
+                    a.push(n);
+                }
+            }
+            Run::themed(s.text.clone(), with_attrs(&name, &a))
+        })
+        .collect()
+}
+
+/// Every name this module can hand to `shell_theme`, for the guard test.
+#[cfg(test)]
+fn every_theme_name() -> Vec<String> {
+    let mut out = vec![
+        pair("ui.popup_border_fg", "ui.popup_bg"),
+        pair("ui.help_separator_fg", "ui.popup_bg"),
+    ];
+    for sel in [false, true] {
+        for hov in [false, true] {
+            let t = row_theme(sel, hov);
+            out.push(with_fg(&t, "ui.help_separator_fg"));
+            out.push(t);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -280,6 +474,140 @@ mod tests {
             ratatui::layout::Rect::new(40, FRAME.1 - h, w, h),
             "the description pulls the whole box inside"
         );
+    }
+
+    /// **Every name is a real theme key.**
+    ///
+    /// `shell_theme::resolve` falls back to the editor's plain ground for a
+    /// name it cannot resolve — silently. The prompt's list shipped a draft
+    /// with five keys that exist nowhere and nothing failed; every row would
+    /// simply have painted in the default colour. This is the only thing that
+    /// catches that, and it is why the popup's ladder was read off
+    /// `render_with_hover` rather than written from memory.
+    #[test]
+    fn every_popup_theme_name_is_a_real_key() {
+        use crate::app::shell_host::shell_theme::names;
+        let theme = crate::view::theme::Theme::from_json(r#"{"name":"t"}"#).unwrap();
+        for name in every_theme_name() {
+            let (fg, bg) = names(&name);
+            for half in [fg, bg] {
+                let half = half.unwrap_or_else(|| panic!("{name:?} has an unnamed half"));
+                assert!(
+                    theme.resolve_theme_key(half).is_some(),
+                    "{half:?} (in {name:?}) is not a theme key"
+                );
+            }
+        }
+    }
+
+    /// **A list row's ink is the painter's ladder.** Selected, hovered and
+    /// plain each have their own pair, and a disabled row is muted and dim —
+    /// `Modifier::DIM` applied by hand in the painter, now a name the theme can
+    /// reach.
+    #[test]
+    fn a_disabled_row_is_muted_and_a_clickable_one_is_underlined() {
+        let item = |text: &str, data: Option<&str>, disabled: bool| PopupListItem {
+            text: text.into(),
+            detail: None,
+            icon: None,
+            data: data.map(str::to_string),
+            disabled,
+        };
+        let c = PopupContent::List {
+            items: vec![
+                item("plain", None, false),
+                item("clickable", Some("go"), false),
+                item("off", Some("go"), true),
+            ],
+            selected: 0,
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        let spec = ui.frame(content(&c, None), Size::new(40, 6)).clone();
+        let theme_of = |needle: &str| {
+            spec.items
+                .iter()
+                .find(|i| matches!(&i.draw, fresh_ui::Draw::Lines(l) if l.iter().any(|s| s.contains(needle))))
+                .map(|i| i.theme.as_str().to_string())
+                .unwrap_or_else(|| panic!("no run for {needle:?}"))
+        };
+        assert_eq!(
+            theme_of("plain"),
+            row_theme(true, false),
+            "row 0 is selected"
+        );
+        assert!(
+            theme_of("clickable").ends_with("+underline"),
+            "a row with a payload reads as a link: {}",
+            theme_of("clickable")
+        );
+        let off = theme_of("off");
+        assert!(
+            off.starts_with("ui.help_separator_fg/") && off.contains("+dim"),
+            "a disabled row is muted and dim: {off}"
+        );
+    }
+
+    /// **Ledger rule 12: clicking a row reports that row, by index.**
+    #[test]
+    fn a_click_on_a_popup_row_reports_it() {
+        let c = PopupContent::List {
+            items: (0..5)
+                .map(|i| PopupListItem {
+                    text: format!("item {i}"),
+                    detail: None,
+                    icon: None,
+                    data: Some("go".into()),
+                    disabled: false,
+                })
+                .collect(),
+            selected: 0,
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(content(&c, None), Size::new(40, 6));
+        let r = ui.rect_of(
+            ui.find_by_key(&Key::Pair("popup_item".into(), 2))
+                .expect("row 2"),
+        );
+        let at = fresh_ui::Point::new(r.x + 1, r.y);
+        let mut msgs = ui
+            .dispatch(fresh_ui::Input::press(
+                at,
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs;
+        msgs.extend(
+            ui.dispatch(fresh_ui::Input::release(
+                at,
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs,
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| matches!(m, UiMsg::Ui(UiFact::PopupSelect(2)))),
+            "got {msgs:?}"
+        );
+    }
+
+    /// **Ledger rule 11: a scrollbar when the content overflows, not
+    /// otherwise.** The painter decided this by re-wrapping the content at a
+    /// width that *assumed* a scrollbar and comparing line counts; a viewport
+    /// emits the bar exactly when its content does not fit, and reserves the
+    /// lane itself.
+    #[test]
+    fn a_popup_scrolls_only_when_its_content_overflows() {
+        let bar = |n: usize| {
+            let c = PopupContent::Text((0..n).map(|i| format!("line {i}")).collect());
+            let mut ui: Ui<UiMsg> = Ui::new();
+            let spec = ui.frame(content(&c, None), Size::new(30, 5)).clone();
+            spec.items
+                .iter()
+                .any(|i| matches!(i.draw, fresh_ui::Draw::Scrollbar { .. }))
+        };
+        assert!(!bar(3), "three lines in five rows: no bar");
+        assert!(bar(50), "fifty lines in five rows: a bar");
     }
 
     /// **`AboveCursor` clears the caret's row.** A divergence where the

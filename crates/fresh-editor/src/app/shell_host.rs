@@ -619,6 +619,7 @@ impl Editor {
             // the half of `handle_file_explorer_click` that ran before it
             // resolved a row.
             UiFact::ExplorerBodyPress => self.take_focus_for_file_explorer(),
+            UiFact::PopupSelect(i) => self.select_popup_item(i),
             // The list row knew its own index; both of these used to be a
             // coordinate hit-test that resolved one.
             UiFact::SuggestionSelect(i) => {
