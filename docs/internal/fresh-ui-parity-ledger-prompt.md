@@ -32,9 +32,9 @@ in consumer code by reflex.
 | 3 | The selected row is highlighted | `list().selected(i)` | the style ladder in the painter |
 | 4 | A scrollbar appears when the list overflows; pressing the gutter jumps, dragging follows | `list().scrollbar()` — `hit.rs` owns press-to-jump and drag | `handle_click_prompt_scrollbar`, `prompt_scrollbar_offset_for_row`, `chrome:prompt_scrollbar` |
 | 5 | The list is placed under the input row, or centered as a floating overlay | `layer().anchor(..).place(..).fit(..)` | `suggestions_outer_area` / `prompt_results_area` placement arithmetic |
-| 6 | While the overlay prompt is up, clicks that reach the scrim never move the buffer cursor | `Modality` on the layer | `chrome:overlay_prompt_scrim` (z15) |
-| 7 | …and neither do double- or triple-clicks | same `Modality` | `chrome:overlay_prompt_modal` (z160) |
-| 8 | …and neither does any right-click, plain or Ctrl+ | same `Modality` | `chrome:overlay_rclick_guard` (z195) |
+| 6 | While the overlay prompt is up, clicks that reach the body never move the buffer cursor | the body host declines the pointer — see finding C | `chrome:overlay_prompt_scrim` (z15) |
+| 7 | …and neither do double- or triple-clicks | same rule, same place | `chrome:overlay_prompt_modal` (z160) |
+| 8 | …and neither does any right-click, plain or Ctrl+ | same rule, same place | `chrome:overlay_rclick_guard` (z195) |
 | 9 | A toolbar control takes the click, moves keyboard focus to itself, and Tab continues from there | keyed `focusable()` nodes + a gesture each | `prompt_toolbar_boxes`, `prompt_toolbar_origin`, the `hit_path` walk |
 | 10 | Escape closes the prompt | `Dismiss::ESCAPE` on the layer | the key arm |
 | 11 | The input row scrolls horizontally to keep the caret visible | `input_hscroll` stays — it is a text-model rule, not layout | (nothing; kept deliberately) |
@@ -46,6 +46,10 @@ its place on this surface: ten hand-rolled mechanisms, ten existing concepts.
 
 These are the findings. Each is a place where porting line-by-line would move
 layout logic into consumer code and quietly invert the "principled" claim.
+
+One of the three (C) was withdrawn on a second reading — it is recorded rather
+than deleted, because "this looks like a missing concept and is not" is the more
+useful half of the exercise.
 
 ### A. Space priority — *third occurrence*
 
@@ -90,22 +94,35 @@ pointer is usually elsewhere), so it cannot simply be dropped. No concept states
 it. Smallest honest options: a `wheel_capture` flag on `Layer`, or keep one
 editor-side arm and record it as residue with a test.
 
-### C. Per-gesture modality
+### C. Per-gesture modality — *withdrawn; it was the wrong reading*
 
-The overlay prompt is modal for *some* gestures and transparent for others: the
-click scrim rides low (z15) so chrome that peeks out from under the overlay —
-tabs, scrollbars, the status bar — still takes its clicks, while the wheel and
-double-click bands sit high (z155/z160) and swallow everything. The existing
-comment calls this "the same surface's two per-gesture bands, encoded as two thin
-boxes instead of two hand-ordered arrays".
+Recorded first as a gap, then found not to be one. Kept here because the
+correction is the point: the shape of the old encoding suggested a library
+concept that is not needed, and reaching for it would have added API for a
+legacy artefact.
 
-`Modality` is all-or-nothing: `None`, `Inert`, `Exclusive`. Collapsing the two
-bands into `Inert` would make the status bar and tabs unclickable while a palette
-is open — a real regression, and precisely the kind that ships silently.
+The overlay prompt looks modal for some gestures and transparent for others.
+Its click scrim rides low (z15) so chrome peeking out from under the overlay —
+tabs, scrollbars, the status bar — still takes clicks, while the wheel and
+double-click bands sit high (z155/z160) and swallow everything, and a
+right-click guard sits higher still (z195). Three boxes across three bands for
+one surface. `Modality` is all-or-nothing, so the obvious conclusion was that it
+needs per-gesture granularity.
 
-This gap already bit once: the context menu's `Modality::Exclusive` was chosen to
-express "no host leaf behind it takes raw input" and brought "nothing underneath
-is interactive" along with it.
+It does not. Every one of those three guards exists to stop a gesture reaching
+**the editor body** — moving the cursor, word-selecting, line-selecting, opening
+a context menu. None of them is about the overlay at all. The rule is:
+
+> the body does not act on the pointer while an overlay prompt owns the keyboard
+
+which is a statement about a host leaf, not about a layer, and host leaves
+already decide what they do with input. Expressed there it is one rule instead
+of three boxes, and it needs nothing from the library.
+
+The z-band encoding is what made it look otherwise: "the body ignores the
+pointer" had to be written as "cover everything below z15", and once it is a
+covering box it acquires a z, and once it has a z the other two gestures need
+their own. `Modality` stays all-or-nothing.
 
 ## How each rule is tested
 
