@@ -206,6 +206,15 @@ pub enum UiFact {
     BrowserHover { x: u16, y: u16 },
     /// The wheel over the dialog. Positive is down.
     BrowserScroll(i32),
+    /// A radio row in the workspace-trust prompt was clicked. **Selection is
+    /// not consent**: this moves the selection and leaves the prompt up, the
+    /// same two-step the keyboard has.
+    TrustSelect(usize),
+    /// `[ OK ]`: commit the current selection.
+    TrustConfirm,
+    /// The secondary button — Cancel when the prompt was opened voluntarily,
+    /// Quit for the mandatory gate at startup.
+    TrustSecondary,
 }
 
 /// What a menu-bar navigation step does to the open chain.

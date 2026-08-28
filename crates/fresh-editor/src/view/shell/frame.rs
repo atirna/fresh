@@ -125,6 +125,9 @@ pub struct Frame {
     /// The file-open dialog, when one is open. Its interior is still a
     /// painter's; what the tree owns is where it goes and what it absorbs.
     pub browser: Option<super::file_browser::Browser>,
+    /// The workspace-trust prompt. A blocking modal: it dims the whole frame
+    /// and nothing outside it is interactive.
+    pub trust: Option<super::trust::Trust>,
 }
 
 impl Default for Frame {
@@ -146,6 +149,7 @@ impl Default for Frame {
             card: None,
             theme_info: None,
             browser: None,
+            trust: None,
         }
     }
 }
@@ -328,6 +332,13 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // what `chrome:theme_inspect`'s `z = 190` said.
     let frame = match &f.theme_info {
         Some(t) => frame.child(super::theme_info::layer(t)),
+        None => frame,
+    };
+    // The trust prompt, over everything the frame holds. It is drawn dead last
+    // today for the same reason — it dims the *entire* frame, the dock
+    // included, and centres in the whole window rather than beside the dock.
+    let frame = match &f.trust {
+        Some(t) => frame.child(super::trust::layer(t)),
         None => frame,
     };
     // Two capture-phase observers, outermost and last: each sees the press
