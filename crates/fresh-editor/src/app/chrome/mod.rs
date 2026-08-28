@@ -31,7 +31,6 @@ mod popups;
 mod prompt;
 mod splits;
 mod status_bar;
-mod theme_info;
 
 use super::types::HoverTarget;
 use super::Editor;
@@ -172,9 +171,6 @@ impl ChromeTreeBuilder {
 
     /// Frame height in rows — for components whose box spans the
     /// full column height (the dock column and its resize border).
-    pub(crate) fn frame_height(&self) -> u32 {
-        self.frame_height
-    }
 
     /// A full-frame surface — a guard/capture whose semantics ARE
     /// full-screen (close guards, absorb/dismiss, modal scrims,
@@ -511,11 +507,6 @@ pub(crate) fn components() -> &'static [&'static dyn ChromeComponent] {
         &modals::KeybindingEditor,
         &modals::CalibrationWizard,
         &modals::WorkspaceTrust,
-        // The theme inspector: its trigger and popup ride the very
-        // top of the routable bands (a debug instrument that must see
-        // Ctrl+Right-Click under any surface), and its key dismissal
-        // must run before the context menu's keyboard grab.
-        &theme_info::ThemeInfo,
         &context_menu::ContextMenu,
         &prompt::Prompt,
         &popups::Popups,

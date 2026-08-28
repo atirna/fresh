@@ -999,6 +999,31 @@ impl Editor {
                     self.blur_floating_panel(crate::app::PanelSlot::Dock);
                 }
             }
+            // The inspector. Dismissing it is the same statement three
+            // places used to make: an outside-press guard returning
+            // `PassAfter`, an `on_key` that cleared the field and returned
+            // `None`, and the popup's own opacity in between.
+            UiFact::ThemeInfoDismiss => self.active_window_mut().theme_info_popup = None,
+            UiFact::ThemeInspect { x, y } => {
+                if let Err(e) = self.show_theme_info_popup(x, y) {
+                    tracing::warn!("theme inspect failed: {e}");
+                }
+            }
+            UiFact::ThemeInfoOpenEditor => {
+                let key = self
+                    .active_window()
+                    .theme_info_popup
+                    .as_ref()
+                    .and_then(|p| p.info.fg_key.clone().or_else(|| p.info.bg_key.clone()));
+                self.active_window_mut().theme_info_popup = None;
+                if let Some(key) = key {
+                    self.fire_theme_inspect_hook(key);
+                }
+            }
+            UiFact::ThemeInfoButtonHover(on) => {
+                let target = on.then_some(crate::app::types::HoverTarget::ThemeInfoButton);
+                self.active_window_mut().mouse_state.hover_target = target;
+            }
             UiFact::ExplorerScroll { delta, x, y } => {
                 // The surface's wheel, with the surface. Unchanged from the
                 // chrome component's `on_wheel`, including the plugin hook —

@@ -187,8 +187,9 @@ fn combos() -> Vec<Frame> {
                             status_bar_items: None,
                             menu_keys: Vec::new(),
                             // Layers, out of flow: a popup does not move a
-                            // region.
+                            // region, and neither does the theme inspector.
                             popups: Vec::new(),
+                            theme_info: None,
                             // The list is a layer, out of flow: it moves no
                             // rectangle in the frame, which is the same reason
                             // `menu` is None above.
@@ -289,6 +290,7 @@ fn squeeze_band_starves_a_different_row_than_ratatui() {
         status_bar_items: None,
         menu_keys: Vec::new(),
         popups: Vec::new(),
+        theme_info: None,
         suggestions: None,
         card: None,
     };

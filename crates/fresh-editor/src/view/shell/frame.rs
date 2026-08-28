@@ -118,6 +118,10 @@ pub struct Frame {
     /// what the tree owns here is the arithmetic that placed them, which is
     /// what two copies of it disagreed about.
     pub card: Option<super::overlay_prompt::Card>,
+    /// The theme inspector's popup, when Ctrl+Right-Click has opened one. Over
+    /// everything: it inspects the cell under *any* chrome, so it has to be
+    /// visible over that chrome too.
+    pub theme_info: Option<super::theme_info::ThemeInfo>,
 }
 
 impl Default for Frame {
@@ -137,6 +141,7 @@ impl Default for Frame {
             suggestions: None,
             popups: Vec::new(),
             card: None,
+            theme_info: None,
         }
     }
 }
@@ -307,9 +312,19 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
         Some(menu) => frame.child(super::context_menu::context_menu(menu)),
         None => frame,
     };
-    // Outermost, and last: a capture-phase observer sees the press before
-    // anything below it and lets the press continue. Only present when there
-    // is a dock to blur.
+    // The inspector, over everything — the trigger that opens it fires under
+    // any chrome, so the answer has to be visible over that chrome. This is
+    // what `chrome:theme_inspect`'s `z = 190` said.
+    let frame = match &f.theme_info {
+        Some(t) => frame.child(super::theme_info::layer(t)),
+        None => frame,
+    };
+    // Two capture-phase observers, outermost and last: each sees the press
+    // before anything below it. The inspector's trigger is inside the dock's
+    // blur observer, which is the order their `z` values had (190 under 195),
+    // and it is the one that stops the flow — Ctrl+Right-Click *is* the
+    // gesture, where the blur is a side effect of one aimed elsewhere.
+    let frame = super::theme_info::inspect_trigger(frame);
     match f.dock {
         Some(w) => super::dock::blur_observer(w, frame),
         None => frame,

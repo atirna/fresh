@@ -186,6 +186,16 @@ pub enum UiFact {
     /// A left press landed outside the dock column. Blurs a focused dock and
     /// does nothing to one already blurred; either way the press goes on.
     DockBlur,
+    /// A press outside the theme inspector, or any key while it is up. Both
+    /// dismiss it and both go on to what they were aimed at.
+    ThemeInfoDismiss,
+    /// The inspector's action row was clicked: open the theme editor on the
+    /// key it is showing.
+    ThemeInfoOpenEditor,
+    /// The pointer entered or left that row.
+    ThemeInfoButtonHover(bool),
+    /// Ctrl+Right-Click: inspect the theme keys behind this screen cell.
+    ThemeInspect { x: u16, y: u16 },
 }
 
 /// What a menu-bar navigation step does to the open chain.

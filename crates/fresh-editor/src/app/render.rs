@@ -1834,15 +1834,6 @@ impl Editor {
         // modal's left edge.
         self.render_modal_overlays(frame, size);
 
-        // The theme-info popup (Ctrl+Right-Click) anchors to an absolute
-        // screen cell that may sit over the dock column, so draw it after
-        // the dock — otherwise the dock paints over it and its "Open in
-        // Theme Editor" button is hidden and unclickable.
-        // Web renders the theme-info popup natively from `aux_modals_view`.
-        if !self.suppress_chrome_cells {
-            self.render_theme_info_popup(frame);
-        }
-
         if self.floating_widget_panel.is_some() {
             // A `fullscreen` modal paints over the whole frame, covering the
             // dock; otherwise it lays into `chrome_area` beside the dock.
@@ -2716,7 +2707,9 @@ impl Editor {
         self.shell_owns_suggestions = suggestions.is_some();
         let card = self.overlay_card_description(chrome_area);
         let popups = self.popup_descriptions(chrome_area);
+        let theme_info = self.theme_info_description();
         crate::view::shell::frame::Frame {
+            theme_info,
             menu_bar: menu_bar_visible,
             status_bar: status_row,
             search_options,
