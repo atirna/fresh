@@ -354,6 +354,33 @@ fn node_row(index: usize, r: &SuggestionRow, st: RowState, name_elide: Elide) ->
     row().h(Sizing::Cells(1)).children(cells)
 }
 
+/// A press that reaches the popup's own chrome stops there.
+///
+/// `chrome:suggestions` was a `pointer_opaque` box over the popup's outer rect
+/// whose whole job was this: a click on the border, or on the padding below the
+/// last row, must not fall through and move the buffer cursor underneath.
+///
+/// The library stops the *hit search* at any box that draws — "a plain
+/// container is a surface until it says it is not" — but claiming is a separate
+/// question from hitting: `Dispatch::claimed` is true only when a handler said
+/// `stop()`, because producing a message and taking the event are different
+/// things. So the absorb is one handler, and it is the same one the explorer's
+/// panel body uses for the same reason.
+///
+/// Any button: the old box absorbed the right-click too, which is what kept the
+/// buffer's context menu from opening through the palette.
+fn absorb(n: Node<UiMsg>) -> Node<UiMsg> {
+    use fresh_ui::{gesture, Event, GestureKind};
+    gesture(n).on(
+        GestureKind::Press,
+        Rc::new(|ev: &Event| {
+            // Rows stop their own press, so this fires only where none did.
+            ev.stop();
+            None
+        }),
+    )
+}
+
 /// The suggestion list as a description.
 ///
 /// `windowed` is what replaces the painter's `scroll_offset` bookkeeping: the
@@ -441,7 +468,7 @@ fn popup(s: &Suggestions) -> Node<UiMsg> {
         .child(suggestions(s));
     if !s.place.bordered() {
         // Inside a card, the card decides how tall this is.
-        return body;
+        return absorb(body);
     }
     // How tall the box is, in the terms the painter used: as many rows as it
     // has, up to the cap, plus the ring. A content rule rather than a
@@ -449,7 +476,7 @@ fn popup(s: &Suggestions) -> Node<UiMsg> {
     // sentence in `render`, and it belongs with the list it describes because
     // nothing outside knows the cap.
     let visible = s.rows.len().min(MAX_VISIBLE_SUGGESTIONS) as u16;
-    body.border().h(Sizing::Cells(visible + 2))
+    absorb(body.border().h(Sizing::Cells(visible + 2)))
 }
 
 /// The list as an overlay above the prompt row.
@@ -1112,6 +1139,45 @@ mod tests {
             MAX_VISIBLE_SUGGESTIONS as u16 + 2,
             "a long one stops at the cap"
         );
+    }
+
+    /// **A press on the popup's own chrome stops there.**
+    ///
+    /// `chrome:suggestions` was a `pointer_opaque` box over the outer rect
+    /// whose only job was this: a click on the border, or on the ground below
+    /// the last row, must not fall through and move the buffer cursor
+    /// underneath. The library stops the hit *search* at any box that draws,
+    /// but claiming is a separate question — `Dispatch::claimed` is true only
+    /// when a handler said `stop()` — so the absorb is one handler.
+    ///
+    /// Any button, because the old box absorbed the right-click too, which is
+    /// what kept the buffer's context menu from opening through the palette.
+    #[test]
+    fn a_press_on_the_popup_chrome_is_claimed_and_says_nothing() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            col().child(suggestions_layer(&Suggestions {
+                rows: rows(3),
+                selected: Some(0),
+                place: Place::AbovePrompt,
+                hints: None,
+            })),
+            Size::new(60, 20),
+        );
+        let box_rect = ui.rect_of(
+            ui.find_by_key(&POPUP_KEY.with(|k| k.clone()))
+                .expect("the box"),
+        );
+        // The border's own cell: inside the popup, outside every row.
+        let corner = Point::new(box_rect.x, box_rect.y);
+        for button in [MouseButton::Left, MouseButton::Right] {
+            let got = ui.dispatch(Input::press(corner, button, Mods::NONE));
+            assert!(
+                got.claimed,
+                "{button:?} on the border must not fall through"
+            );
+            assert!(got.msgs.is_empty(), "and must say nothing: {:?}", got.msgs);
+        }
     }
 
     /// **Ledger finding A: the column yield order.** The name is sized before

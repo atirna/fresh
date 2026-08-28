@@ -18,13 +18,31 @@ pub(crate) struct Prompt;
 
 impl ChromeComponent for Prompt {
     fn collect(&self, ed: &Editor, t: &mut ChromeTreeBuilder) {
+        // None of the list's boxes are pushed for a list the shell tree owns.
+        // Its layer takes the pointer first — rows claim their own click,
+        // `hit.rs` owns the scrollbar's jump and its drag, the viewport takes
+        // the wheel, and the popup absorbs a press on its own chrome — so
+        // these would be consulted only for events the tree already declined,
+        // and each of them would then act on `Prompt::scroll_offset`, which
+        // that list no longer reads.
+        //
+        // They stay for the floating-overlay prompt, whose list is still
+        // `SuggestionsRenderer`'s. `shell_owns_suggestions` is what tells the
+        // two apart: a fact about this frame's description rather than a guess
+        // reconstructed from prompt state.
+        let legacy_list = !ed.shell_owns_suggestions;
+
         // The suggestion list's scrollbar track at its painted rect
         // (shared by the floating-overlay prompt and the
         // bottom-anchored dropdown). No box when none was painted.
         // Pushed BEFORE the opaque suggestions box: within a band the
         // earlier-pushed box is consulted first, and a specific target
         // must resolve before the opaque surface absorbs the click.
-        if let Some(r) = ed.active_chrome().suggestions_scrollbar_rect {
+        if let Some(r) = ed
+            .active_chrome()
+            .suggestions_scrollbar_rect
+            .filter(|_| legacy_list)
+        {
             t.rect("chrome:prompt_scrollbar", 170, r);
         }
         // The suggestions box spans the OUTER rect (click targets the
@@ -46,10 +64,12 @@ impl ChromeComponent for Prompt {
             b.pointer_opaque = true;
             t.push(b);
         };
-        if let Some(outer) = ed.active_chrome().suggestions_outer_area {
-            opaque_rect(t, outer);
-        } else if let Some((inner_rect, _, _, _)) = &ed.active_chrome().suggestions_area {
-            opaque_rect(t, *inner_rect);
+        if legacy_list {
+            if let Some(outer) = ed.active_chrome().suggestions_outer_area {
+                opaque_rect(t, outer);
+            } else if let Some((inner_rect, _, _, _)) = &ed.active_chrome().suggestions_area {
+                opaque_rect(t, *inner_rect);
+            }
         }
         if ed.overlay_prompt_active() {
             if let Some(r) = ed.active_chrome().prompt_preview_area {
