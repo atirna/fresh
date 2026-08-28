@@ -148,6 +148,15 @@ pub enum UiFact {
     /// The pointer moving while that press is still held. Extends the
     /// selection the press began.
     PopupTextDrag { line: usize, col: usize },
+    /// A press on the overlay card's toolbar band, in the band's own
+    /// coordinates. The controls are a plugin's `WidgetSpec`, laid out by the
+    /// widget runtime rather than by the tree, so the host hit-tests its own
+    /// boxes — the band reports where, which is all the tree can know until
+    /// `WidgetSpec` becomes a `Node`.
+    CardToolbarPress { x: u16, y: u16 },
+    /// A wheel over the overlay card's preview pane. The pane is a painter's
+    /// still, so it has no window for the wheel to chain into.
+    CardPreviewScroll(i32),
     /// A pointer moved the suggestion selection to this row.
     SuggestionSelect(usize),
     /// A double-click confirmed this suggestion — the same path Enter takes.

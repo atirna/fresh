@@ -893,6 +893,32 @@ impl Editor {
             UiFact::ExplorerBodyPress => self.take_focus_for_file_explorer(),
             UiFact::PopupSelect(i) => self.select_popup_item(i),
             UiFact::PopupDismissTransient => self.dismiss_transient_popups(),
+            // The toolbar's controls are a plugin's `WidgetSpec`, hit-tested
+            // against the widget runtime's own boxes. The band said where the
+            // press landed inside it; this is the walk `chrome:prompt_scrim`
+            // did after subtracting a stored origin by hand.
+            UiFact::CardToolbarPress { x, y } => {
+                let hit = {
+                    let boxes = &self.active_chrome().prompt_toolbar_boxes;
+                    crate::widgets::layout_box::hit_path(boxes, y as u32, x as u32)
+                        .into_iter()
+                        .rev()
+                        .filter(|&i| boxes[i].focusable)
+                        .find_map(|i| boxes[i].key.clone())
+                };
+                if let Some(widget_key) = hit {
+                    // Move keyboard focus to the clicked control so Tab
+                    // continues from here, then flip it through the host.
+                    if let Some(p) = self.active_window_mut().prompt.as_mut() {
+                        p.toolbar_focus = Some(widget_key.clone());
+                    }
+                    self.toggle_overlay_toolbar_widget(&widget_key);
+                }
+            }
+            UiFact::CardPreviewScroll(delta) => {
+                self.active_window_mut()
+                    .scroll_overlay_preview_by_lines(delta);
+            }
             // What a press inside a popup's text *means*. The tree said where
             // it landed, in the content's own coordinates; this is the rest of
             // `handle_click_buffer_popups` — a link if one is there, and the
