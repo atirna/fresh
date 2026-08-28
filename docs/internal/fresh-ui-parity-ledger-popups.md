@@ -279,30 +279,37 @@ Written before the wave; what follows each item is what actually happened.
   kept alive as a test oracle is the enabling mechanism the review says to
   delete once it has been used.
 * `PointerGrab::PopupScrollbar` and its drag, on the same "one dead root" chain
-  the prompt's scrollbar grab turned out to be. **Done**, along with
+  the prompt's scrollbar grab turned out to be. **Done** — and
+  `PointerGrab::PopupSelect` went with it, which this list did not expect
+  either: pointer capture is what a selection drag needs, and the library has
+  it. Along with
   `handle_click_popup_scrollbar`, `handle_popup_scrollbar_drag`,
   `dragging_popup_scrollbar` and `scroll_popup`: the bar is the viewport's and
   `hit.rs` owns the press on its gutter.
 * Three chrome boxes: `chrome:popups`, `chrome:popup_scrollbar`,
-  `chrome:transient_guard`, plus `chrome:popup_guard`.
-  **`chrome:popup_scrollbar` is gone. `chrome:popups` is not, and should not
-  have been on this list** — it is where the two things finding B keeps
-  host-side are answered: a click on a link, and a press that starts a text
-  selection. Both need a position *inside* the content, and the library has no
-  drag gesture to extend a selection with, which is the boundary finding B
-  draws. What did change is its rank: `z = 150` was there to beat the shell's
-  background surfaces, and anything above `SHELL_BACKGROUND_Z` now makes the
-  tree be skipped for every point inside a popup. It runs as the floor beneath
-  the tree, which is where an unmigrated part belongs. **The two dismissal
-  guards are gone** — see finding I.
+  `chrome:transient_guard`, plus `chrome:popup_guard`. **All four are gone**,
+  and `Popups::collect` with them — the component contributes no geometry at
+  all now. What each became: the scrollbar track is the viewport's gutter, the
+  opaque rect is a press-absorbing gesture inside the popup's own frame, and
+  the two guards are `Dismiss::OUTSIDE_POINTER.passing_through()` (finding I).
+
+  Finding B moved too, which this list did not expect. A link click and the
+  press that starts a text selection wanted a position *inside* the content,
+  and the reading was that the library had no drag gesture to extend a
+  selection with. It has pointer capture, which is the same thing said properly:
+  the press captures, and `Event::local` on a gesture *inside* the viewport is
+  already in the content's coordinates — no inner rectangle to subtract, no
+  stored `scroll_offset` to add back. What a press *means* is still the host's,
+  which is what finding B was actually about.
 * `ChromeLayout::popup_areas` and `global_popup_areas` — the last two entries in
   the paint-recorded roster that this migration can reach. (`workspace_trust_dialog`
   and `Window::file_browser_layout` are the two modals, which come after.)
-  **Not yet, and for the same reason:** they are how the surviving click path
-  finds the content rectangle. They are recorded *from the tree* now rather
-  than computed, so they are a cache of the tree's answer instead of a second
-  derivation of it — which is the state the explorer's rects passed through
-  before they went.
+  **Still here, and honestly so.** Nothing routes input through them any more.
+  What is left reading them is geometry that is genuinely wanted elsewhere: the
+  web scene projects popups from them, and the hover keep-alive asks whether the
+  pointer is over one. They are recorded *from the tree* rather than computed,
+  so they are a cache of the tree's answer instead of a second derivation of it
+  — which is the state the explorer's rects passed through before they went.
 
 ## How each rule is tested
 

@@ -1204,10 +1204,6 @@ impl Editor {
             PointerGrab::HScrollbar => {
                 self.handle_hscrollbar_drag(col, row)?;
             }
-            // Selecting text in an info popup: extend the selection.
-            PointerGrab::PopupSelect => {
-                self.handle_popup_select_drag(col, row);
-            }
             // Split-separator drag: update the split ratio.
             PointerGrab::SplitSeparator => {
                 if let Some((split_id, direction)) =
@@ -1287,7 +1283,6 @@ impl Editor {
         ms.drag_selection_by_words = false;
         ms.drag_selection_word_end = None;
         ms.terminal_drag_pending = None;
-        ms.selecting_in_popup = None;
     }
 }
 

@@ -260,26 +260,53 @@ pub fn body(b: &Body) -> Node<UiMsg> {
         },
         content(&b.content, b.selected_hint.as_deref()).flex(1),
     ]);
-    let framed = frame(b.bordered, inner);
+    // Absorbing *inside* the frame, not around the whole thing: the stacked
+    // paths are tried in order and the first that claims ends it, so an absorb
+    // on the outside would catch the title strip's own path — which does not
+    // reach the content — before the content's path was ever offered.
+    let framed = absorb(frame(b.bordered, inner));
     // Only a bordered popup has a border to write on.
-    if !b.bordered {
-        return framed;
+    match b.bordered {
+        false => framed,
+        true => fresh_ui::stack().children([framed, border_strip(b)]),
     }
-    fresh_ui::stack().children([framed, border_strip(b)])
+}
+
+/// A press inside the popup that nothing else claimed dies here.
+///
+/// The rows, the close button and the text claim their own; this is the
+/// padding, the border and the description — everywhere a press means nothing,
+/// and where letting it through would put the caret in the buffer underneath or
+/// word-select through it on a double click. `chrome:popups` was a rectangle
+/// carrying `pointer_opaque` for the same purpose, which is the tree property
+/// this is.
+fn absorb(n: Node<UiMsg>) -> Node<UiMsg> {
+    fresh_ui::gesture(n).on(
+        fresh_ui::GestureKind::Press,
+        Rc::new(|e: &fresh_ui::Event| {
+            e.stop();
+            None
+        }),
+    )
 }
 
 /// The top border's overlay: the title where `Block::title` put it, and the
 /// close button where the painter's `area.width - 4` put it.
 fn border_strip(b: &Body) -> Node<UiMsg> {
     let ring = pair("ui.popup_border_fg", "ui.popup_bg");
+    // Decoration, every cell of it but the close button — and each cell has to
+    // say so itself: the hit walk stops at the first child that blocks, so one
+    // opaque title glyph hides the whole frame behind the strip and a click on
+    // the title falls past the popup into the buffer.
+    let decoration = |n: Node<UiMsg>| n.pointer_mode(fresh_ui::PointerMode::Transparent);
     let mut cells: Vec<Node<UiMsg>> = vec![
         // `Block::title` starts one cell in from the corner.
-        row().w(Sizing::Cells(1)),
-        match &b.title {
+        decoration(row().w(Sizing::Cells(1))),
+        decoration(match &b.title {
             Some(t) => fresh_ui::text(t.clone()).theme(ring.clone()),
             None => row().w(Sizing::Cells(0)),
-        },
-        row().flex(1),
+        }),
+        decoration(row().flex(1)),
     ];
     if b.dismissible {
         cells.push(
@@ -299,7 +326,7 @@ fn border_strip(b: &Body) -> Node<UiMsg> {
                 ),
         );
         // The painter left the last column clear.
-        cells.push(row().w(Sizing::Cells(1)));
+        cells.push(decoration(row().w(Sizing::Cells(1))));
     }
     // **Transparent all the way down, container included.** The strip lies
     // over the whole popup so its one row can sit on the top border, and the
@@ -315,7 +342,10 @@ fn border_strip(b: &Body) -> Node<UiMsg> {
                 .children(cells),
             row()
                 .flex(1)
-                .pointer_mode(fresh_ui::PointerMode::Transparent),
+                // Inert, not transparent: below the title row the strip is not
+                // there at all, so a press over the content produces one path
+                // rather than two and the content is plainly what answers it.
+                .pointer_mode(fresh_ui::PointerMode::Ignore),
         ])
 }
 
@@ -452,19 +482,21 @@ pub fn content(c: &PopupContent, selected_hint: Option<&str>) -> Node<UiMsg> {
         // its children, which is what the window has to be compared against.
         // Each line still wraps on its own, so a long one takes the rows it
         // needs and the sum stays honest.
-        PopupContent::Text(lines) => fresh_ui::viewport(col().children(lines.iter().map(|l| {
-            fresh_ui::text(l.clone())
-                .wrap()
-                .theme(pair("ui.popup_text_fg", "ui.popup_bg"))
-        })))
-        .scrollbar(),
-        PopupContent::Markdown(lines) => fresh_ui::viewport(
+        PopupContent::Text(lines) => {
+            fresh_ui::viewport(selectable(col().children(lines.iter().map(|l| {
+                fresh_ui::text(l.clone())
+                    .wrap()
+                    .theme(pair("ui.popup_text_fg", "ui.popup_bg"))
+            }))))
+            .scrollbar()
+        }
+        PopupContent::Markdown(lines) => fresh_ui::viewport(selectable(
             col().children(
                 lines
                     .iter()
                     .map(|l| fresh_ui::text_runs(styled_runs(l)).wrap()),
             ),
-        )
+        ))
         .scrollbar(),
         PopupContent::List { items, selected } => {
             let rows: Rc<Vec<PopupListItem>> = Rc::new(items.clone());
@@ -496,6 +528,46 @@ pub fn content(c: &PopupContent, selected_hint: Option<&str>) -> Node<UiMsg> {
             col().child(fresh_ui::ComponentExt::node(list))
         }
     }
+}
+
+/// Text a press can land in, and a drag can sweep across.
+///
+/// Wrapped *inside* the viewport, so `Event::local` is already in the content's
+/// coordinates: the row is the line, the column is the column, and the window's
+/// offset never enters into it. That is the whole of what
+/// `handle_click_buffer_popups` recovered by subtracting an inner rectangle's
+/// origin and adding a stored `scroll_offset` back on.
+///
+/// The press captures the pointer, so a sweep that leaves the popup keeps
+/// reporting positions relative to this node — which is what selecting by drag
+/// means, and what `PointerGrab::PopupSelect` existed to arrange.
+///
+/// What a press *means* stays the host's, per the ledger's finding B: the
+/// library says where selecting is meaningful and holds no selection model.
+fn selectable(content: Node<UiMsg>) -> Node<UiMsg> {
+    fn cell(e: &fresh_ui::Event) -> (usize, usize) {
+        (e.local.y.max(0) as usize, e.local.x.max(0) as usize)
+    }
+    fresh_ui::gesture(content)
+        .on(
+            fresh_ui::GestureKind::Press,
+            Rc::new(|e: &fresh_ui::Event| {
+                if e.button != fresh_ui::MouseButton::Left {
+                    return None;
+                }
+                e.capture_pointer();
+                e.stop();
+                let (line, col) = cell(e);
+                Some(UiMsg::Ui(UiFact::PopupTextPress { line, col }))
+            }),
+        )
+        .on(
+            fresh_ui::GestureKind::Move,
+            Rc::new(|e: &fresh_ui::Event| {
+                let (line, col) = cell(e);
+                Some(UiMsg::Ui(UiFact::PopupTextDrag { line, col }))
+            }),
+        )
 }
 
 /// The painter's row ladder, in the painter's own keys.
