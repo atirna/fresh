@@ -597,6 +597,18 @@ impl Editor {
             // the half of `handle_file_explorer_click` that ran before it
             // resolved a row.
             UiFact::ExplorerBodyPress => self.take_focus_for_file_explorer(),
+            // The list row knew its own index; both of these used to be a
+            // coordinate hit-test that resolved one.
+            UiFact::SuggestionSelect(i) => {
+                if let Some(Err(e)) = self.select_suggestion(i) {
+                    tracing::warn!("suggestion select failed: {e}");
+                }
+            }
+            UiFact::SuggestionConfirm(i) => {
+                if let Some(Err(e)) = self.confirm_suggestion(i) {
+                    tracing::warn!("suggestion confirm failed: {e}");
+                }
+            }
             UiFact::ExplorerClose => self.toggle_file_explorer(),
             UiFact::ExplorerResizeBegin { x, y } => {
                 let w = self.active_window().file_explorer_width;
