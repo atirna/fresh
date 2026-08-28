@@ -61,24 +61,22 @@ pub fn placed(position: &PopupPosition, caret: Caret) -> Node<UiMsg> {
         let (x, y) = caret.unwrap_or((0, 0));
         Anchor::Point(x, y)
     };
+    // The caret is a *cell*, not a point: below it is the row after it, and a
+    // flip clears it rather than landing on it. `calculate_area` says the same
+    // thing as `cursor_y + 1` and a matching `- height`.
+    let caret_cell = || {
+        let (x, y) = caret.unwrap_or((0, 0));
+        Anchor::Cell(x, y)
+    };
     match position {
         PopupPosition::AtCursor => l.anchor(caret_at()).place(Place::Over).fit(Fit::CLAMP),
-        // **Pending `Anchor::Cell` — the ledger's finding F.** `Place::Below`
-        // is right and `Fit::FLIP` is exactly the thirteen lines of "not
-        // enough space below, put above". What is off by one is the anchor:
-        // `Anchor::Point` resolves to a *zero-size* rect, so "below" it is its
-        // own row, while the painter means below the caret's **cell**
-        // (`cursor_y + 1`). A caret occupies a cell; a click position is a
-        // point. Both placements below are one library concept away from
-        // exact, and until then they keep the painter's arithmetic.
+        // "Not enough space below, put above" — thirteen lines that `Fit::FLIP`
+        // is the name of, against the caret's cell.
         PopupPosition::BelowCursor => l
-            .anchor(caret_at())
+            .anchor(caret_cell())
             .place(Place::Below)
             .fit(Fit::FLIP.or(Fit::CLAMP)),
-        PopupPosition::AboveCursor => l
-            .anchor(caret_at())
-            .place(Place::Above)
-            .fit(Fit::FLIP.or(Fit::CLAMP)),
+        PopupPosition::AboveCursor => l.anchor(caret_cell()).place(Place::Above).fit(Fit::CLAMP),
         PopupPosition::Fixed { x, y } => l
             .anchor(Anchor::Point(*x, *y))
             .place(Place::Over)
@@ -86,15 +84,19 @@ pub fn placed(position: &PopupPosition, caret: Caret) -> Node<UiMsg> {
         PopupPosition::Centered | PopupPosition::CenteredOverlay { .. } => {
             l.anchor(Anchor::Screen(Align::Center)).place(Place::Over)
         }
-        // **Not migrated yet — see the ledger's finding E.** The painter's
-        // `y` here is `height - popup_height - 2`, and the 2 is "leave room
-        // for the status bar", which is the same rule `AboveStatusBarAt`
-        // states properly. Saying it properly is `Anchor::Node(status bar)` +
-        // `Place::Above`, and that puts the popup at the bar's *left* edge —
-        // this variant wants its right. A layer can match its anchor's extent
-        // (`stretch_to_anchor`) but cannot align within it, which is the one
-        // real gap this surface turned up.
-        PopupPosition::BottomRight => l.anchor(Anchor::Screen(Align::End)).place(Place::Over),
+        // Above the status bar, flush with its right edge. The painter's `y`
+        // is `height - popup_height - 2`, and the 2 is "leave room for the
+        // status bar" — a guess at the bar's position rather than a reference
+        // to it, and wrong by a row whenever the prompt line's visibility
+        // moves the bar. Naming the bar is both simpler and correct; the
+        // right edge is `align_to_anchor(End)`.
+        PopupPosition::BottomRight => l
+            .anchor(Anchor::Node(super::frame::region_key(
+                super::frame::HostRegion::StatusBar,
+            )))
+            .place(Place::Above)
+            .align_to_anchor(Align::End)
+            .fit(Fit::CLAMP),
         // The segment that opened it. See the module docs and the ledger's
         // finding A; the two numbers in this variant are a rectangle the caller
         // already had and threw away.
@@ -202,8 +204,8 @@ mod tests {
         p.calculate_area(ratatui::layout::Rect::new(0, 0, FRAME.0, FRAME.1), caret)
     }
 
-    /// **Ledger rules 1 and 4: `AtCursor`, and the clamp every strategy ends
-    /// with.**
+    /// **Ledger rules 1–4: the cursor-relative family, its flip and its
+    /// clamp.**
     ///
     /// The caret's own row and the row above it are excluded and get their own
     /// test below: `calculate_area` does not clamp `AtCursor`'s `y` at all, and
@@ -220,11 +222,12 @@ mod tests {
             (40, 12),
             (FRAME.0 - 1, 12),
             (FRAME.0 - 3, 2),
+            (40, 2),
         ];
-        // `BelowCursor` and `AboveCursor` are excluded pending `Anchor::Cell`
-        // — see finding F. They are off by exactly one row, in the direction a
-        // zero-size anchor predicts.
-        for pos in [PopupPosition::AtCursor] {
+        // `AboveCursor` has its own test below: the painter's arithmetic
+        // contradicts the painter's comment, and the description follows the
+        // comment.
+        for pos in [PopupPosition::AtCursor, PopupPosition::BelowCursor] {
             for c in carets {
                 for (w, h) in [(20u16, 5u16), (40, 10), (FRAME.0, 3)] {
                     let want = calculated(pos, Some(c), w, h);
@@ -276,6 +279,42 @@ mod tests {
             got,
             ratatui::layout::Rect::new(40, FRAME.1 - h, w, h),
             "the description pulls the whole box inside"
+        );
+    }
+
+    /// **`AboveCursor` clears the caret's row.** A divergence where the
+    /// painter disagrees with its own comment.
+    ///
+    /// ```text
+    ///   PopupPosition::AboveCursor => {
+    ///       // Position so bottom of popup is one row above cursor
+    ///       (cursor_y + 1).saturating_sub(height)
+    ///   }
+    /// ```
+    ///
+    /// `cursor_y + 1 - height` puts the popup's *last* row on `cursor_y` — on
+    /// the caret, not one row above it. `Anchor::Cell` + `Place::Above` gives
+    /// `cursor_y - height`, which is what the comment says and what the
+    /// sibling `BelowCursor` already does in the other direction
+    /// (`cursor_y + 1`, clearing the caret's cell).
+    ///
+    /// A popup that covers the character it is anchored to is the bug
+    /// `Anchor::Cell` exists to make unsayable, so this is kept.
+    #[test]
+    fn a_popup_above_the_caret_does_not_cover_it() {
+        let caret = (40u16, 12u16);
+        let (w, h) = (20u16, 5u16);
+        let painter = calculated(PopupPosition::AboveCursor, Some(caret), w, h);
+        let got = placed_rect(&PopupPosition::AboveCursor, Some(caret), w, h);
+        assert_eq!(
+            painter.y + painter.height - 1,
+            caret.1,
+            "the painter's last row is the caret's own"
+        );
+        assert_eq!(
+            got.y + got.height - 1,
+            caret.1 - 1,
+            "the description leaves the caret's row clear"
         );
     }
 

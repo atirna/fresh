@@ -138,7 +138,7 @@ means, it is what every other strategy already does horizontally, and a popup
 cut to one line is not a popup anyone wanted. Kept as a behaviour change with a
 test that names it rather than a silently adjusted expectation.
 
-### E. A layer cannot align within its anchor — *open, one caller here*
+### E. A layer cannot align within its anchor — *closed, `Layer::align_to_anchor`*
 
 `BottomRight` puts the popup at `height - popup_height - 2`, and the 2 is "leave
 room for the status bar" — the same rule `AboveStatusBarAt` states properly.
@@ -152,10 +152,19 @@ the `Align::Stretch` case — so the shape is probably `Layer::align(Align)` wit
 `stretch_to_anchor` becoming its `Stretch` spelling rather than a second
 builder.
 
-Until then `BottomRight` keeps `Anchor::Screen(Align::End)`, which is right on
-`x` and two rows low on `y`.
+`align_to_anchor(Align)` landed with `stretch_to_anchor` becoming its
+`Align::Stretch` spelling rather than a second mechanism beside it — the
+builder stays because "as wide as the thing it hangs off" reads better at a
+call site, and its existing test passes unchanged through the new path, which
+is the point of doing it that way round.
 
-### F. `Anchor::Point` is a point; a caret is a cell — *open, two callers here*
+`BottomRight` is now `Anchor::Node(status bar)` + `Place::Above` +
+`align_to_anchor(End)`. That is also a fix: the `- 2` was a guess at where the
+bar is, and it is wrong by a row whenever the prompt line's visibility moves
+it — the same failure mode `AboveStatusBarAt` was given a `status_row`
+parameter to avoid.
+
+### F. `Anchor::Point` is a point; a caret is a cell — *closed, `Anchor::Cell`*
 
 `Place::Below` on `Anchor::Point(x, y)` lands on row `y`, because a point
 resolves to a zero-size rect and "below" a zero-height thing is itself. The
@@ -170,9 +179,29 @@ cell. `Anchor::Cell(x, y)` resolving to a 1×1 rect makes `Place::Below` mean
 `y + 1` and the flip mean `y - sh`, both exactly the painter's arithmetic, with
 no arm anywhere reading "+1".
 
-`BelowCursor` and `AboveCursor` are the two callers, and every completion,
-hover and signature-help popup goes through them. Held out of the migrated set
-until the concept exists; the parity sweep covers only what is claimed exact.
+`Anchor::Cell` resolves to 1×1 and both callers now use it. `BelowCursor` is
+exact against the painter across the sweep. `AboveCursor` is finding G below.
+
+### G. `AboveCursor` covers the caret — *divergence, kept*
+
+The painter disagrees with its own comment:
+
+```rust
+PopupPosition::AboveCursor => {
+    // Position so bottom of popup is one row above cursor
+    (cursor_y + 1).saturating_sub(height)
+}
+```
+
+`cursor_y + 1 - height` puts the popup's *last* row on `cursor_y` — on the
+caret, not above it. `Anchor::Cell` + `Place::Above` gives `cursor_y - height`,
+which is what the comment says, and what the sibling `BelowCursor` already does
+in the other direction (`cursor_y + 1`, clearing the caret's cell).
+
+Kept, with a test that states both. A popup covering the character it is
+anchored to is the bug `Anchor::Cell` exists to make unsayable, and the
+asymmetry between the two siblings is the kind of thing that survives only
+because the two arms were written as separate arithmetic.
 
 ## What this retires
 
