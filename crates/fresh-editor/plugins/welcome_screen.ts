@@ -1067,7 +1067,7 @@ function gitCard(): WidgetSpec {
     rows.push(
       row(
         spacer(2),
-        button("Review the branch diff", { key: "act_review", hoverStyle: GLOW }),
+        button("PR branch log", { key: "act_review", hoverStyle: GLOW }),
         spacer(2),
         button("Git log", { key: "act_gitlog", hoverStyle: GLOW }),
       ),
@@ -1829,7 +1829,14 @@ function activateKey(k: string): void {
       editor.executeAction("new");
       return;
     case "act_review":
-      editor.executeAction("start_review_branch");
+      // Renamed by #3098, along with the palette entry: the command
+      // opens a commit list for `base..HEAD`, not a review session, and
+      // everything still called "Review …" now opens the review tool.
+      // The old name has no handler at all, and `executeAction` fails
+      // for an unowned name only in the log (see the note on
+      // `show_git_log` below) — so this button would have gone silently
+      // dead on merging master, with its label still promising a review.
+      editor.executeAction("start_branch_log");
       return;
     case "act_gitlog":
       // The git-log plugin's handler is `show_git_log`; `git_log` is
