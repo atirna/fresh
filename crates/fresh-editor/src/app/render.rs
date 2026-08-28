@@ -2718,6 +2718,7 @@ impl Editor {
         let menu_keys = self.menu_shortcuts();
         let suggestions = self.suggestions_description();
         self.shell_owns_suggestions = suggestions.is_some();
+        let card = self.overlay_card_description(chrome_area);
         crate::view::shell::frame::Frame {
             menu_bar: menu_bar_visible,
             status_bar: status_row,
@@ -2737,7 +2738,51 @@ impl Editor {
             // uses cannot disagree — they are one computation.
             dropdowns: menu_layout.map(|l| l.shell_dropdowns).unwrap_or_default(),
             suggestions,
+            card,
         }
+    }
+
+    /// The floating-overlay prompt's card, as the shell describes it.
+    ///
+    /// Only the outer rectangle and two counts. Everything the painter derived
+    /// from them — the header band's height, where the body starts, how the
+    /// body splits — is what the description states, and
+    /// `overlay_prompt::regions_of` is where the painter reads it back.
+    ///
+    /// The toolbar's row count is the one thing that has to be *measured*
+    /// rather than declared: a plugin's toolbar is two rows on a wide terminal
+    /// and wraps to more on a narrow one, and only the widget runtime knows.
+    /// `render_overlay_prompt` measured it too, at the same width and with the
+    /// same arguments; this is now the only call, and the painter reads the
+    /// answer back with the rest of the geometry.
+    fn overlay_card_description(
+        &self,
+        chrome: ratatui::layout::Rect,
+    ) -> Option<crate::view::shell::overlay_prompt::Card> {
+        use crate::view::shell::overlay_prompt::Card;
+        let prompt = self.active_window().prompt.as_ref()?;
+        if !prompt.overlay {
+            return None;
+        }
+        let at = Self::centered_overlay_rect(chrome, 90, 90);
+        let inner_w = at.width.saturating_sub(2);
+        let toolbar_rows = match prompt.toolbar_widget.as_ref() {
+            Some(spec) => crate::widgets::render_spec_no_autofocus(
+                spec,
+                &std::collections::HashMap::new(),
+                prompt.toolbar_focus.as_deref().unwrap_or(""),
+                inner_w as u32,
+            )
+            .entries
+            .len() as u16,
+            // No widget toolbar: the title row takes one, or nothing does.
+            None => !prompt.title.is_empty() as u16,
+        };
+        Some(Card {
+            at: fresh_ui::Rect::new(at.x as i32, at.y as i32, at.width, at.height),
+            toolbar_rows,
+            footer: !prompt.footer.is_empty(),
+        })
     }
 
     /// The prompt's suggestion list as the shell describes it.
@@ -4320,38 +4365,25 @@ impl Editor {
         // on a narrow terminal. Measuring it (vs assuming 1) keeps
         // `suggestions_visible_rows` honest, so `ensure_selected_visible`
         // doesn't let the selection scroll just past the real list bottom.
-        let inner_w = overlay_rect.width.saturating_sub(2);
-        let toolbar_rows: usize = self
-            .active_window()
-            .prompt
-            .as_ref()
-            .map(|p| {
-                if let Some(spec) = p.toolbar_widget.as_ref() {
-                    crate::widgets::render_spec_no_autofocus(
-                        spec,
-                        &std::collections::HashMap::new(),
-                        p.toolbar_focus.as_deref().unwrap_or(""),
-                        inner_w as u32,
-                    )
-                    .entries
-                    .len()
-                } else if p.title.is_empty() {
-                    0
-                } else {
-                    1
-                }
-            })
-            .unwrap_or(0);
-        let footer_visible = self
-            .active_window()
-            .prompt
-            .as_ref()
-            .map(|p| !p.footer.is_empty())
-            .unwrap_or(false);
-        // Chrome around the result list: frame border (2) + input (1) +
-        // separator (1) + toolbar (`toolbar_rows`) + optional full-width footer (1).
-        let chrome_rows: usize = 4 + toolbar_rows + usize::from(footer_visible);
-        let suggestions_visible_rows = (overlay_rect.height as usize).saturating_sub(chrome_rows);
+        // How many rows the list can actually show, so the selection only
+        // scrolls when it genuinely passes the bottom — not when it crosses
+        // the bottom-popup default cap of `MAX_VISIBLE_SUGGESTIONS`, which
+        // would scroll prematurely.
+        //
+        // Read off the card, not counted here. This was
+        // `4 + toolbar_rows + footer` — border, input, separator, toolbar,
+        // footer — with the toolbar measured a second time to get its row
+        // count, and it had to be kept in step with the band arithmetic two
+        // hundred lines below that produced the list's actual rectangle. The
+        // description states the bands once and this is the height of one of
+        // them.
+        let suggestions_visible_rows = crate::view::shell::overlay_prompt::regions_of(
+            self.shell_ui.as_ref().expect("the shell tree is in place"),
+        )
+        .iter()
+        .find(|(k, _)| *k == crate::view::shell::overlay_prompt::CardRegion::Results)
+        .map(|(_, r)| r.height as usize)
+        .unwrap_or(0);
         if let Some(prompt) = self.active_window_mut().prompt.as_mut() {
             // Skip when the user has wheel-scrolled the list — keeping the
             // selection pinned in view would undo their scroll (issue #2119).
@@ -4497,45 +4529,28 @@ impl Editor {
         // left half beside the preview — and places the preview *under* the
         // toolbar, side-by-side with the result list. See
         // docs/internal/global-search-ux.md §12.
-        let toolbar_h: u16 = match &toolbar_widget_out {
-            Some(out) => out.entries.len() as u16,
-            None if !prompt.title.is_empty() => 1,
-            None => 0,
+        // The bands, read off the tree that placed them. This block used to
+        // compute them: `header_h = 2 + toolbar_h`, a `body` rect, and a
+        // `body.width / 2` split above 120 columns — with `chrome_rows =
+        // 4 + toolbar_rows + footer` forty lines above saying the same thing a
+        // second way, and `chrome::Prompt::collect` re-deriving the preview's
+        // rectangle from the cached copy. See `view::shell::overlay_prompt`.
+        let bands = crate::view::shell::overlay_prompt::regions_of(
+            self.shell_ui.as_ref().expect("the shell tree is in place"),
+        );
+        let band = |r: crate::view::shell::overlay_prompt::CardRegion| {
+            bands
+                .iter()
+                .find(|(k, _)| *k == r)
+                .map(|(_, rect)| *rect)
+                .unwrap_or_default()
         };
-        let footer_h: u16 = if prompt.footer.is_empty() { 0 } else { 1 };
-        // Header rows = input(1) + toolbar(toolbar_h) + separator(1).
-        let header_h: u16 = 2 + toolbar_h;
-        let body = Rect {
-            x: inner.x,
-            y: inner.y.saturating_add(header_h),
-            width: inner.width,
-            height: inner.height.saturating_sub(header_h + footer_h),
-        };
-
-        // Split the body into results | preview. Below ~120 cols, stack
-        // results-only (preview hidden — see design doc §5 "preview pane size
-        // when terminal is narrow").
-        let preview_min_cols: u16 = 120;
-        let show_preview = overlay_rect.width >= preview_min_cols && body.height > 0;
-        let (results_area, preview_area) = if show_preview {
-            let results_w = body.width / 2;
-            (
-                Rect {
-                    x: body.x,
-                    y: body.y,
-                    width: results_w,
-                    height: body.height,
-                },
-                Some(Rect {
-                    x: body.x + results_w,
-                    y: body.y,
-                    width: body.width - results_w,
-                    height: body.height,
-                }),
-            )
-        } else {
-            (body, None)
-        };
+        use crate::view::shell::overlay_prompt::CardRegion;
+        let toolbar_h: u16 = band(CardRegion::Toolbar).height;
+        let footer_h: u16 = band(CardRegion::Footer).height;
+        let results_area = band(CardRegion::Results);
+        let preview = band(CardRegion::Preview);
+        let preview_area = (preview.width > 0 && preview.height > 0).then_some(preview);
 
         // Cache the result/preview rects so the mouse-wheel handler can route
         // the wheel to the pane under the pointer (issue #2119).
