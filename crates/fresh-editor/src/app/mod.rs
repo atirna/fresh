@@ -1172,6 +1172,15 @@ pub struct Editor {
     /// anchors, the click rail and the web projection — all of which used to
     /// re-run the placement walk instead.
     pub(crate) shell_frame_status_bar: Option<crate::view::shell::status_bar::StatusBar>,
+    /// Whether the shell tree drew the suggestion list this frame.
+    ///
+    /// Only the bottom-anchored prompt's list has moved; the overlay's is
+    /// still `SuggestionsRenderer`'s. The rails that are shared between the
+    /// two ask this to know which of them they are looking at, and it is
+    /// deliberately a fact about *this frame's description* rather than a
+    /// guess reconstructed from prompt state — the description is what
+    /// actually decided.
+    pub(crate) shell_owns_suggestions: bool,
     /// What the pointer is over *in the shell's tree*, as the tree itself
     /// reported it.
     ///

@@ -439,11 +439,17 @@ fn popup(s: &Suggestions) -> Node<UiMsg> {
         .key(POPUP_KEY.with(|k| k.clone()))
         .theme(pair("ui.popup_border_fg", "ui.suggestion_bg"))
         .child(suggestions(s));
-    if s.place.bordered() {
-        body.border()
-    } else {
-        body
+    if !s.place.bordered() {
+        // Inside a card, the card decides how tall this is.
+        return body;
     }
+    // How tall the box is, in the terms the painter used: as many rows as it
+    // has, up to the cap, plus the ring. A content rule rather than a
+    // measurement — `suggestion_count.min(MAX_VISIBLE) as u16 + 2` was the same
+    // sentence in `render`, and it belongs with the list it describes because
+    // nothing outside knows the cap.
+    let visible = s.rows.len().min(MAX_VISIBLE_SUGGESTIONS) as u16;
+    body.border().h(Sizing::Cells(visible + 2))
 }
 
 /// The list as an overlay above the prompt row.
@@ -463,6 +469,11 @@ pub fn suggestions_layer(s: &Suggestions) -> Node<UiMsg> {
                 super::frame::HostRegion::PromptLine,
             )))
             .place(fresh_ui::Place::Above)
+            // As wide as the row it sits above, which is what `width =
+            // chrome.width` said in `render` — with the difference that the
+            // row's width is now something the tree knows rather than
+            // something the caller measures and passes in.
+            .stretch_to_anchor()
             .fit(Fit::FLIP.or(Fit::CLAMP)),
         // The card measured this; the layer only occupies it. `Anchor::Point`
         // for the corner and an explicit size for the rest — no `Fit`, because
@@ -525,6 +536,33 @@ pub fn suggestions_rect(spec: &fresh_ui::LayoutSpec) -> Option<fresh_ui::Rect> {
         .iter()
         .find(|(k, _)| *k == key)
         .and_then(|(_, r)| spec.items.get(r.start).map(|i| i.rect))
+}
+
+/// The rows' own rectangle — inside the ring and above the hints.
+///
+/// What `SuggestionsRenderer` returned as `inner_rect`, and what the hover and
+/// click rails hit-tested against while they still worked in coordinates.
+pub fn suggestions_list_rect(spec: &fresh_ui::LayoutSpec) -> Option<fresh_ui::Rect> {
+    let key = LIST_KEY.with(|k| k.clone());
+    spec.index
+        .iter()
+        .find(|(k, _)| *k == key)
+        .and_then(|(_, r)| spec.items.get(r.start).map(|i| i.rect))
+}
+
+/// The scrollbar's track, when the list has one.
+///
+/// `render` computed this by hand — one column at the popup's right edge, only
+/// when `total > visible` — and cached it in `ChromeLayout` for the drag
+/// handlers. The viewport emits the bar as an item when it needs one, so its
+/// presence and its rectangle are the same answer.
+pub fn suggestions_scrollbar_rect(spec: &fresh_ui::LayoutSpec) -> Option<fresh_ui::Rect> {
+    let key = LIST_KEY.with(|k| k.clone());
+    let range = spec.index.iter().find(|(k, _)| *k == key)?.1.clone();
+    spec.items[range]
+        .iter()
+        .find(|i| matches!(i.draw, fresh_ui::Draw::Scrollbar { .. }))
+        .map(|i| i.rect)
 }
 
 /// Which slice of the list is on screen, read back off the laid-out tree.
@@ -1007,6 +1045,73 @@ mod tests {
             "the hints row is the cell between them"
         );
         assert_eq!(with.h, bare.h, "and the popup itself is unchanged");
+    }
+
+    /// **The popup is as wide as the prompt row.** `render` said
+    /// `width = chrome.width` and passed it in; the layer takes it from the
+    /// row it is anchored to, so the two cannot drift when a dock opens and
+    /// the chrome column narrows.
+    #[test]
+    fn the_popup_spans_the_prompt_row() {
+        use crate::view::shell::frame::{frame_tree, region_key, Frame, HostRegion};
+        let mut ui: Ui<UiMsg> = Ui::new();
+        let spec = ui
+            .frame(
+                frame_tree(Frame {
+                    prompt_line: true,
+                    // A dock takes cells off the left, so the prompt row is
+                    // narrower than the frame — which is the case the passed-in
+                    // width had to be kept in step with.
+                    dock: Some(12),
+                    suggestions: Some(Suggestions {
+                        rows: rows(3),
+                        selected: Some(0),
+                        place: Place::AbovePrompt,
+                        hints: None,
+                    }),
+                    ..Frame::default()
+                }),
+                Size::new(60, 20),
+            )
+            .clone();
+        let prompt = ui.rect_of(ui.find_by_key(&region_key(HostRegion::PromptLine)).unwrap());
+        let popup = suggestions_rect(&spec).expect("placed");
+        assert_eq!((popup.x, popup.w), (prompt.x, prompt.w));
+    }
+
+    /// **A long list does not make a tall box.** `render` capped the popup's
+    /// height at `MAX_VISIBLE_SUGGESTIONS + 2`; a layer measures its content,
+    /// so without the cap said here a thousand-row palette would ask for a
+    /// thousand-row box.
+    #[test]
+    fn the_popup_stops_at_the_visible_row_cap() {
+        let tall = |n: usize| {
+            let mut ui: Ui<UiMsg> = Ui::new();
+            ui.frame(
+                col().child(suggestions_layer(&Suggestions {
+                    rows: rows(n),
+                    selected: Some(0),
+                    place: Place::AbovePrompt,
+                    hints: None,
+                })),
+                Size::new(60, 40),
+            );
+            ui.rect_of(
+                ui.find_by_key(&POPUP_KEY.with(|k| k.clone()))
+                    .expect("the box"),
+            )
+            .h
+        };
+        assert_eq!(
+            tall(3),
+            3 + 2,
+            "a short list is its own height, plus the ring"
+        );
+        assert_eq!(
+            tall(1000),
+            MAX_VISIBLE_SUGGESTIONS as u16 + 2,
+            "a long one stops at the cap"
+        );
     }
 
     /// **Ledger finding A: the column yield order.** The name is sized before

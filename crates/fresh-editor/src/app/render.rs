@@ -2716,6 +2716,8 @@ impl Editor {
             .flatten();
         self.shell_frame_status_bar = status_bar_items.clone();
         let menu_keys = self.menu_shortcuts();
+        let suggestions = self.suggestions_description();
+        self.shell_owns_suggestions = suggestions.is_some();
         crate::view::shell::frame::Frame {
             menu_bar: menu_bar_visible,
             status_bar: status_row,
@@ -2734,10 +2736,7 @@ impl Editor {
             // description and the rectangles the not-yet-migrated hit-testing
             // uses cannot disagree — they are one computation.
             dropdowns: menu_layout.map(|l| l.shell_dropdowns).unwrap_or_default(),
-            // Held back, deliberately: see `suggestions_description`. Building
-            // it here and letting the overlay band paint it would put the new
-            // list on top of the painter's, which still draws.
-            suggestions: None,
+            suggestions,
         }
     }
 
@@ -2749,27 +2748,24 @@ impl Editor {
     /// `Anchor::Node` + `Place::Above` place the layer, so neither is stored
     /// on this side any more.
     ///
-    /// **Not yet handed to the frame.** `SuggestionsRenderer::render_with_hover`
-    /// still draws this list, and only one of the two may draw it: the layer
-    /// paints in the overlay band and would land on top of the painter's cells.
-    /// Every rule is now expressed and covered: the rows, the four-column yield
-    /// order with its ellipsis and its truncation direction, the selection, a
-    /// plugin's styled description spans, the scrollbar, single- and
-    /// double-click, the window (`prompt::suggestions_window` reads it back off
-    /// the tree, so `Prompt::scroll_offset` stops being one number that five
-    /// places write to), and the placement above the prompt row.
-    ///
-    /// The popup's own chrome is here too — its ring, its two-cell gutter, and
-    /// the ground under the rows the list does not fill. What is left is one
-    /// swap rather than a concept: moving the click rail off the recorded
-    /// rectangles in `ChromeLayout` and onto the layer. Both prompts have to
-    /// move together, because the overlay one shares
-    /// `suggestions_scrollbar_rect` and the scroll offset with this one.
-    #[allow(dead_code)]
+    /// **Only the bottom-anchored form.** The floating-overlay prompt draws
+    /// its list inside a card whose rectangle its own painter computes later
+    /// in the frame, so `Place::Inside` has nothing to be given yet; and the
+    /// file-browser prompts draw a different popup entirely. Both are the
+    /// painter's still, and both return `None` here so the two never draw the
+    /// same list.
     fn suggestions_description(&self) -> Option<crate::view::shell::prompt::Suggestions> {
         use crate::view::shell::prompt::{SuggestionRow, Suggestions};
         let prompt = self.active_window().prompt.as_ref()?;
-        if prompt.suggestions.is_empty() {
+        if prompt.suggestions.is_empty() || prompt.overlay {
+            return None;
+        }
+        if matches!(
+            prompt.prompt_type,
+            crate::view::prompt::PromptType::OpenFile
+                | crate::view::prompt::PromptType::SwitchProject
+                | crate::view::prompt::PromptType::SaveFileAs
+        ) {
             return None;
         }
         Some(Suggestions {
@@ -3523,33 +3519,6 @@ impl Editor {
     }
 
     /// Render the Quick Open hints line showing available mode prefixes
-    fn render_quick_open_hints(
-        frame: &mut Frame,
-        area: ratatui::layout::Rect,
-        theme: &crate::view::theme::Theme,
-    ) {
-        use fresh_i18n::t;
-        use ratatui::style::{Modifier, Style};
-        use ratatui::text::{Line, Span};
-        use ratatui::widgets::Paragraph;
-
-        let hints_style = Style::default()
-            .fg(theme.line_number_fg)
-            .bg(theme.suggestion_selected_bg)
-            .add_modifier(Modifier::DIM);
-        let hints_text = t!("quick_open.mode_hints");
-        // Left-align with small margin
-        let left_margin = 2;
-        let hints_width = crate::primitives::display_width::str_width(&hints_text);
-        let mut spans = Vec::new();
-        spans.push(Span::styled(" ".repeat(left_margin), hints_style));
-        spans.push(Span::styled(hints_text.to_string(), hints_style));
-        let remaining = (area.width as usize).saturating_sub(left_margin + hints_width);
-        spans.push(Span::styled(" ".repeat(remaining), hints_style));
-
-        let paragraph = Paragraph::new(Line::from(spans));
-        frame.render_widget(paragraph, area);
-    }
 
     /// Apply dimming effect to UI elements outside the focused terminal area
     /// This visually indicates that keyboard capture mode is active
@@ -3626,95 +3595,63 @@ impl Editor {
             return;
         }
 
-        let is_quick_open = prompt.prompt_type == crate::view::prompt::PromptType::QuickOpen;
-        let hints_height: u16 = if is_quick_open { 1 } else { 0 };
-        let suggestion_count = prompt
-            .suggestions
-            .len()
-            .min(crate::view::prompt::MAX_VISIBLE_SUGGESTIONS);
-        let height = suggestion_count as u16 + 2 + hints_height;
+        // Nothing is painted here any more. The layer drew the popup, the
+        // hints row and the scrollbar in the overlay band before this method
+        // ran, and everything below is the geometry the not-yet-migrated
+        // rails still ask `ChromeLayout` for — read off the tree that placed
+        // it rather than computed a second time.
+        //
+        // Gone with the painter: the `Clear` that blanked the cells under the
+        // box (a themed box fills its own ground), the `y` arithmetic that had
+        // to agree with a second copy in `chrome::Prompt::collect`, and the
+        // quick-open hints row, which is now the layer's own last row.
+        self.record_suggestions_geometry();
+    }
 
-        let suggestions_area = ratatui::layout::Rect {
-            x: prompt_area.x,
-            y: prompt_area.y.saturating_sub(height),
-            width,
-            height: height - hints_height,
-        };
-
-        // Blank the buffer cells under the suggestions box only when the
-        // pipeline is actually drawing chrome into cells (the TUI). In web mode
-        // (`suppress_chrome_cells`) the palette is drawn as native DOM on top of
-        // the cell buffer, so clearing here would punch a visible hole in the
-        // buffer wherever the native palette is NOT positioned over these rows
-        // (e.g. a centered-modal layout). Mirrors the gating every other chrome
-        // `Clear` already uses (overlay prompt, preview pane): compute geometry,
-        // don't mutate the cell buffer for chrome the frontend renders itself.
-        if !self.suppress_chrome_cells {
-            frame.render_widget(ratatui::widgets::Clear, suggestions_area);
-        }
-
-        // Adjust the prompt's scroll position to keep the selected item
-        // visible, scrolling the minimum amount required — unless the user
-        // has scrolled the list with the scrollbar, in which case pulling
-        // the offset back would undo their scroll (same reasoning as the
-        // overlay prompt, issue #2119).
-        if let Some(prompt) = self.active_window_mut().prompt.as_mut() {
-            if !prompt.manual_scroll {
-                prompt.ensure_selected_visible_within(suggestion_count);
-            }
-        }
-        let Some(prompt) = &self.active_window().prompt else {
+    /// Copy the suggestion list's rectangles out of the shell tree.
+    ///
+    /// A bridge, and it is meant to read like one. `suggestions_area`,
+    /// `suggestions_outer_area` and `suggestions_scrollbar_rect` are consumed
+    /// by four rails that still work in coordinates — the click and hover
+    /// walks in `chrome::Prompt`, the buffer-cursor absorb guard in
+    /// `mouse_input`, the wheel's row budget in `prompt_lifecycle`, and the
+    /// web `Scene`. Each of them is a separate migration. Until then they read
+    /// one answer, produced once, by the layout that actually placed the box —
+    /// which is already better than the painter's return value, because there
+    /// is no longer a second derivation to disagree with.
+    fn record_suggestions_geometry(&mut self) {
+        use crate::view::shell::prompt as p;
+        let read = self.shell_ui.as_ref().map(|ui| {
+            let spec = ui.spec();
+            (
+                p::suggestions_rect(spec),
+                p::suggestions_list_rect(spec),
+                p::suggestions_scrollbar_rect(spec),
+                p::suggestions_window(spec),
+            )
+        });
+        let Some((outer, list, bar, window)) = read else {
             return;
         };
-
-        let new_suggestions_area = SuggestionsRenderer::render_with_hover(
-            frame,
-            suggestions_area,
-            prompt,
-            &self.theme.read().unwrap(),
-            self.active_window().mouse_state.hover_target.as_ref(),
-            true,
-            !self.suppress_chrome_cells,
-        );
+        let total = self
+            .active_window()
+            .prompt
+            .as_ref()
+            .map(|p| p.suggestions.len())
+            .unwrap_or(0);
+        let to_rect = |r: fresh_ui::Rect| ratatui::layout::Rect {
+            x: r.x.max(0) as u16,
+            y: r.y.max(0) as u16,
+            width: r.w,
+            height: r.h,
+        };
         let chrome = self.active_chrome_mut();
-        chrome.suggestions_area = new_suggestions_area;
-        if chrome.suggestions_area.is_some() {
-            chrome.suggestions_outer_area = Some(suggestions_area);
-        }
-        // When the list overflows, the renderer drew a scrollbar over the
-        // popup's right border; record its rect so the shared prompt-
-        // scrollbar mouse handlers (click-to-jump, thumb drag) work here
-        // exactly like in the overlay prompt (issue #623 / #1593).
-        chrome.suggestions_scrollbar_rect =
-            new_suggestions_area.and_then(|(inner, _, visible, total)| {
-                (total > visible).then_some(ratatui::layout::Rect {
-                    x: inner.x + inner.width,
-                    y: inner.y,
-                    width: 1,
-                    height: inner.height,
-                })
-            });
-
-        // The quick-open hints row is chrome drawn into cells; the web renders
-        // no hints, so in `suppress_chrome_cells` mode we skip it entirely
-        // rather than stamp hint glyphs into the buffer cells the frontend
-        // slices (which would show through a centered-modal palette).
-        if is_quick_open && !self.suppress_chrome_cells {
-            let hints_area = ratatui::layout::Rect {
-                // Align with the prompt / suggestions box, which sit in the
-                // chrome area to the right of a left dock (`prompt_area.x`).
-                // Hardcoding `x: 0` here drew the hints starting at the very
-                // left edge — under the dock column — so the bar was
-                // partially obscured by the dock and visibly misaligned with
-                // the suggestions box stacked directly above it.
-                x: prompt_area.x,
-                y: prompt_area.y.saturating_sub(hints_height),
-                width,
-                height: hints_height,
-            };
-            frame.render_widget(ratatui::widgets::Clear, hints_area);
-            Self::render_quick_open_hints(frame, hints_area, &self.theme.read().unwrap());
-        }
+        chrome.suggestions_outer_area = outer.map(to_rect);
+        chrome.suggestions_scrollbar_rect = bar.map(to_rect);
+        chrome.suggestions_area = list.map(|r| {
+            let (first, visible) = window.unwrap_or((0, r.h as usize));
+            (to_rect(r), first, visible.max(r.h as usize), total)
+        });
     }
 
     /// Resolve the overlay's currently-selected match into a real

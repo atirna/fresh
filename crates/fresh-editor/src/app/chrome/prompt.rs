@@ -72,7 +72,16 @@ impl ChromeComponent for Prompt {
         // wherever the pointer sits (position-blind capture for the
         // bottom-anchored dropdown). Other gestures have no handler
         // for it and fall through.
-        t.full("chrome:prompt_suggestions", 155);
+        //
+        // Not while the shell tree owns the list. Its viewport holds the
+        // window, so `handle_prompt_scroll`'s write to `Prompt::scroll_offset`
+        // would go nowhere — and this box would still swallow the wheel, so
+        // the pointer would scroll neither the list nor what is under it. The
+        // list scrolls when the pointer is over it now, which is the routing
+        // fresh-ui states and the ledger's finding C records the loss of.
+        if !ed.shell_owns_suggestions {
+            t.full("chrome:prompt_suggestions", 155);
+        }
         // The overlay prompt's CLICK scrim rides low — just above the
         // editor content band — so chrome controls that peek out from
         // under the overlay (tabs, scrollbars, status bar) still take
