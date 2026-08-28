@@ -197,15 +197,19 @@ impl Editor {
         // precedence is tree position rather than a band — this fork only
         // keeps the PTY from swallowing the events before either sees them.
         let context_menu_open = self.active_window().context_menu_core().is_some();
-        // DERIVED suppression for everything with opaque geometry: a
-        // pointer-opaque chrome box over the cell (an info popup, the
-        // suggestions dropdown, the theme-info popup) must take the
-        // event in the walk — forwarding it would inject mouse codes
-        // into the PTY *through* the popup. This replaces growing the
-        // hand list one surface at a time; the context-menu check above
-        // stays NAMED by ruling because the menu contributes no chrome
-        // boxes at all any more — it is a `Layer` in the shell's tree,
-        // whose modality is not visible to this walk's opacity test.
+        // The opacity suppression is gone with the surfaces it derived from.
+        // It said: a pointer-opaque chrome box over the cell — an info popup,
+        // the suggestions dropdown, the theme-info popup — must take the event
+        // in the walk, because forwarding it would inject mouse codes into the
+        // PTY *through* the popup. Every one of those is a node now, and the
+        // shell is offered the pointer above, before this gate: a surface that
+        // claims stops the event there. No chrome box sets `pointer_opaque`
+        // any more, so the test could only ever answer false.
+        //
+        // The context-menu check stays NAMED by ruling, for the reason it
+        // always was: the menu is `Modality::Inert`, so it does not claim a
+        // press aimed past it, and this fork is what keeps the PTY from
+        // swallowing one before the menu's own dismissal sees it.
         // ONE tree per event, built AFTER the pre-band observers above
         // (the LSP-rename cancel can close a prompt, which changes the
         // geometry) and shared by the forward gate and every dispatch
@@ -213,10 +217,6 @@ impl Editor {
         // event, same state), and a mouse-move stream no longer pays
         // two collects + two hit_stack sorts per event.
         let tree = super::chrome::chrome_tree(self);
-        let opaque_chrome_over_point =
-            crate::widgets::layout_box::hit_stack(&tree, row as u32, col as u32)
-                .into_iter()
-                .any(|i| tree[i].lb.pointer_opaque);
 
         // Then the migration shell. It used to run *after* a capture band,
         // because a full-screen modal had to outrank anything in the tree and
@@ -257,7 +257,7 @@ impl Editor {
                 return Ok(true);
             }
         }
-        if !chrome_drag_active && !context_menu_open && !opaque_chrome_over_point {
+        if !chrome_drag_active && !context_menu_open {
             let forwarding = self.config.terminal.mouse_forwarding;
             if let Some(result) = self.active_window_mut().try_forward_mouse_to_terminal(
                 col,
