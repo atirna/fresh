@@ -1674,13 +1674,50 @@ list.
    that measures, wraps and truncates as a unit. Mnemonics, match highlights
    and the explorer's git colouring all use it. Checked against the library
    rather than the note, while surveying for the second base PR.
-7. **Per-leaf decomposition of `render_content`** (blocks M9). Its unit today
-   is the whole split tree; the target grid wants per-leaf `Host` nodes with
-   `fresh-ui` tabs and dividers. Either the whole grid stays one `Host` leaf
-   (and M9's headline deletions shrink), or the orchestration layer is split
-   per leaf — a refactor on the KEEP side (`render_phantom_leaf` shows a
-   per-leaf path exists, minus the cross-tree logic). A scoping decision, not
-   a detail.
+7. **Per-leaf decomposition of `render_content`** (blocks S5). *Decided: split
+   the orchestration per leaf. The grid's structure is layout, and layout is
+   the tree's.*
+
+   The alternative — keep the whole grid as one `Host` leaf — was never really
+   open. It would leave the frame's **dominant** region as the one place the
+   shell does not own the geometry, and the argument for the shell owning the
+   rest applies here with more force, not less: `SplitNode::get_leaves_with_rects`
+   is a second layout engine, recursing over ratios and reserving a cell per
+   separator, and everything downstream (separator drags, per-leaf scrollbars,
+   tab strips, click-to-byte) is keyed on rectangles it alone produces.
+
+   **The rule is expressible today, exactly.** `split_rect_ext` reserves one
+   cell for the separator, converts the ratio to cells, and clamps the first
+   child to a minimum so the sibling keeps `MIN_PANE_{WIDTH,HEIGHT}`. That is
+   `row([first.w(Cells(n)), divider.w(Cells(1)), second.flex(1)])`, with `n`
+   from the same helper — a ratio pinned to a minimum is **app logic keyed on
+   the available extent**, the same shape as the dock's bail-out, and
+   `Frame::resolve_dock` is the pattern for computing it before `build()`
+   rather than inside it. So there is no new library capability here and no
+   pixel change to negotiate: the tree can be asserted equal to
+   `get_leaves_with_rects` over a sweep of shapes and sizes, the way
+   `ui_shell_frame_parity` does for the frame.
+
+   What the decision costs is the **orchestration split**, and that is the real
+   work rather than the description. `render_content` mixes three things: a
+   cross-leaf preamble (`expand_visible_buffers`, the active split, "are there
+   several"), a per-leaf paint, and seven accumulated output vectors. Per-leaf
+   means the preamble is computed once into state the callback reads, the paint
+   becomes `paint_leaf(id, rect, …)`, and the accumulation happens across calls
+   instead of inside one. `render_phantom_leaf` shows the per-leaf path exists.
+
+   **The order, therefore:**
+   1. A leaf host id space (`HostRegion` is a small fixed enum; a leaf's id is
+      its `LeafId`, tagged) and a `HostTarget::{Region, Leaf}` for the fold's
+      dispatch, so its "a host id with no region" assertion still holds.
+   2. `split_grid(node) -> Node`, with a parity test against
+      `get_leaves_with_rects` and `get_separators_with_ids`.
+   3. The orchestration split, and the swap — both in one change, because a
+      description of the grid that nothing paints from is exactly the second
+      derivation this migration exists to remove.
+   4. Only then the dividers become gestures with pointer capture (retiring
+      `PointerGrab::SplitSeparator`), and the tab strips and scrollbars come
+      out of the leaf one at a time — the latter gated on item 8.
 8. **Scrollbar markers** (blocks M9). `Draw::Scrollbar` carries only
    `{offset, content, window}`; the plugin overview-ruler marker API has no
    expression. Extend the library's scrollbar, keep scrollbars behind the
