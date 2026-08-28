@@ -1816,6 +1816,30 @@ impl Editor {
         // `Editor::trust_description` and `view::shell::trust`.
     }
 
+    /// Which full-screen modal has the pointer, if any.
+    ///
+    /// **Rank order, and the first taker wins** — the rule the capture band
+    /// walked the overlay stack to apply, stated once here because only one
+    /// layer can be exclusive at a time. The predicates are the components'
+    /// own, which is what kept their capture gate and their layer gate from
+    /// drifting apart.
+    pub(crate) fn modal_slot(&self) -> Option<crate::view::shell::modal::Slot> {
+        use crate::view::shell::modal::Slot;
+        if self.settings_state.as_ref().is_some_and(|s| s.visible) {
+            return Some(Slot::Settings);
+        }
+        if self.keybinding_editor.is_some() {
+            return Some(Slot::KeybindingEditor);
+        }
+        if self.calibration_wizard.is_some() {
+            return Some(Slot::Calibration);
+        }
+        if self.floating_widget_panel.is_some() {
+            return Some(Slot::FloatingPanel);
+        }
+        None
+    }
+
     /// The workspace-trust prompt, as the shell describes it.
     ///
     /// **Every string resolved, no rectangle.** The painter built a
@@ -2650,6 +2674,7 @@ impl Editor {
         let card = self.overlay_card_description(chrome_area);
         let popups = self.popup_descriptions(chrome_area);
         let theme_info = self.theme_info_description();
+        let modal = self.modal_slot();
         let trust = self.trust_description(ratatui::layout::Rect {
             x: 0,
             y: 0,
@@ -2660,6 +2685,7 @@ impl Editor {
             theme_info,
             browser,
             trust,
+            modal,
             menu_bar: menu_bar_visible,
             status_bar: status_row,
             search_options,

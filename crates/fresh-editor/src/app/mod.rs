@@ -1210,6 +1210,17 @@ pub struct Editor {
     /// keeping `app` and `ui` side by side in `main`.
     pub(crate) shell_ui: Option<fresh_ui::Ui<crate::view::shell::msg::UiMsg>>,
 
+    /// The mouse event currently being routed, and whether it was a double.
+    ///
+    /// Set immediately before the tree is offered the pointer, and read only
+    /// by `UiFact::ModalPointer`. A full-screen modal's interior is a painter
+    /// that hit-tests its own recorded rectangles and distinguishes a drag
+    /// from a move — which a tree `Event` deliberately cannot, since the
+    /// library routes drags by pointer capture instead. So the tree decides
+    /// *which surface* the event belongs to and the event itself stays here:
+    /// it is routed, not transported. Retires with those interiors.
+    pub(crate) shell_pointer_event: Option<(crossterm::event::MouseEvent, bool)>,
+
     /// What the split grid needs to know about this frame, and what it
     /// produced. Both travel here rather than through the call because the
     /// fold reaches the grid through `HostPainter::paint_host`, whose

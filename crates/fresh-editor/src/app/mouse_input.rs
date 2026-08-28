@@ -121,35 +121,18 @@ impl Editor {
 
         let (is_double_click, is_triple_click) = self.detect_multi_click(&mouse_event, col, row);
 
-        // Modal mouse-capture, offered in RANK order over the derived
-        // overlay stack: the first component whose modal surface is up
-        // claims the whole mouse channel. Every capturing component
-        // declares a layer from the same activity predicate its
-        // capture gates on, so walking the owner-stamped stack visits
-        // exactly the capturing candidates — and deletes the old
-        // registry-order duplicate of the precedence (two hand-synced
-        // encodings, comment-only sync). Rank IS the one source now,
-        // for the keyboard walk and the capture band alike.
-        {
-            let stack = self.overlay_stack();
-            let mut seen = std::collections::HashSet::new();
-            for entry in &stack {
-                // The hardcoded event-debug head has no owner; a
-                // component contributing several layers is offered
-                // the capture once, at its highest rank.
-                let Some(owner) = entry.owner else { continue };
-                if !seen.insert(owner) {
-                    continue;
-                }
-                if let Some(result) = super::chrome::components()[owner].capture_mouse(
-                    self,
-                    mouse_event,
-                    is_double_click,
-                ) {
-                    return result;
-                }
-            }
-        }
+        // The modal mouse-capture band is gone. It walked the overlay stack
+        // in rank order and gave the whole mouse channel to the first modal
+        // that was up — a second routing engine, ahead of the shell's, and
+        // the reason `placed_surface_outranks_shell` had to exist. A modal is
+        // a `Modality::Exclusive` layer in the tree now, so the tree answers
+        // the same question in the same walk as everything else.
+        //
+        // The event it routes stays here rather than travelling as a fact: a
+        // full-screen modal's interior hit-tests rectangles its own painter
+        // recorded and tells a drag from a move, which a tree `Event`
+        // deliberately cannot. See `view::shell::modal`.
+        self.shell_pointer_event = Some((mouse_event, is_double_click));
 
         // Cancel the LSP-rename prompt on ANY mouse interaction that
         // reaches normal routing. RULING — a pre-WALK observer of the
@@ -235,20 +218,17 @@ impl Editor {
                 .into_iter()
                 .any(|i| tree[i].lb.pointer_opaque);
 
-        // Then the migration shell — stage two of three, and deliberately
-        // *after* the capture band above. A full-screen modal (Settings, the
-        // keybinding editor, workspace trust) must outrank anything in the
-        // tree; running the shell first would invert that, letting a layer
-        // answer a pointer the modal had already claimed. The legacy walk
-        // below stays the floor.
+        // Then the migration shell. It used to run *after* a capture band,
+        // because a full-screen modal had to outrank anything in the tree and
+        // running the shell first would have inverted that — and it consulted
+        // `placed_surface_outranks_shell` for the same reason at the level of
+        // individual surfaces, restating the `z` a migrated box used to carry
+        // so a modal drawn over the file explorer still owned its own cells.
         //
-        // It also runs after the tree is built, and consults it. The tree has
-        // no rank in this walk, so `placed_surface_outranks_shell` is where the
-        // ranks its surfaces used to have are said: the explorer's box was
-        // `z = 100` and the file-open browser's is 130, and losing that
-        // inversion let the explorer answer clicks landing inside a modal
-        // drawn over it — the browser's rows and its checkboxes are in the
-        // left 36 columns, which is exactly where the dock sits.
+        // Both are gone. The modals are `Modality::Exclusive` layers, and no
+        // placed box above the shell's band is left — the split grid's sit at
+        // 70 and 80, below it. So there is one walk, and it is this one; the
+        // legacy walk below stays the floor.
         //
         // Whether the tree took the event is reported by `dispatch`, not
         // inferred from whether it had anything to say: a hover moves a
@@ -265,24 +245,16 @@ impl Editor {
         } else {
             1
         };
-        if !super::chrome::placed_surface_outranks_shell(
-            &tree,
-            self.active_chrome().last_frame.width,
-            self.active_chrome().last_frame.height,
-            col,
-            row,
-        ) {
-            // A notch is worth `mouse_wheel_scroll_lines` on the vertical axis and
-            // `WHEEL_COLUMNS` sideways — the same rule `begin_wheel_scroll` states
-            // for the walk below, because a surface that moved into the tree must
-            // not scroll at a different speed from the one beside it.
-            let wheel_lines = self.config.editor.mouse_wheel_scroll_lines.max(1) as i32;
-            if let Some(input) =
-                crate::view::shell::input::mouse(mouse_event, clicks, wheel_lines, WHEEL_COLUMNS)
-            {
-                if self.shell_dispatch(input) {
-                    return Ok(true);
-                }
+        // A notch is worth `mouse_wheel_scroll_lines` on the vertical axis and
+        // `WHEEL_COLUMNS` sideways — the same rule `begin_wheel_scroll` states
+        // for the walk below, because a surface that moved into the tree must
+        // not scroll at a different speed from the one beside it.
+        let wheel_lines = self.config.editor.mouse_wheel_scroll_lines.max(1) as i32;
+        if let Some(input) =
+            crate::view::shell::input::mouse(mouse_event, clicks, wheel_lines, WHEEL_COLUMNS)
+        {
+            if self.shell_dispatch(input) {
+                return Ok(true);
             }
         }
         if !chrome_drag_active && !context_menu_open && !opaque_chrome_over_point {

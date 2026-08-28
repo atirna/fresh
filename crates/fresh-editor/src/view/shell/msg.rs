@@ -215,6 +215,10 @@ pub enum UiFact {
     /// The secondary button — Cancel when the prompt was opened voluntarily,
     /// Quit for the mandatory gate at startup.
     TrustSecondary,
+    /// A pointer event belongs to this full-screen modal, whose interior is
+    /// still a painter's and hit-tests rectangles that painter recorded. The
+    /// event itself never left the host — see `shell::modal`.
+    ModalPointer(super::modal::Slot),
 }
 
 /// What a menu-bar navigation step does to the open chain.

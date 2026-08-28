@@ -22,6 +22,7 @@ pub mod fold;
 pub mod frame;
 pub mod input;
 pub mod menu;
+pub mod modal;
 pub mod msg;
 pub mod overlay_prompt;
 pub mod popup;

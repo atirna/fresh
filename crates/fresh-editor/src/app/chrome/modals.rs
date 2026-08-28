@@ -1,12 +1,18 @@
 //! The full-screen modal band: Settings, the keybinding editor, the
-//! calibration wizard, and the workspace-trust prompt. Each owns the
-//! whole mouse channel while up ([`ChromeComponent::capture_mouse`]);
-//! their INTERIORS stay bespoke (Settings is its own later phase) —
-//! the component is the dispatch slot, so replacing an interior never
-//! touches dispatch again. They contribute no boxes yet: capture
-//! preempts every gesture walk, so band geometry would be dead until
-//! the modal handlers decompose onto the walks (grab slot + opacity
-//! gate — this slice's recorded residue).
+//! calibration wizard, and the workspace-trust prompt.
+//!
+//! **Their mouse has moved.** Each owned the whole channel through
+//! `ChromeComponent::capture_mouse`, a band ahead of every walk; a modal is a
+//! `Modality::Exclusive` layer in the shell's tree now, and the trust prompt's
+//! controls are nodes outright. What is left here is the keyboard — a
+//! capture-all with a bespoke dispatcher apiece — and the rank entry each
+//! contributes while that walk is still the chrome's.
+//!
+//! Their INTERIORS stay bespoke (Settings is its own later phase): the
+//! component is the dispatch slot, so replacing an interior never touches
+//! dispatch again. They contribute no boxes, and now cannot: an exclusive
+//! layer claims every event in the tree's own walk, so a box here would be
+//! dead in every reachable state.
 
 use anyhow::Result as AnyhowResult;
 
@@ -19,11 +25,10 @@ fn settings_up(ed: &Editor) -> bool {
     ed.settings_state.as_ref().is_some_and(|s| s.visible)
 }
 
-/// ONE activity predicate per modal, consulted by BOTH `capture_mouse`
-/// and `layers()`. The R3 capture band walks the derived overlay stack,
-/// so a component whose capture gate is true while its layer gate is
-/// false is never offered the capture at all — pairing the two gates on
-/// a single fn makes that impossible to drift instead of a convention.
+/// ONE activity predicate per modal, consulted by `layers()` here and by
+/// `Editor::modal_slot`, which decides whose layer claims the pointer. Pairing
+/// the two on a single fn is what kept a modal's capture gate and its layer
+/// gate from drifting apart while they were separate.
 fn kb_editor_up(ed: &Editor) -> bool {
     ed.keybinding_editor.is_some()
 }
@@ -36,18 +41,6 @@ pub(crate) struct Settings;
 
 impl ChromeComponent for Settings {
     fn collect(&self, _ed: &Editor, _t: &mut ChromeTreeBuilder) {}
-
-    fn capture_mouse(
-        &self,
-        ed: &mut Editor,
-        ev: crossterm::event::MouseEvent,
-        is_double_click: bool,
-    ) -> Option<AnyhowResult<bool>> {
-        if settings_up(ed) {
-            return Some(ed.handle_settings_mouse(ev, is_double_click));
-        }
-        None
-    }
 
     fn layers(&self, ed: &Editor, out: &mut Vec<(u16, Layer)>) {
         // Full-screen modal: owns the keyboard whenever present.
@@ -90,18 +83,6 @@ pub(crate) struct KeybindingEditor;
 impl ChromeComponent for KeybindingEditor {
     fn collect(&self, _ed: &Editor, _t: &mut ChromeTreeBuilder) {}
 
-    fn capture_mouse(
-        &self,
-        ed: &mut Editor,
-        ev: crossterm::event::MouseEvent,
-        _is_double_click: bool,
-    ) -> Option<AnyhowResult<bool>> {
-        if kb_editor_up(ed) {
-            return Some(ed.handle_keybinding_editor_mouse(ev));
-        }
-        None
-    }
-
     fn layers(&self, ed: &Editor, out: &mut Vec<(u16, Layer)>) {
         // Installs its own input dispatcher, so it is transparent to
         // `KeyContext`-driven resolution (`key_context: None`) but
@@ -134,21 +115,6 @@ pub(crate) struct CalibrationWizard;
 
 impl ChromeComponent for CalibrationWizard {
     fn collect(&self, _ed: &Editor, _t: &mut ChromeTreeBuilder) {}
-
-    fn capture_mouse(
-        &self,
-        ed: &mut Editor,
-        _ev: crossterm::event::MouseEvent,
-        _is_double_click: bool,
-    ) -> Option<AnyhowResult<bool>> {
-        // The wizard owns the modal z-band but ignores every mouse
-        // event (its UI is keyboard-driven). Swallowing matches the
-        // previous explicit `return Ok(false)`.
-        if calibration_up(ed) {
-            return Some(Ok(false));
-        }
-        None
-    }
 
     fn layers(&self, ed: &Editor, out: &mut Vec<(u16, Layer)>) {
         // Same custom-dispatcher treatment as the keybinding editor.
