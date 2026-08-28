@@ -114,6 +114,69 @@ pub fn placed(position: &PopupPosition, caret: Caret) -> Node<UiMsg> {
     }
 }
 
+/// One popup's geometry, as the shell states it.
+///
+/// **The size is the popup's own answer, not the tree's — for now.** Placement
+/// and measurement are two different migrations and this is the first of them:
+/// `calculate_area`'s six strategies become an `Anchor` and a `Place`, while
+/// `content_height` keeps computing how tall the box is. Measuring in the tree
+/// means the content nodes have to be *in* the tree, which is the step where
+/// the painter stops painting — and doing both at once would leave a
+/// disagreement with nowhere to localise it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    pub position: PopupPosition,
+    /// Where the caret is, for the cursor-anchored strategies. `None` for the
+    /// screen-anchored ones, which never look at it.
+    pub caret: Caret,
+    /// What the popup asks to occupy, in cells: `(width, height)`.
+    pub size: (u16, u16),
+}
+
+/// The key a placed popup carries, by its index in paint order.
+pub fn popup_key(i: usize) -> Key {
+    Key::Pair("popup".into(), i as u64)
+}
+
+/// Each popup as a layer that occupies its rectangle and paints nothing.
+///
+/// The overlay prompt's card taught this the hard way: a layer is in the
+/// overlay band, so anything it draws lands *on top of* the painter that still
+/// owns the surface and erases it. Until the content moves, the layer's whole
+/// job is to have a rectangle the painter can be told about.
+pub fn placed_layers(ps: &[Placed]) -> Vec<Node<UiMsg>> {
+    ps.iter()
+        .enumerate()
+        .map(|(i, p)| {
+            placed(&p.position, p.caret)
+                .key(popup_key(i))
+                .child(col().w(Sizing::Cells(p.size.0)).h(Sizing::Cells(p.size.1)))
+        })
+        .collect()
+}
+
+/// Where the tree put each popup, in the order they were declared.
+///
+/// The partner of [`super::frame::regions_of`]. A popup whose layer is missing
+/// reports an empty rectangle rather than being absent, so the caller indexes
+/// by the same position it built.
+pub fn rects_of(ui: &fresh_ui::Ui<UiMsg>, n: usize) -> Vec<ratatui::layout::Rect> {
+    (0..n)
+        .map(|i| {
+            let r = ui
+                .find_by_key(&popup_key(i))
+                .map(|id| ui.rect_of(id))
+                .unwrap_or_default();
+            ratatui::layout::Rect {
+                x: r.x.max(0) as u16,
+                y: r.y.max(0) as u16,
+                width: r.w,
+                height: r.h,
+            }
+        })
+        .collect()
+}
+
 /// How big the popup asks to be, in the terms its own fields already use.
 ///
 /// `width` is a cell count the popup carries; the height is its content's,
