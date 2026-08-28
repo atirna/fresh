@@ -105,9 +105,14 @@ pub enum Place {
     /// Above the prompt row, in its own bordered popup, flipping below when
     /// there is no room above.
     AbovePrompt,
-    /// Filling a rectangle someone else measured, with no frame of its own.
-    /// The overlay card's results column.
-    Inside(fresh_ui::Rect),
+    /// Filling the overlay card's results band, with no frame of its own.
+    ///
+    /// No rectangle: the band is a node in the same tree, so the layer names
+    /// it and layout answers. Layers resolve after the main walk — that is
+    /// what `Anchor::Node` is for — so the band has its rectangle by the time
+    /// this one is placed, and nothing has to be measured twice or passed
+    /// between two passes.
+    InCard,
 }
 
 impl Default for Place {
@@ -502,20 +507,19 @@ pub fn suggestions_layer(s: &Suggestions) -> Node<UiMsg> {
             // something the caller measures and passes in.
             .stretch_to_anchor()
             .fit(Fit::FLIP.or(Fit::CLAMP)),
-        // The card measured this; the layer only occupies it. `Anchor::Point`
-        // for the corner and an explicit size for the rest — no `Fit`, because
-        // a rectangle the card carved out of the frame is already inside it.
-        Place::Inside(r) => l
-            .anchor(Anchor::Point(r.x.max(0) as u16, r.y.max(0) as u16))
-            .place(fresh_ui::Place::Over),
+        // The card's results band, by name. `Fill` takes its whole rectangle,
+        // and no `Fit` — a band the card carved out of the frame is already
+        // inside it.
+        Place::InCard => l
+            .anchor(Anchor::Node(super::overlay_prompt::region_key(
+                super::overlay_prompt::CardRegion::Results,
+            )))
+            .place(fresh_ui::Place::Fill),
     };
     // Not modal. The old encoding covered the frame below z15 to stop a
     // click reaching the *body*, which is a rule about a host leaf rather
     // than about this layer — see the ledger's withdrawn finding D.
-    let mut card = popup(s);
-    if let Place::Inside(r) = &s.place {
-        card = card.w(Sizing::Cells(r.w)).h(Sizing::Cells(r.h));
-    }
+    let card = popup(s);
     match &s.hints {
         Some(h) => l.child(col().children([card, hints_row(h)])),
         None => l.child(card),
@@ -993,85 +997,61 @@ mod tests {
     }
 
     /// **One list, two placements.** The overlay prompt draws its own frame
-    /// around the results column, so its list is borderless and fills a
-    /// rectangle the card measured; the bottom-anchored prompt brings its own
-    /// popup and sits above the row. They were two calls into one painter with
-    /// a `with_border` flag between them, and two copies of the placement
-    /// arithmetic that had to agree for a click to land.
+    /// around the results band, so its list is borderless and fills that band;
+    /// the bottom-anchored prompt brings its own popup and sits above the row.
+    /// They were two calls into one painter with a `with_border` flag between
+    /// them, and two copies of the placement arithmetic that had to agree for a
+    /// click to land.
+    ///
+    /// The band is named, not measured. `Anchor::Node` resolves after the main
+    /// walk, so the card has placed it by the time this layer is placed — no
+    /// rectangle passes between the two, and there is no second pass.
     #[test]
-    fn a_list_placed_inside_a_card_fills_it_and_brings_no_frame() {
-        let at = fresh_ui::Rect::new(10, 4, 24, 6);
+    fn a_list_placed_in_the_card_fills_its_band_and_brings_no_frame() {
+        use crate::view::shell::frame::{frame_tree, Frame};
+        use crate::view::shell::overlay_prompt::{
+            region_key as band_key, Card, CardRegion, PREVIEW_MIN_COLS,
+        };
         let mut ui: Ui<UiMsg> = Ui::new();
         let spec = ui
             .frame(
-                // Wrapped, because a layer resolves against a parent: it is
-                // out of flow *within* a tree, not a tree of its own.
-                col().child(suggestions_layer(&Suggestions {
-                    rows: rows(3),
-                    selected: Some(0),
-                    place: Place::Inside(at),
-                    hints: None,
-                })),
-                Size::new(60, 20),
+                frame_tree(Frame {
+                    prompt_line: true,
+                    card: Some(Card {
+                        at: fresh_ui::Rect::new(4, 2, PREVIEW_MIN_COLS + 20, 30),
+                        toolbar_rows: 2,
+                        footer: true,
+                    }),
+                    suggestions: Some(Suggestions {
+                        rows: rows(3),
+                        selected: Some(0),
+                        place: Place::InCard,
+                        hints: None,
+                    }),
+                    ..Frame::default()
+                }),
+                Size::new(200, 50),
             )
             .clone();
+        let band = ui.rect_of(
+            ui.find_by_key(&band_key(CardRegion::Results))
+                .expect("the band"),
+        );
+        assert!(band.w > 0 && band.h > 0, "the card placed a results band");
         assert_eq!(
             suggestions_rect(&spec),
-            Some(at),
-            "the layer fills the card"
+            Some(band),
+            "the list fills the band the card measured"
         );
         assert!(
             !spec
                 .items
                 .iter()
-                .any(|i| matches!(i.draw, fresh_ui::Draw::Border)),
+                .any(|i| matches!(i.draw, fresh_ui::Draw::Border)
+                    && i.theme.as_str() == "ui.popup_border_fg/ui.suggestion_bg"
+                    && i.rect == band),
             "a frame inside the card's frame is a double frame"
         );
-    }
-
-    /// **The quick-open hints sit between the popup and the prompt row.**
-    ///
-    /// The painter computed that twice: the hints at "the prompt row minus
-    /// one", and the popup's `y` at "the prompt row minus the popup minus that
-    /// same one". Stacked in the layer, the agreement is the stacking — and
-    /// the popup rises by exactly the row the hints occupy, with no second
-    /// subtraction to keep in step.
-    #[test]
-    fn the_hints_row_sits_under_the_popup_and_lifts_it() {
-        use crate::view::shell::frame::{frame_tree, region_key, Frame, HostRegion};
-        let build = |hints: Option<String>| {
-            let mut ui: Ui<UiMsg> = Ui::new();
-            let spec = ui
-                .frame(
-                    frame_tree(Frame {
-                        prompt_line: true,
-                        suggestions: Some(Suggestions {
-                            rows: rows(3),
-                            selected: Some(0),
-                            place: Place::AbovePrompt,
-                            hints,
-                        }),
-                        ..Frame::default()
-                    }),
-                    Size::new(60, 20),
-                )
-                .clone();
-            let prompt = ui.rect_of(ui.find_by_key(&region_key(HostRegion::PromptLine)).unwrap());
-            (suggestions_rect(&spec).expect("placed"), prompt)
-        };
-        let (bare, prompt) = build(None);
-        let (with, _) = build(Some("^F files  ^S symbols".into()));
-        assert_eq!(
-            bare.bottom(),
-            prompt.y,
-            "with no hints the popup meets the prompt row"
-        );
-        assert_eq!(
-            with.bottom(),
-            prompt.y - 1,
-            "the hints row is the cell between them"
-        );
-        assert_eq!(with.h, bare.h, "and the popup itself is unchanged");
     }
 
     /// **The popup is as wide as the prompt row.** `render` said
@@ -1178,6 +1158,36 @@ mod tests {
             );
             assert!(got.msgs.is_empty(), "and must say nothing: {:?}", got.msgs);
         }
+    }
+
+    /// **A list that overflows gets a scrollbar; one that fits does not.**
+    ///
+    /// `overflowing_list_draws_scrollbar_on_right_border` and
+    /// `fitting_list_keeps_plain_right_border` in the painter, which drew the
+    /// bar over the popup's right border when `suggestions.len() > visible`
+    /// and left the border plain otherwise — and, in the overlay's borderless
+    /// form, carved a column off the list to put it in. A viewport emits the
+    /// bar exactly when its content overflows and reserves the lane itself, so
+    /// the presence, the rectangle and the lane are one answer.
+    #[test]
+    fn the_scrollbar_appears_only_when_the_list_overflows() {
+        let bar = |n: usize| {
+            let mut ui: Ui<UiMsg> = Ui::new();
+            ui.frame(
+                suggestions(&Suggestions {
+                    rows: rows(n),
+                    selected: Some(0),
+                    place: Place::AbovePrompt,
+                    hints: None,
+                }),
+                Size::new(40, 6),
+            );
+            suggestions_scrollbar_rect(ui.spec())
+        };
+        assert!(bar(3).is_none(), "three rows in six: no bar");
+        let over = bar(60).expect("sixty rows in six: a bar");
+        assert_eq!(over.w, 1, "one column of track");
+        assert_eq!(over.x, 39, "at the list's right edge");
     }
 
     /// **Ledger finding A: the column yield order.** The name is sized before
