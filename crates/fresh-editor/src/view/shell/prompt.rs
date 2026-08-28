@@ -36,6 +36,12 @@ use super::msg::{UiFact, UiMsg};
 /// where the description can see it.
 pub use crate::view::prompt::MAX_VISIBLE_SUGGESTIONS;
 
+/// `ColumnLayout::left_margin`: the gutter before the first column.
+const LEFT_MARGIN: u16 = 2;
+
+/// `ColumnLayout::column_spacing`: the least air between two columns.
+const COLUMN_SPACING: u16 = 2;
+
 /// Which column yields first when the row runs out of room.
 ///
 /// The numbers are only an order — `Node::priority` compares them and nothing
@@ -248,16 +254,24 @@ fn span_run(sp: &DescriptionSpan, row: &str) -> Run {
 /// when it yields.
 fn node_row(index: usize, r: &SuggestionRow, st: RowState, name_elide: Elide) -> Node<UiMsg> {
     let t = theme(r.disabled, st);
-    let mut cells: Vec<Node<UiMsg>> = vec![text(r.name.clone())
-        .theme(t.clone())
-        .key(name_key(index))
-        .elide(name_elide)
-        .priority(yields_last::NAME)];
+    // `ColumnLayout::left_margin`, as a cell rather than as two leading spaces
+    // in a span. It carries the row's own fill because the row container
+    // paints under it, so it needs no theme of its own — and it is fixed, so
+    // it never enters the yield order.
+    let mut cells: Vec<Node<UiMsg>> = vec![row().w(Sizing::Cells(LEFT_MARGIN))];
+    cells.push(
+        text(r.name.clone())
+            .theme(t.clone())
+            .key(name_key(index))
+            .elide(name_elide)
+            .priority(yields_last::NAME),
+    );
 
     // A flexible gap rather than padding: it is what puts the trailing columns
-    // at the right edge, and `min_w` keeps one cell of air when the row is
-    // tight — the same floor the explorer's rows use.
-    cells.push(row().flex(1).min_w(1));
+    // at the right edge, and it is also `ColumnLayout::column_spacing` — the
+    // painter's fixed two cells between columns, here as whatever is left over,
+    // with `min_w` keeping the painter's floor when the row is tight.
+    cells.push(row().flex(1).min_w(COLUMN_SPACING));
 
     // The description carries no colour of its own: the painter draws it in
     // `base_style`, so it is the row. A plugin's styled description is the
@@ -373,6 +387,19 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
         .children([fresh_ui::ComponentExt::node(list)])
 }
 
+/// The popup around the list: its frame and its ground.
+///
+/// The painter's `Block::default().borders(ALL).border_style(popup_border_fg)
+/// .style(bg(suggestion_bg))`, and the `Paragraph` that padded the unused rows
+/// with the same background. `border()` is the ring, and a themed box already
+/// fills before its content, so the padding rows are what the fill does anyway.
+fn popup(s: &Suggestions) -> Node<UiMsg> {
+    col()
+        .border()
+        .theme(pair("ui.popup_border_fg", "ui.suggestion_bg"))
+        .child(suggestions(s))
+}
+
 /// The list as an overlay above the prompt row.
 ///
 /// **Placement is declared, not computed.** The painter measured the row
@@ -393,7 +420,7 @@ pub fn suggestions_layer(s: &Suggestions) -> Node<UiMsg> {
         // Not modal. The old encoding covered the frame below z15 to stop a
         // click reaching the *body*, which is a rule about a host leaf rather
         // than about this layer — see the ledger's withdrawn finding D.
-        .child(suggestions(s))
+        .child(popup(s))
 }
 
 thread_local! {
@@ -626,6 +653,39 @@ mod tests {
         );
     }
 
+    /// **The popup has a frame and a ground of its own.**
+    ///
+    /// `Block::default().borders(ALL).border_style(popup_border_fg)
+    /// .style(bg(suggestion_bg))`, and a `Paragraph` that padded the rows the
+    /// list did not fill with the same background. Here the ring is
+    /// `border()`, and the ground is what a themed box already fills with
+    /// before its content — so the padding rows stop being something anyone
+    /// writes.
+    #[test]
+    fn the_popup_frames_the_list_and_insets_it() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        let s = Suggestions {
+            rows: rows(3),
+            selected: Some(0),
+        };
+        let spec = ui.frame(popup(&s), Size::new(40, 6)).clone();
+        assert!(
+            spec.items
+                .iter()
+                .any(|i| matches!(i.draw, fresh_ui::Draw::Border)
+                    && i.theme.as_str() == "ui.popup_border_fg/ui.suggestion_bg"),
+            "the popup draws its own ring"
+        );
+        // Inside the ring and past the gutter: one cell of border plus the
+        // painter's two-cell `left_margin`.
+        let name = ui.rect_of(ui.find_by_key(&name_key(0)).expect("a name"));
+        assert_eq!(
+            name.x,
+            1 + LEFT_MARGIN as i32,
+            "the first column clears the border and the gutter"
+        );
+    }
+
     /// **Ledger rule 5: the list sits above the prompt row.**
     ///
     /// The painter measured the row count, subtracted it from the prompt
@@ -789,7 +849,9 @@ mod tests {
         // Wide enough for both: the name is whole.
         assert_eq!(one(60), 19, "the name fits at its natural width");
         // Too narrow for both: the name is still whole — the description gave
-        // up its cells first.
-        assert_eq!(one(24), 19, "the name kept its width; the description paid");
+        // up its cells first. 28 rather than 24 because the row now carries
+        // the painter's own gutters: two cells of `left_margin` and two of
+        // `column_spacing` are not the name's to give.
+        assert_eq!(one(28), 19, "the name kept its width; the description paid");
     }
 }

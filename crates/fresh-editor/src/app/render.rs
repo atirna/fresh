@@ -2759,12 +2759,12 @@ impl Editor {
     /// the tree, so `Prompt::scroll_offset` stops being one number that five
     /// places write to), and the placement above the prompt row.
     ///
-    /// What is left is a swap rather than a concept: the popup's own chrome —
-    /// its border, its two-cell left margin, the background under its unused
-    /// rows — and moving the click rail off the recorded rectangles in
-    /// `ChromeLayout` and onto the layer. Both prompts have to move together,
-    /// because the overlay one shares `suggestions_scrollbar_rect` and the
-    /// scroll offset with this one.
+    /// The popup's own chrome is here too — its ring, its two-cell gutter, and
+    /// the ground under the rows the list does not fill. What is left is one
+    /// swap rather than a concept: moving the click rail off the recorded
+    /// rectangles in `ChromeLayout` and onto the layer. Both prompts have to
+    /// move together, because the overlay one shares
+    /// `suggestions_scrollbar_rect` and the scroll offset with this one.
     #[allow(dead_code)]
     fn suggestions_description(&self) -> Option<crate::view::shell::prompt::Suggestions> {
         use crate::view::shell::prompt::{SuggestionRow, Suggestions};
