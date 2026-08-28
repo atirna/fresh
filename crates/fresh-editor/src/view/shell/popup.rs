@@ -598,63 +598,73 @@ mod tests {
         }
     }
 
-    /// The painter's own answer, for the same inputs.
-    fn calculated(position: PopupPosition, caret: Caret, w: u16, h: u16) -> ratatui::layout::Rect {
-        let theme = crate::view::theme::Theme::from_json(r#"{"name":"t"}"#).unwrap();
-        // A popup whose content is exactly `h` lines and whose width is `w`,
-        // so `content_height().min(max_height)` is `h`.
-        let mut p =
-            crate::view::popup::Popup::text((0..h).map(|i| format!("line {i}")).collect(), &theme);
-        p.position = position;
-        p.width = w;
-        p.max_height = h;
-        p.bordered = false;
-        p.calculate_area(ratatui::layout::Rect::new(0, 0, FRAME.0, FRAME.1), caret)
-    }
-
     /// **Ledger rules 1–4: the cursor-relative family, its flip and its
     /// clamp.**
     ///
-    /// The caret's own row and the row above it are excluded and get their own
-    /// test below: `calculate_area` does not clamp `AtCursor`'s `y` at all, and
-    /// the difference is a real behaviour change rather than a rounding one.
+    /// The table *is* the rule. It was a sweep against `calculate_area`, which
+    /// is how the port was checked; that function is gone now — its six
+    /// strategies are an `Anchor`, a `Place` and a `Fit` — so what is left is
+    /// the rectangles themselves, at the edges where the six hand-written
+    /// clamps were most likely to have disagreed with each other.
     ///
-    /// A table over caret positions near each edge, because that is where the
-    /// six hand-written clamps are most likely to have disagreed with each
-    /// other — and where `Fit` earns its keep.
+    /// The bottom rows are the ones the original sweep could not reach: every
+    /// caret in it sat far enough from the bottom that `Fit::FLIP` never fired,
+    /// so the flip the port replaced thirteen lines of "not enough space below,
+    /// put above" with was never actually compared.
     #[test]
-    fn the_cursor_relative_placements_match_calculate_area() {
-        let carets = [
-            (0u16, 0u16),
-            (1, 1),
-            (40, 12),
-            (FRAME.0 - 1, 12),
-            (FRAME.0 - 3, 2),
-            (40, 2),
+    fn the_cursor_relative_placements() {
+        // caret, size, expected origin.
+        let at_cursor: &[((u16, u16), (u16, u16), (u16, u16))] = &[
+            ((0, 0), (20, 5), (0, 0)),
+            ((1, 1), (20, 5), (1, 1)),
+            // Wider than the frame: pinned to the left edge, not hanging off
+            // the right.
+            ((1, 1), (FRAME.0, 3), (0, 1)),
+            ((40, 12), (40, 10), (40, 12)),
+            // Against the right edge: pulled back by its own width.
+            ((FRAME.0 - 1, 12), (20, 5), (FRAME.0 - 20, 12)),
+            ((FRAME.0 - 3, 2), (40, 10), (FRAME.0 - 40, 2)),
+            // Against the bottom edge: pulled up by its own height. See the
+            // divergence test below for what the painter did instead.
+            ((40, FRAME.1 - 2), (20, 5), (40, FRAME.1 - 5)),
+            ((2, FRAME.1 - 4), (40, 10), (2, FRAME.1 - 10)),
         ];
-        // `AboveCursor` has its own test below: the painter's arithmetic
-        // contradicts the painter's comment, and the description follows the
-        // comment.
-        for pos in [PopupPosition::AtCursor, PopupPosition::BelowCursor] {
-            for c in carets {
-                for (w, h) in [(20u16, 5u16), (40, 10), (FRAME.0, 3)] {
-                    let want = calculated(pos, Some(c), w, h);
-                    let got = placed_rect(&pos, Some(c), w, h);
-                    assert_eq!(got, want, "{pos:?} caret={c:?} size={w}x{h}");
-                }
-            }
+        for &(c, (w, h), want) in at_cursor {
+            assert_eq!(
+                placed_rect(&PopupPosition::AtCursor, Some(c), w, h),
+                ratatui::layout::Rect::new(want.0, want.1, w, h),
+                "AtCursor caret={c:?} size={w}x{h}"
+            );
+        }
+
+        let below: &[((u16, u16), (u16, u16), (u16, u16))] = &[
+            // The row *after* the caret's, which is what makes the anchor a
+            // cell rather than a point.
+            ((0, 0), (20, 5), (0, 1)),
+            ((40, 12), (40, 10), (40, 13)),
+            ((FRAME.0 - 1, 12), (20, 5), (FRAME.0 - 20, 13)),
+            // No room below: it flips above the caret, clearing its row.
+            ((40, FRAME.1 - 2), (20, 5), (40, FRAME.1 - 7)),
+            ((40, FRAME.1 - 1), (20, 5), (40, FRAME.1 - 6)),
+        ];
+        for &(c, (w, h), want) in below {
+            assert_eq!(
+                placed_rect(&PopupPosition::BelowCursor, Some(c), w, h),
+                ratatui::layout::Rect::new(want.0, want.1, w, h),
+                "BelowCursor caret={c:?} size={w}x{h}"
+            );
         }
     }
 
     /// **Ledger rule 5: centred.**
     #[test]
-    fn the_screen_placements_match_calculate_area() {
-        for pos in [PopupPosition::Centered] {
-            for (w, h) in [(20u16, 5u16), (41, 11), (FRAME.0, FRAME.1)] {
-                let want = calculated(pos, None, w, h);
-                let got = placed_rect(&pos, None, w, h);
-                assert_eq!(got, want, "{pos:?} size={w}x{h}");
-            }
+    fn the_screen_placements() {
+        for (w, h) in [(20u16, 5u16), (41, 11), (FRAME.0, FRAME.1)] {
+            assert_eq!(
+                placed_rect(&PopupPosition::Centered, None, w, h),
+                ratatui::layout::Rect::new((FRAME.0 - w) / 2, (FRAME.1 - h) / 2, w, h),
+                "Centered size={w}x{h}"
+            );
         }
     }
 
@@ -676,15 +686,11 @@ mod tests {
     fn a_popup_at_the_bottom_edge_moves_up_instead_of_being_truncated() {
         let caret = (40, FRAME.1 - 1);
         let (w, h) = (20u16, 5u16);
-        let painter = calculated(PopupPosition::AtCursor, Some(caret), w, h);
-        let got = placed_rect(&PopupPosition::AtCursor, Some(caret), w, h);
+        // What the painter did, written down rather than computed: it left the
+        // origin on the caret's row — `y = FRAME.1 - 1` — and let
+        // `clamp_rect_to_bounds` cut the box to the one row that fitted.
         assert_eq!(
-            painter.y,
-            FRAME.1 - 1,
-            "the painter leaves the origin on the caret's row"
-        );
-        assert_eq!(
-            got,
+            placed_rect(&PopupPosition::AtCursor, Some(caret), w, h),
             ratatui::layout::Rect::new(40, FRAME.1 - h, w, h),
             "the description pulls the whole box inside"
         );
@@ -846,34 +852,37 @@ mod tests {
     fn a_popup_above_the_caret_does_not_cover_it() {
         let caret = (40u16, 12u16);
         let (w, h) = (20u16, 5u16);
-        let painter = calculated(PopupPosition::AboveCursor, Some(caret), w, h);
         let got = placed_rect(&PopupPosition::AboveCursor, Some(caret), w, h);
-        assert_eq!(
-            painter.y + painter.height - 1,
-            caret.1,
-            "the painter's last row is the caret's own"
-        );
         assert_eq!(
             got.y + got.height - 1,
             caret.1 - 1,
             "the description leaves the caret's row clear"
         );
+        // The painter's last row was `caret.1` itself — `(cursor_y + 1) - h`,
+        // one row lower than this.
+        assert_eq!(got.y, caret.1 - h);
     }
 
-    /// **Ledger rule: `Fixed` clamps to the area's absolute edges.**
+    /// **Ledger rule: `Fixed` goes where it is told, and no further than the
+    /// frame's edges.**
     #[test]
-    fn a_fixed_placement_clamps_like_calculate_area() {
-        for (x, y) in [
-            (0u16, 0u16),
-            (10, 4),
-            (FRAME.0 - 2, FRAME.1 - 2),
-            (200, 200),
-        ] {
-            let pos = PopupPosition::Fixed { x, y };
-            for (w, h) in [(20u16, 5u16), (40, 10)] {
-                let want = calculated(pos, None, w, h);
-                let got = placed_rect(&pos, None, w, h);
-                assert_eq!(got, want, "{pos:?} size={w}x{h}");
+    fn a_fixed_placement_clamps_to_the_frame() {
+        for (w, h) in [(20u16, 5u16), (40, 10)] {
+            let clamped = |x: u16, y: u16| {
+                ratatui::layout::Rect::new(x.min(FRAME.0 - w), y.min(FRAME.1 - h), w, h)
+            };
+            for (x, y) in [
+                (0u16, 0u16),
+                (10, 4),
+                (FRAME.0 - 2, FRAME.1 - 2),
+                // Far outside: pulled back to the last position that fits.
+                (200, 200),
+            ] {
+                assert_eq!(
+                    placed_rect(&PopupPosition::Fixed { x, y }, None, w, h),
+                    clamped(x, y),
+                    "Fixed {x},{y} size={w}x{h}"
+                );
             }
         }
     }
@@ -906,49 +915,38 @@ mod tests {
     #[test]
     fn a_popup_is_bounded_by_the_window_not_by_the_chrome_column() {
         const DOCK: u16 = 20;
-        let chrome = ratatui::layout::Rect::new(DOCK, 0, FRAME.0 - DOCK, FRAME.1);
-        let painter = |pos: PopupPosition, caret: Caret, w: u16| {
-            let theme = crate::view::theme::Theme::from_json(r#"{"name":"t"}"#).unwrap();
-            let mut p = crate::view::popup::Popup::text(vec!["l".into()], &theme);
-            p.position = pos;
-            p.width = w;
-            p.max_height = 1;
-            p.bordered = false;
-            p.calculate_area(chrome, caret)
-        };
+        const CHROME_W: u16 = FRAME.0 - DOCK;
 
-        // Centred: the window's centre, not the column's.
+        // Centred: the window's centre. The painter's answer was the column's,
+        // `DOCK + (CHROME_W - w) / 2` — ten columns to the right of this, and
+        // moving whenever the dock opened or closed.
         let w = 30;
         assert_eq!(
             placed_rect(&PopupPosition::Centered, None, w, 1).x,
             (FRAME.0 - w) / 2
         );
-        assert_eq!(
-            painter(PopupPosition::Centered, None, w).x,
-            DOCK + (chrome.width - w) / 2
-        );
+        assert_ne!((FRAME.0 - w) / 2, DOCK + (CHROME_W - w) / 2);
 
-        // Wider than the column: whole and overlapping, not pinned and cut.
-        let wide = chrome.width + 10;
+        // Wider than the column: whole and overlapping. The painter pinned it
+        // to the column's left edge — `x = DOCK` — and let the right end be
+        // cut off.
+        let wide = CHROME_W + 10;
         let caret = Some((FRAME.0 - 2, 5));
         assert_eq!(
             placed_rect(&PopupPosition::BelowCursor, caret, wide, 1).x,
             FRAME.0 - wide,
             "the whole popup is on screen"
         );
-        assert_eq!(
-            painter(PopupPosition::BelowCursor, caret, wide).x,
-            DOCK,
-            "the painter pinned it to the column and cut the right end off"
-        );
+        assert_ne!(FRAME.0 - wide, DOCK);
 
-        // Everything that fits in the column agrees, at every reachable caret.
-        for w in [10u16, 30, chrome.width] {
-            for cx in DOCK..FRAME.0 {
-                let caret = Some((cx, 5));
+        // Everything that fits in the column lands where it did before: inside
+        // the column, the two rules cannot differ, and the sweep that proved it
+        // ran over every reachable caret column.
+        for w in [10u16, 30, CHROME_W] {
+            for cx in DOCK..(FRAME.0 - w).max(DOCK + 1) {
                 assert_eq!(
-                    placed_rect(&PopupPosition::BelowCursor, caret, w, 1).x,
-                    painter(PopupPosition::BelowCursor, caret, w).x,
+                    placed_rect(&PopupPosition::BelowCursor, Some((cx, 5)), w, 1).x,
+                    cx,
                     "width {w}, caret column {cx}"
                 );
             }
