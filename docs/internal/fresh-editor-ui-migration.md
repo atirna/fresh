@@ -1706,6 +1706,26 @@ list.
    becomes `paint_leaf(id, rect, …)`, and the accumulation happens across calls
    instead of inside one. `render_phantom_leaf` shows the per-leaf path exists.
 
+   **Two things the tree has to express that `get_leaves_with_rects` does not**,
+   found while settling this and worth having before the estimate:
+
+   - `split_layout` reserves a leaf's tab-bar row and its vertical and
+     horizontal scrollbar columns, per leaf, from flags that differ per leaf (a
+     live-PTY terminal suppresses its scrollbar; a non-scrollable panel has
+     none; a buffer-group panel suppresses its tab bar). So the leaf's `Host`
+     is the **content** rect, and the pane is
+     `col([tab_strip?, row([Host::leaf(id), vscrollbar?]), hscrollbar?])` —
+     which is the target shape anyway, arrived at by necessity rather than by
+     ambition.
+   - `expand_visible_buffers` recurses: a leaf whose active tab is a
+     `Grouped` node lays that subtree out *inside its own content rect*, and
+     the inner leaves are panes in their own right. So `split_grid` is
+     mutually recursive with the pane, not a flat walk over leaves.
+
+   Neither needs anything the library lacks — both are ordinary nested layout.
+   They do mean the wave is "the grid **and** the pane", not "the grid, then
+   the pane later".
+
    **The order, therefore:**
    1. A leaf host id space (`HostRegion` is a small fixed enum; a leaf's id is
       its `LeafId`, tagged) and a `HostTarget::{Region, Leaf}` for the fold's
