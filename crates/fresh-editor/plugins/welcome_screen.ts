@@ -168,10 +168,21 @@ let themeNames: string[] = [];
  *  this page is a key the host resolves at paint time. */
 let activeTheme = "";
 
+/** Config stores a *registry key* (`builtin://dark`); the swatch row and
+ *  `applyTheme` both speak the bare name the registry object is keyed by
+ *  (`dark`). Comparing the two directly meant the `●` marker was missing
+ *  on every launch and only appeared once you clicked a swatch — which
+ *  reassigns `activeTheme` from the bare side. Normalise on the way in so
+ *  both sides of `name === activeTheme` are the same kind of string. */
+function bareThemeName(name: string): string {
+  const sep = name.indexOf("://");
+  return sep === -1 ? name : name.slice(sep + 3);
+}
+
 function readActiveTheme(): void {
   const cfg = editor.getConfig() as { theme?: string } | null;
   const name = cfg?.theme;
-  if (typeof name === "string" && name) activeTheme = name;
+  if (typeof name === "string" && name) activeTheme = bareThemeName(name);
 }
 
 let gitDirty: string[] = [];
@@ -617,7 +628,7 @@ function wrap(text: string, width: number): string[] {
   let line = "";
   for (const w of text.split(" ")) {
     if (!line) line = w;
-    else if (line.length + 1 + w.length <= width) line += " " + w;
+    else if (cols(line) + 1 + cols(w) <= width) line += " " + w;
     else {
       out.push(line);
       line = w;
@@ -625,6 +636,47 @@ function wrap(text: string, width: number): string[] {
   }
   if (line) out.push(line);
   return out;
+}
+
+/** Display columns, not UTF-16 units.
+ *
+ *  `wrap` measured with `.length`, which happens to be right for ASCII
+ *  and wrong for everything else — `日本語` is three units and six
+ *  columns. Every wrapped string on this page was ASCII, so nothing
+ *  showed it; the moment a card wrapped the translated-UI sentence it
+ *  would have set that line to twice its intended width. */
+function cols(s: string): number {
+  try {
+    return editor.stringWidth(s);
+  } catch (_e) {
+    return s.length;
+  }
+}
+
+/** Inner text width of a framed card.
+ *
+ *  Measured against a real render rather than reasoned about, because
+ *  the budget is spent in three places and it is easy to miss one: the
+ *  card's own two border columns, the section's one column of padding
+ *  on each side, and the two-space indent each body row carries in its
+ *  own string. A 49-column card therefore sets its prose to 43. Getting
+ *  this two columns wrong does not misalign anything — it clips the
+ *  tail of the line and eats the words. */
+function cardTextWidth(): number {
+  return Math.max(16, cardMeasure() - 6);
+}
+
+/** Prose inside a framed card, wrapped to the card at render time.
+ *
+ *  These bodies were hand-split into two string literals set to a wide
+ *  card's width. A card narrower than that does not re-flow them — the
+ *  host clips each row at the border, so the tail of the first line is
+ *  replaced by `…` and those words are simply gone from the page. At 60
+ *  columns the git card lost "by-side diff, review"; the theme card
+ *  rendered "Configurable st…", destroying "status". Wrapping to the
+ *  card's own width is what the doors have always done. */
+function bodyText(text: string, fg: string = C.body): WidgetSpec[] {
+  return wrap(text, cardTextWidth()).map((l) => plain("  " + l, fg));
 }
 
 /** Inner text width of one door, at whichever layout is in force. */
@@ -962,7 +1014,7 @@ function gitCard(): WidgetSpec {
     if (!gitProbed) {
       rows.push(plain("  reading git status…", C.muted));
     } else if (!gitBranch && gitDirty.length === 0) {
-      rows.push(plain("  not a git repo — open one and this card fills in.", C.muted));
+      rows.push(...bodyText("not a git repo — open one and this card fills in.", C.muted));
     } else {
       rows.push(
         line([
@@ -998,8 +1050,11 @@ function gitCard(): WidgetSpec {
       ),
     );
     rows.push(blank());
-    rows.push(plain("  Hunk-level stage / unstage / discard. Side-by-side diff, review", C.body));
-    rows.push(plain("  notes, git gutter, git grep.", C.body));
+    rows.push(
+      ...bodyText(
+        "Hunk-level stage / unstage / discard. Side-by-side diff, review notes, git gutter, git grep.",
+      ),
+    );
     rows.push(blank());
     return rows;
   }, true);
@@ -1027,8 +1082,10 @@ function themeCard(): WidgetSpec {
       blank(),
       row(...buttons),
       blank(),
-      plain("  Live theme editor with \"Inspect Theme at Cursor\". Configurable status", C.body),
-      plain("  bar. UI translated to 日本語, 한국어, 中文, Tiếng Việt and more.", C.body),
+      ...bodyText(
+        "Live theme editor with \"Inspect Theme at Cursor\". Configurable status bar. "
+          + "UI translated to 日本語, 한국어, 中文, Tiếng Việt and more.",
+      ),
       blank(),
     ];
   }, true);
@@ -1048,7 +1105,7 @@ function orchestratorCard(): WidgetSpec {
   return card("orch", "The Orchestrator dock", "your workspaces", () => {
     const rows: WidgetSpec[] = [blank()];
     if (workspaces.length === 0) {
-      rows.push(plain("  No workspaces yet. Cut one and an agent starts inside it.", C.muted));
+      rows.push(...bodyText("No workspaces yet. Cut one and an agent starts inside it.", C.muted));
     } else {
       for (const w of workspaces.slice(0, 6)) {
         const g = stateGlyph(w);
@@ -1097,8 +1154,12 @@ function orchestratorCard(): WidgetSpec {
     actions.push(button("Open the dock", { key: "act_ws_dock", hoverStyle: GLOW }));
     rows.push(row(...actions));
     rows.push(blank());
-    rows.push(plain("  One workspace per git worktree, each with its own terminals and", C.body));
-    rows.push(plain("  agent. Sessions resume after a restart. Leave the rest running.", C.body));
+    rows.push(
+      ...bodyText(
+        "One workspace per git worktree, each with its own terminals and agent. "
+          + "Sessions resume after a restart. Leave the rest running.",
+      ),
+    );
     rows.push(blank());
     return rows;
   }, true);
