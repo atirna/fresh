@@ -69,6 +69,15 @@ pub trait LayoutCx {
     /// The size request a child carries, resolved through nodes with no
     /// geometry of their own.
     fn sizing(&self, child: RenderId) -> (Sizing, Sizing);
+    /// The floors a child carries, in cells, resolved the same way. `0` is no
+    /// floor. A container that distributes remaining space applies them after
+    /// the share is computed, so "a share of what is left, but never less than
+    /// this" is one statement rather than an arithmetic special case in every
+    /// caller.
+    fn floor(&self, child: RenderId) -> (u16, u16) {
+        let _ = child;
+        (0, 0)
+    }
     /// Measure a child. Returns its size, honouring the layout cache.
     fn measure(&mut self, child: RenderId, c: Constraints) -> Size;
     /// Position a child relative to this node's content origin.
@@ -177,6 +186,17 @@ pub trait RenderObject {
         false
     }
 
+    /// How far inside this node's own rectangle the bound sits, when
+    /// [`clips`](Self::clips) is true: `(x, y)` cells on each side.
+    ///
+    /// A viewport bounds its descendants at its edge and answers `(0, 0)`. A
+    /// bordered box bounds them at the *inside* of its frame, because the ring
+    /// is the box's own paint and content that reaches it has escaped. Ignored
+    /// entirely when `clips()` is false.
+    fn clip_inset(&self) -> (u16, u16) {
+        (0, 0)
+    }
+
     /// Whether this node draws a scrollbar in its gutter — so the framework can
     /// route a press or drag there to the scroll offset. A viewport with a
     /// scrollbar says yes; nothing else does.
@@ -244,9 +264,18 @@ pub(crate) struct RenderNode {
     /// The size request from the description chain above this node.
     pub w: Sizing,
     pub h: Sizing,
+    /// Floors on the resolved extent, from the same chain. `0` is no floor.
+    pub min_w: u16,
+    pub min_h: u16,
+    /// Whether pointer hits stop here, when the description says so. `None`
+    /// leaves it to the render object.
+    pub pointer: Option<crate::desc::PointerMode>,
     /// Cached from the object so the framework can ask while the object itself
     /// is checked out for `layout`.
     pub clips: bool,
+    /// `(x, y)` inset of the clip bound inside `rect`; see
+    /// [`RenderObject::clip_inset`]. Meaningful only when `clips` is set.
+    pub clip_inset: (u16, u16),
     pub out_of_flow: bool,
     pub reads_window: bool,
     pub raw_input: bool,

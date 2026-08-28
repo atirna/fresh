@@ -741,10 +741,10 @@ impl<M: 'static> Ui<M> {
             self.focus_restore = None;
         }
         self.hover.retain(|h| *h != id);
-        if let Some((targets, _)) = &mut self.press {
+        if let Some((targets, _, _)) = &mut self.press {
             targets.retain(|t| *t != id);
         }
-        if self.press.as_ref().is_some_and(|(t, _)| t.is_empty()) {
+        if self.press.as_ref().is_some_and(|(t, _, _)| t.is_empty()) {
             self.press = None;
         }
         self.geom_store.borrow_mut().entries.remove(&id);
@@ -814,6 +814,7 @@ impl<M: 'static> Ui<M> {
             return;
         };
         let clips = obj.clips();
+        let clip_inset = obj.clip_inset();
         let out_of_flow = obj.out_of_flow();
         let reads_window = obj.reads_window();
         let raw_input = obj.takes_raw_input();
@@ -826,7 +827,11 @@ impl<M: 'static> Ui<M> {
             children: Vec::new(),
             w: crate::desc::Sizing::Auto,
             h: crate::desc::Sizing::Auto,
+            min_w: 0,
+            min_h: 0,
+            pointer: None,
             clips,
+            clip_inset,
             out_of_flow,
             reads_window,
             raw_input,
@@ -854,6 +859,7 @@ impl<M: 'static> Ui<M> {
             .desc
             .sync_render(Some(obj.as_mut()));
         let clips = obj.clips();
+        let clip_inset = obj.clip_inset();
         let out_of_flow = obj.out_of_flow();
         let reads_window = obj.reads_window();
         let raw_input = obj.takes_raw_input();
@@ -862,6 +868,7 @@ impl<M: 'static> Ui<M> {
         if let Some(n) = self.render.get_mut(r) {
             n.obj = Some(obj);
             n.clips = clips;
+            n.clip_inset = clip_inset;
             n.out_of_flow = out_of_flow;
             n.reads_window = reads_window;
             n.raw_input = raw_input;

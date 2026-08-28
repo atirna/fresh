@@ -28,6 +28,9 @@ pub(crate) struct Carry {
     parent: Option<RenderId>,
     w: Sizing,
     h: Sizing,
+    min_w: u16,
+    min_h: u16,
+    pointer: Option<crate::desc::PointerMode>,
     theme: Option<Rc<str>>,
     key: Option<crate::key::Key>,
     focus_parent: Option<crate::focus::FocusId>,
@@ -57,6 +60,11 @@ impl<M: 'static> LayoutCx for UiLayoutCx<'_, M> {
     fn sizing(&self, child: RenderId) -> (Sizing, Sizing) {
         let n = &self.ui.render[child];
         (n.w, n.h)
+    }
+
+    fn floor(&self, child: RenderId) -> (u16, u16) {
+        let n = &self.ui.render[child];
+        (n.min_w, n.min_h)
     }
 
     fn measure(&mut self, child: RenderId, c: Constraints) -> Size {
@@ -295,6 +303,13 @@ impl<M: 'static> Ui<M> {
         let (nw, nh) = node_sizing(&el.desc);
         let w = if carry.w != Sizing::Auto { carry.w } else { nw };
         let h = if carry.h != Sizing::Auto { carry.h } else { nh };
+        // Floors and pointer mode travel the same way sizing does: down from a
+        // description that has no geometry of its own, onto the first node that
+        // has. The outer one wins, because it is the one the caller wrote on
+        // the wrapper it handed over.
+        let min_w = carry.min_w.max(el.desc.min_w);
+        let min_h = carry.min_h.max(el.desc.min_h);
+        let pointer = carry.pointer.or(el.desc.pointer);
         let theme = el
             .desc
             .theme
@@ -326,6 +341,9 @@ impl<M: 'static> Ui<M> {
                     n.parent = carry.parent;
                     n.w = w;
                     n.h = h;
+                    n.min_w = min_w;
+                    n.min_h = min_h;
+                    n.pointer = pointer;
                     n.theme = theme;
                     n.key = key;
                 }
@@ -370,6 +388,9 @@ impl<M: 'static> Ui<M> {
                             parent: carry.parent,
                             w,
                             h,
+                            min_w,
+                            min_h,
+                            pointer,
                             theme: theme.clone(),
                             key: key.clone(),
                             focus_parent,
@@ -669,11 +690,12 @@ impl<M: 'static> Ui<M> {
     // -- positioning ---------------------------------------------------------
 
     pub(crate) fn arrange(&mut self, r: RenderId, origin: Point, clip: Rect) {
-        let (size, clips, translate, scroll, kids, dirty, was, cached) = {
+        let (size, clips, clip_inset, translate, scroll, kids, dirty, was, cached) = {
             let Some(n) = self.render.get(r) else { return };
             (
                 n.data.size,
                 n.clips,
+                n.clip_inset,
                 n.data.translate,
                 n.data.scroll,
                 n.children.clone(),
@@ -699,7 +721,14 @@ impl<M: 'static> Ui<M> {
             n.data.child_arrange_dirty = false;
         }
         let start = self.pending_layers.len();
-        let child_clip = if clips { clip.intersect(rect) } else { clip };
+        // A clipping node bounds its descendants at its *content* rect, not at
+        // its outer edge: a bordered box owns the ring it drew, so content that
+        // reaches it has escaped rather than arrived.
+        let child_clip = if clips {
+            clip.intersect(rect.deflate(clip_inset.0, clip_inset.1))
+        } else {
+            clip
+        };
         let sc = if clips && translate {
             scroll
         } else {
