@@ -276,7 +276,7 @@ impl Editor {
         // the standing proof, and it keeps both derivations honest now that
         // only one of them runs here.
         // See docs/internal/fresh-editor-ui-migration.md (S1).
-        let shell = self.shell_frame(size, (dock_area, chrome_area));
+        let shell = self.shell_frame((dock_area, chrome_area));
         // The shell's tree is retained across frames — element state, focus and
         // the dirty set live on it — so it is moved out for the duration of the
         // frame rather than borrowed from `self`. See `Editor::shell_ui`.
@@ -2654,13 +2654,17 @@ impl Editor {
     /// condition this migration exists to remove.
     /// `split` is the frame's dock/chrome division, computed once by the
     /// caller. It is passed rather than recomputed because `render` has
-    /// already run `compute_dock_split` for this same `size` — and because a
-    /// frame whose geometry came from one split while the paint used another
-    /// is the class of bug this migration exists to remove, even when the
-    /// function is pure and the two agree today.
+    /// already run `compute_dock_split` for this frame — and because a frame
+    /// whose geometry came from one split while the paint used another is the
+    /// class of bug this migration exists to remove, even when the function is
+    /// pure and the two agree today.
+    ///
+    /// The frame size itself is not a parameter: `split` already carries every
+    /// rectangle this reads, so taking the size as well would be a second way
+    /// to say the same thing — and the two could then disagree, which is the
+    /// bug above wearing a different hat.
     pub(crate) fn shell_frame(
         &mut self,
-        size: ratatui::layout::Rect,
         split: (Option<ratatui::layout::Rect>, ratatui::layout::Rect),
     ) -> crate::view::shell::frame::Frame {
         let BottomRowFlags {
@@ -2813,16 +2817,6 @@ impl Editor {
             return None;
         }
         Some(self.shell_region_now(crate::view::shell::frame::HostRegion::StatusBar))
-    }
-
-    /// The menu bar's screen area THIS instant (row 0 of the chrome
-    /// column). `None` when the menu bar is hidden. Same
-    /// conditions-not-height gating as [`Self::status_bar_area_now`].
-    pub(crate) fn menu_bar_area_now(&self) -> Option<ratatui::layout::Rect> {
-        if !self.active_window().menu_bar_visible {
-            return None;
-        }
-        Some(self.shell_region_now(crate::view::shell::frame::HostRegion::MenuBar))
     }
 
     /// The menu's layout THIS instant — bar label spans, open dropdown /
