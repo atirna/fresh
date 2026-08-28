@@ -2795,6 +2795,7 @@ impl Editor {
                 })
                 .collect(),
             selected: prompt.selected_suggestion,
+            place: crate::view::shell::prompt::Place::default(),
         })
     }
 

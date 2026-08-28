@@ -91,12 +91,45 @@ pub struct SuggestionRow {
     pub disabled: bool,
 }
 
+/// Where the list goes, and therefore what it looks like.
+///
+/// The editor grows two suggestion lists from one model. The bottom-anchored
+/// prompt puts a bordered popup above its row; the floating-overlay prompt
+/// puts a borderless one inside the card it has already drawn a frame around,
+/// because a frame inside a frame is a double frame. They were two calls into
+/// the same painter with a `with_border` flag between them and two copies of
+/// the placement arithmetic — one in `render`, one in `chrome::Prompt::collect`
+/// — that had to agree for a click to land.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// Above the prompt row, in its own bordered popup, flipping below when
+    /// there is no room above.
+    AbovePrompt,
+    /// Filling a rectangle someone else measured, with no frame of its own.
+    /// The overlay card's results column.
+    Inside(fresh_ui::Rect),
+}
+
+impl Default for Place {
+    fn default() -> Self {
+        Place::AbovePrompt
+    }
+}
+
+impl Place {
+    /// A frame of its own, or somebody else's.
+    fn bordered(&self) -> bool {
+        matches!(self, Place::AbovePrompt)
+    }
+}
+
 /// The list itself.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Suggestions {
     pub rows: Vec<SuggestionRow>,
     /// Which row is selected, if any. Controlled: the editor holds it.
     pub selected: Option<usize>,
+    pub place: Place,
 }
 
 impl Suggestions {
@@ -394,10 +427,14 @@ pub fn suggestions(s: &Suggestions) -> Node<UiMsg> {
 /// with the same background. `border()` is the ring, and a themed box already
 /// fills before its content, so the padding rows are what the fill does anyway.
 fn popup(s: &Suggestions) -> Node<UiMsg> {
-    col()
-        .border()
+    let body = col()
         .theme(pair("ui.popup_border_fg", "ui.suggestion_bg"))
-        .child(suggestions(s))
+        .child(suggestions(s));
+    if s.place.bordered() {
+        body.border()
+    } else {
+        body
+    }
 }
 
 /// The list as an overlay above the prompt row.
@@ -409,18 +446,30 @@ fn popup(s: &Suggestions) -> Node<UiMsg> {
 /// cells. `Anchor::Node` names the row it sits on and `Place::Above` says
 /// which side, with `Fit::FLIP` for the case that used to be an `if`.
 pub fn suggestions_layer(s: &Suggestions) -> Node<UiMsg> {
-    use fresh_ui::{layer, Anchor, Fit, Place};
-    layer()
-        .key(LAYER_KEY.with(|k| k.clone()))
-        .anchor(Anchor::Node(super::frame::region_key(
-            super::frame::HostRegion::PromptLine,
-        )))
-        .place(Place::Above)
-        .fit(Fit::FLIP.or(Fit::CLAMP))
-        // Not modal. The old encoding covered the frame below z15 to stop a
-        // click reaching the *body*, which is a rule about a host leaf rather
-        // than about this layer — see the ledger's withdrawn finding D.
-        .child(popup(s))
+    use fresh_ui::{layer, Anchor, Fit};
+    let l = layer().key(LAYER_KEY.with(|k| k.clone()));
+    let l = match &s.place {
+        Place::AbovePrompt => l
+            .anchor(Anchor::Node(super::frame::region_key(
+                super::frame::HostRegion::PromptLine,
+            )))
+            .place(fresh_ui::Place::Above)
+            .fit(Fit::FLIP.or(Fit::CLAMP)),
+        // The card measured this; the layer only occupies it. `Anchor::Point`
+        // for the corner and an explicit size for the rest — no `Fit`, because
+        // a rectangle the card carved out of the frame is already inside it.
+        Place::Inside(r) => l
+            .anchor(Anchor::Point(r.x.max(0) as u16, r.y.max(0) as u16))
+            .place(fresh_ui::Place::Over),
+    };
+    // Not modal. The old encoding covered the frame below z15 to stop a
+    // click reaching the *body*, which is a rule about a host leaf rather
+    // than about this layer — see the ledger's withdrawn finding D.
+    let mut card = popup(s);
+    if let Place::Inside(r) = &s.place {
+        card = card.w(Sizing::Cells(r.w)).h(Sizing::Cells(r.h));
+    }
+    l.child(card)
 }
 
 thread_local! {
@@ -530,6 +579,7 @@ mod tests {
             Suggestions {
                 rows: rows(5),
                 selected: Some(0),
+                place: Place::AbovePrompt,
             },
             40,
             8,
@@ -561,6 +611,7 @@ mod tests {
             Suggestions {
                 rows: rows(5),
                 selected: Some(0),
+                place: Place::AbovePrompt,
             },
             40,
             8,
@@ -606,6 +657,7 @@ mod tests {
             suggestions(&Suggestions {
                 rows: rows(100),
                 selected: Some(0),
+                place: Place::AbovePrompt,
             })
         };
         ui.frame(tree(), Size::new(40, 8));
@@ -639,6 +691,7 @@ mod tests {
             Suggestions {
                 rows: rows(1000),
                 selected: Some(0),
+                place: Place::AbovePrompt,
             },
             40,
             MAX_VISIBLE_SUGGESTIONS as u16,
@@ -667,6 +720,7 @@ mod tests {
         let s = Suggestions {
             rows: rows(3),
             selected: Some(0),
+            place: Place::AbovePrompt,
         };
         let spec = ui.frame(popup(&s), Size::new(40, 6)).clone();
         assert!(
@@ -704,6 +758,7 @@ mod tests {
                     suggestions: Some(Suggestions {
                         rows: rows(3),
                         selected: Some(0),
+                        place: Place::AbovePrompt,
                     }),
                     ..Frame::default()
                 }),
@@ -732,6 +787,7 @@ mod tests {
             let s = Suggestions {
                 rows: vec![r],
                 selected: Some(0),
+                place: Place::AbovePrompt,
             };
             let ui = laid_out(s, 16, 4);
             let spec = ui.spec();
@@ -795,6 +851,7 @@ mod tests {
                 ..SuggestionRow::default()
             }],
             selected: Some(0),
+            place: Place::AbovePrompt,
         };
         let ui = laid_out(s, 40, 4);
         let themes: Vec<(String, String)> = ui
@@ -826,6 +883,42 @@ mod tests {
         assert_eq!(of("rest"), theme(false, RowState::Selected));
     }
 
+    /// **One list, two placements.** The overlay prompt draws its own frame
+    /// around the results column, so its list is borderless and fills a
+    /// rectangle the card measured; the bottom-anchored prompt brings its own
+    /// popup and sits above the row. They were two calls into one painter with
+    /// a `with_border` flag between them, and two copies of the placement
+    /// arithmetic that had to agree for a click to land.
+    #[test]
+    fn a_list_placed_inside_a_card_fills_it_and_brings_no_frame() {
+        let at = fresh_ui::Rect::new(10, 4, 24, 6);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        let spec = ui
+            .frame(
+                // Wrapped, because a layer resolves against a parent: it is
+                // out of flow *within* a tree, not a tree of its own.
+                col().child(suggestions_layer(&Suggestions {
+                    rows: rows(3),
+                    selected: Some(0),
+                    place: Place::Inside(at),
+                })),
+                Size::new(60, 20),
+            )
+            .clone();
+        assert_eq!(
+            suggestions_rect(&spec),
+            Some(at),
+            "the layer fills the card"
+        );
+        assert!(
+            !spec
+                .items
+                .iter()
+                .any(|i| matches!(i.draw, fresh_ui::Draw::Border)),
+            "a frame inside the card's frame is a double frame"
+        );
+    }
+
     /// **Ledger finding A: the column yield order.** The name is sized before
     /// the description, so a row too narrow for both keeps the whole command
     /// name and truncates the description — never the other way round. This is
@@ -841,6 +934,7 @@ mod tests {
                     ..SuggestionRow::default()
                 }],
                 selected: Some(0),
+                place: Place::AbovePrompt,
             };
             let ui = laid_out(s, w, 4);
             ui.rect_of(ui.find_by_key(&name_key(0)).expect("the name column"))
