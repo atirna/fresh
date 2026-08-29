@@ -160,6 +160,16 @@ adoption of the second today: `Persisted<…>` **0 uses**, `Ui::set_store`
 **never called**. This is §I again — we were about to invent a workaround for
 a gap the library does not have.
 
+**With one caveat, and it is load-bearing: the primitive is present but
+unproven.** `Persisted`, `Store` and `PERSISTENCE_SCOPE` are declared and
+exported, and the path is complete on paper — `attach` reads from the store,
+`teardown` writes back, `Services.store` carries it, `Ui::set_store` installs
+it. But there is **not one test and not one usage anywhere in the crate**, and
+the demo it would be proven in is single-document: tasks, a filter, a theme, a
+menu, a million-row list, no documents and no switching. What is demonstrated
+today is that the types compile. See F.5 — that gap closes *before* 0.3 and 0.5
+lean on it, not after.
+
 What this costs is discipline in one place instead of everywhere: one key, at
 one node, rather than `WindowId` threaded through every window-owned subtree
 where a single omission is a silent leak between workspaces.
@@ -227,6 +237,7 @@ provided at is the scope they belong to.
 | F.1 | `Draw::Scrollbar` carries `{offset, content, window}` and no marker channel, so the plugin overview-ruler API keeps scrollbars behind a `Host`. | Extend the library's scrollbar, **before** the wave that needs it. | Working around it in the editor. Appendix risk 1: a wave that needs a library change is a signal to stop and fix the library, not to fork behaviour into the editor. |
 | F.2 | `Paint::Lit` — a colour with no theme name, for plugin RGB and markdown spans. | Plugins register named keys; `resolve_theme_key` grows a dynamic tier. Then provenance is total. | Leaving it. It is the one thing in the display list that is not traceable to a theme entry, and it is honest about that only because it is temporary. |
 | F.3 | **A subtree is either mounted — reconciled, laid out, painted, hit-tested — or gone, with its elements disposed and its `Tasks` cancelled.** There is no mounted-but-inactive state. `Sizing::Cells(0)` still reconciles and lays out; `PointerMode::Ignore` removes only hits. | Genuinely absent, and generic: it is what a tab view, a prefetched route or an off-screen panel with an expensive measurement wants. **Not needed for windows** — a switch is a user action, one cold rebuild is ~163µs, and `Persisted` covers the state — so this is a library question to raise on its merits, not a blocker. | Reaching for it *for* the window case, or emulating it with a zero-sized subtree, which pays reconcile and layout to hide something. |
+| F.5 | **`Persisted` / `Store` / `PERSISTENCE_SCOPE` have zero tests and zero uses in the library**, and the demo under `tests/support/demo/` is single-document. 0.3 and 0.5 both rest on behaviour nobody has run. | A multi-document scenario in the demo — two documents, a switch, per-document incidental state that survives it — and unit tests for the four things that are currently assumptions: that `teardown` fires when a *key change* discards a subtree (not only on `Ui` drop); that it fires before the replacement's `attach`; that **deferred disposal** does not reorder those two; and that a `Persisted` under the wrong scope is detectable. | Adopting it on the strength of the doc comment. It is a good doc comment. |
 | F.4 | Nothing ties an **identity boundary** to a **persistence scope**. A subtree can be keyed without providing a `PersistenceScope`, or scoped without a key, and both mistakes are silent. | A single primitive that does both — `scope(id, child)` — so the invariant cannot be half-declared. Goal 2's spirit: derive it from structure rather than ask every author to remember two things that are always used together. | Documenting the pairing instead. 0.5 is the first place it matters and it will not be the last. |
 
 ### G. Not a gap
