@@ -17,7 +17,7 @@ mod char_style;
 mod folding;
 pub(crate) use folding::fold_skip_set;
 mod gutter;
-mod layout;
+pub(crate) mod layout;
 mod orchestration;
 
 pub(crate) use orchestration::render_buffer::wrap_index_geometry_for;

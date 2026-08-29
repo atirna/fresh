@@ -251,6 +251,80 @@ mod tests {
         assert!(per.as_millis() < 10, "a grid layout took {per:?}");
     }
 
+    /// **A pane divides itself exactly as the painter's arithmetic did.**
+    ///
+    /// Every combination of the three flags, at sizes down to one that starves
+    /// the content entirely — the horizontal bar's width is the part a reader
+    /// gets wrong from the picture, since it stops short of the vertical
+    /// bar's column instead of running under it.
+    #[test]
+    fn a_pane_divides_itself_the_way_the_painter_did() {
+        use crate::view::ui::split_rendering::layout::{reference_split_layout, split_layout};
+        for tabs in [true, false] {
+            for vs in [true, false] {
+                for hs in [true, false] {
+                    for at in [
+                        Rect::new(0, 0, 80, 24),
+                        Rect::new(7, 3, 40, 12),
+                        Rect::new(0, 0, 3, 2),
+                        Rect::new(12, 5, 200, 60),
+                    ] {
+                        let got = split_layout(at, tabs, vs, hs);
+                        let want = reference_split_layout(at, tabs, vs, hs);
+                        assert_eq!(
+                            (
+                                got.tabs_rect,
+                                got.content_rect,
+                                got.scrollbar_rect,
+                                got.horizontal_scrollbar_rect
+                            ),
+                            (
+                                want.tabs_rect,
+                                want.content_rect,
+                                want.scrollbar_rect,
+                                want.horizontal_scrollbar_rect
+                            ),
+                            "tabs={tabs} vscroll={vs} hscroll={hs} at {at:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// **The one case where the arithmetic was wrong, and the layout is not.**
+    ///
+    /// A pane one row tall with both a tab strip and a horizontal scrollbar
+    /// wants two rows and has one. The painter derived the bar's `y` from the
+    /// bottom — `y + height - 1` — without noticing the tabs had already taken
+    /// that row, so it produced a rectangle *overlapping* the tab strip and
+    /// drew the bar over it. A column starves its last child instead: there is
+    /// no room, so the bar gets none.
+    ///
+    /// Kept as a test rather than folded into the sweep above, because it is a
+    /// deliberate divergence and the sweep is a parity claim.
+    #[test]
+    fn a_starved_pane_no_longer_draws_its_scrollbar_over_its_tabs() {
+        use crate::view::ui::split_rendering::layout::{reference_split_layout, split_layout};
+        let at = Rect::new(0, 0, 1, 1);
+        let old = reference_split_layout(at, true, true, true);
+        let new = split_layout(at, true, true, true);
+        assert_eq!(
+            old.tabs_rect,
+            Rect::new(0, 0, 1, 1),
+            "the tabs take the row"
+        );
+        assert_eq!(
+            old.horizontal_scrollbar_rect,
+            Rect::new(0, 0, 0, 1),
+            "and the old bar was on the same row"
+        );
+        assert_eq!(
+            new.horizontal_scrollbar_rect.height, 0,
+            "there is no room for it, so it has none"
+        );
+    }
+
     /// The dividers land on the cells the model reserves for them.
     #[test]
     fn the_dividers_are_where_the_separators_are() {
@@ -395,4 +469,47 @@ fn divider(id: ContainerId, dir: SplitDirection) -> Node<UiMsg> {
         .on_leave(Rc::new(move |_: &Event| {
             Some(UiMsg::Ui(UiFact::SeparatorHover(None)))
         }))
+}
+
+// ── the pane's interior ─────────────────────────────────────────────────────
+
+/// The parts of a pane, by role.
+pub fn tabs_key() -> Key {
+    Key::Str("pane_tabs".into())
+}
+pub fn content_key() -> Key {
+    Key::Str("pane_content".into())
+}
+pub fn vscroll_key() -> Key {
+    Key::Str("pane_vscroll".into())
+}
+pub fn hscroll_key() -> Key {
+    Key::Str("pane_hscroll".into())
+}
+
+/// How a pane divides itself: a tab strip on top, the content with its
+/// vertical scrollbar beside it, and a horizontal scrollbar under both.
+///
+/// Which of the three exist is per-pane state — a buffer group's panel
+/// suppresses its tab strip, a terminal showing its live PTY grid gives up its
+/// scrollbar column so the grid can use it, a non-scrollable panel never had
+/// one — so they arrive as flags, resolved before the description is built.
+///
+/// The horizontal bar stops short of the vertical one's column rather than
+/// running under it. That is the painter's arithmetic and it is the one thing
+/// here a reader would get wrong from the picture alone.
+pub fn pane_interior<M: 'static>(tabs: bool, vscroll: bool, hscroll: bool) -> Node<M> {
+    let cells = |on: bool| Sizing::Cells(on as u16);
+    col().children([
+        row().key(tabs_key()).h(cells(tabs)),
+        row().flex(1).children([
+            row().key(content_key()).flex(1),
+            row().key(vscroll_key()).w(cells(vscroll)),
+        ]),
+        row().h(cells(hscroll)).children([
+            row().key(hscroll_key()).flex(1),
+            // The column the vertical bar occupies, kept clear.
+            row().w(cells(vscroll)),
+        ]),
+    ])
 }
