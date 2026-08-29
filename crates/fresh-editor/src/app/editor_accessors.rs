@@ -1032,24 +1032,17 @@ impl Editor {
     /// The active window's layout-cache (split-leaf rects, tab rects,
     /// file-explorer rect, view-line mappings). Mouse hit-testing and
     /// visual-line motion read from here.
-    /// What the pointer is on, from whichever walk owns the surface under it.
+    /// What the pointer is on.
     ///
-    /// **Two walks, one answer.** The tree writes `shell_hover`, the legacy box
-    /// walk writes `mouse_state.hover_target`, and they must not read each
-    /// other's field — a migrated surface's hover would otherwise be erased by
-    /// the walk running after it on the same event, which is exactly what
-    /// happened to the split dividers when they became nodes: the tree named
-    /// the separator, the walk found nothing under that cell and stored `None`
-    /// over it, and the hover highlight stopped appearing.
-    ///
-    /// So the tree's answer wins where it has one, and the walk's stands where
-    /// it does not. A migrated surface clears `shell_hover` when the pointer
-    /// leaves it (every one of them reports the leave), so "has one" stays
-    /// current rather than sticking.
+    /// One answer, from one walk. There were two: the tree wrote `shell_hover`
+    /// and a box walk wrote `mouse_state.hover_target`, and because the walk
+    /// ran *after* the tree on the same event it could erase a migrated
+    /// surface's hover — which is what happened to the split dividers when
+    /// they became nodes, the walk finding nothing under that cell and storing
+    /// `None` over the tree's answer. The walk is gone; the field it wrote is
+    /// gone with it.
     pub fn hovered(&self) -> Option<crate::app::types::HoverTarget> {
-        self.shell_hover
-            .clone()
-            .or_else(|| self.active_window().mouse_state.hover_target.clone())
+        self.shell_hover.clone()
     }
 
     pub(crate) fn active_layout(&self) -> &crate::app::types::WindowLayoutCache {

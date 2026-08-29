@@ -12,13 +12,11 @@
 
 use anyhow::Result as AnyhowResult;
 
-use super::{ChromeComponent, ChromeTreeBuilder, Editor};
+use super::{ChromeComponent, Editor};
 
 pub(crate) struct Base;
 
 impl ChromeComponent for Base {
-    fn collect(&self, _ed: &Editor, _t: &mut ChromeTreeBuilder) {}
-
     fn layers(&self, ed: &Editor, out: &mut Vec<(u16, crate::app::overlay::Layer)>) {
         use crate::app::overlay::{Layer, LayerKind};
         use crate::input::keybindings::KeyContext;

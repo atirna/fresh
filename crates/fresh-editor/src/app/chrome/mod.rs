@@ -55,154 +55,7 @@ pub(crate) mod layer_rank {
     pub(crate) const DOCK: u16 = 810;
     pub(crate) const EDITOR_BASE: u16 = 0;
 }
-use crate::widgets::LayoutBox;
 use anyhow::Result as AnyhowResult;
-
-/// Shared cell-in-rect test for component geometry.
-pub(crate) fn in_rect(col: u16, row: u16, rect: ratatui::layout::Rect) -> bool {
-    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
-}
-
-/// One box in the per-event chrome tree: the geometry (the SAME
-/// `LayoutBox` type the panel model uses, so hit math and flags are
-/// shared) plus which registered component owns it — dispatch calls
-/// the owner's handlers instead of matching kind strings.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ChromeBox {
-    pub lb: LayoutBox,
-    /// Index into [`components`].
-    pub owner: usize,
-}
-
-impl std::borrow::Borrow<LayoutBox> for ChromeBox {
-    fn borrow(&self) -> &LayoutBox {
-        &self.lb
-    }
-}
-
-/// What a component did with a pointer gesture on one of its boxes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Disposition {
-    /// Handled — the walk stops.
-    Consumed,
-    /// Not this surface's event — the walk continues to the next box.
-    Pass,
-}
-
-/// Which press gesture a pointer event carries. Triple-click ROUTES
-/// through the tree like every other press (overlay swallow, popup
-/// block/dismiss, then the split line-select arm); only the selection
-/// semantics themselves are a buffer concern.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PointerPress {
-    Left,
-    Right,
-    Double,
-    Triple,
-}
-
-/// One pointer gesture offered to a component's box, press kind
-/// included — per-gesture behavior lives in the handler (the way
-/// `WidgetImpl::on_pointer` takes `event_type`), not in one trait
-/// method per press. `modifiers` matter only to the editor surface
-/// (Ctrl+click follows links); guards and chrome controls ignore
-/// them.
-pub(crate) struct ChromePointer {
-    pub press: PointerPress,
-    pub col: u16,
-    pub row: u16,
-    pub modifiers: crossterm::event::KeyModifiers,
-}
-
-/// Per-event sink the components push their boxes into. Wraps the
-/// frame dimensions so full-frame guards don't each re-read them, and
-/// stamps each box with the collecting component's registry index.
-///
-/// ## RULING — the chrome "tree" is currently FLAT
-///
-/// No chrome component sets `LayoutBox.parent`: every box is a root,
-/// so `hit_stack`'s structural rules (effective z = max along the
-/// ancestor chain, children-above-parents) are inert at chrome level
-/// — ordering is purely the boxes' own z bands plus push order within
-/// a band. Nesting a box under another does NOT work here yet; the
-/// full-frame guard boxes (close guards, scrims, observers) are the
-/// deliberate flat-world encoding of containment ("anything outside
-/// my rect"), NOT a legacy pattern to copy around — a new surface
-/// should push its rects + at most one guard, and must not expect a
-/// parent link to clip or lift it. `LayoutBox.parent`, `focusable`,
-/// `focus_trap` and `scroll` are reserved-but-unset at chrome level
-/// (they are live in the panel-local tree); parent links and the
-/// chrome focus ring are the forward-design arc's work
-/// (sinelaw/fresh#3024), where the guard boxes dissolve into real
-/// containment.
-pub(crate) struct ChromeTreeBuilder {
-    frame_width: u32,
-    frame_height: u32,
-    current_owner: usize,
-    boxes: Vec<ChromeBox>,
-}
-
-impl ChromeTreeBuilder {
-    fn new(frame_width: u32, frame_height: u32) -> Self {
-        ChromeTreeBuilder {
-            frame_width,
-            frame_height,
-            current_owner: 0,
-            boxes: Vec::new(),
-        }
-    }
-
-    pub(crate) fn push(&mut self, lb: LayoutBox) {
-        self.boxes.push(ChromeBox {
-            lb,
-            owner: self.current_owner,
-        });
-    }
-
-    /// Frame height in rows — for components whose box spans the
-    /// full column height (the dock column and its resize border).
-
-    /// A full-frame surface — a guard/capture whose semantics ARE
-    /// full-screen (close guards, absorb/dismiss, modal scrims,
-    /// position-blind wheel capture), never a geometry proxy.
-    pub(crate) fn full(&mut self, kind: &'static str, z: u8) {
-        let mut b = LayoutBox::plain(kind, 0, 0, self.frame_width, self.frame_height);
-        b.z = z;
-        self.push(b);
-    }
-}
-
-/// What one press-walk step does to the walk, given the component's
-/// disposition and the box's opacity: a declined (`Pass`) opaque box
-/// absorbs the event, and a declined transparent one lets it through.
-///
-/// There used to be a third disposition, `PassAfter` — act, then keep
-/// routing even through an opaque box — for the act-then-continue
-/// guards: the transient dismiss, the explorer's menu clear, the
-/// right-click tab-menu clear. Every one of them is a capture-phase
-/// listener in the shell's tree now, which is what "observe the whole
-/// channel and do not claim" actually means: it fires before anything
-/// under the pointer, on every event, whether or not this walk is
-/// reached at all. A box could only ever observe the events the tree
-/// declined.
-pub(crate) fn pointer_walk_step(disp: Disposition, pointer_opaque: bool) -> PointerWalkStep {
-    match disp {
-        Disposition::Consumed => PointerWalkStep::Stop,
-        Disposition::Pass => {
-            if pointer_opaque {
-                PointerWalkStep::Stop
-            } else {
-                PointerWalkStep::Continue
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PointerWalkStep {
-    Stop,
-    Continue,
-}
 
 /// The active pointer GRAB, if any: press-established routing that
 /// owns the pointer until release. Grabs are NOT bubble dispatch — a
@@ -298,32 +151,35 @@ pub(crate) fn pointer_grab(ed: &Editor) -> Option<PointerGrab> {
 /// arrays until slice 2). Handlers receive the box they were offered
 /// and decline (`None`/`Pass`) where its geometry is coarser than
 /// their real target, exactly as the central match arms did.
-pub(crate) trait ChromeComponent: Sync {
-    fn collect(&self, ed: &Editor, t: &mut ChromeTreeBuilder);
+/// Whether a cell is inside a rectangle.
+///
+/// A plain geometry helper. It outlived the box walk it was written for: the
+/// surfaces that hit-test rectangles their own painters recorded — a modal's
+/// interior, a plugin panel's widgets — still ask it.
+pub(crate) fn in_rect(col: u16, row: u16, rect: ratatui::layout::Rect) -> bool {
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
+}
 
-    /// Name the hover target under the pointer, or decline so the walk
-    /// falls through to the next surface down. Takes `&mut Editor` like
-    /// the pointer handlers (not `&Editor` like `collect`): live-state
-    /// geometry derivation can lazily load buffer chunks (the status
-    /// bar's cursor-column segment), which needs the mutable borrow.
-    fn hover(
-        &self,
-        _ed: &mut Editor,
-        _bx: &LayoutBox,
-        _col: u16,
-        _row: u16,
-    ) -> Option<HoverTarget> {
-        None
+pub(crate) trait ChromeComponent: Sync {
+    /// React to the pointer being at a cell, whatever is under it.
+    ///
+    /// The reactions keyed on the *position* rather than on the hover target:
+    /// the dock's overlay scrollbar, which reveals itself while the pointer is
+    /// over the sessions list. Offered on every motion event; return true to
+    /// ask for a re-render, which a reaction should do only on the transition
+    /// it cares about rather than on every step.
+    fn on_pointer_moved(&self, _ed: &mut Editor, _col: u16, _row: u16) -> bool {
+        false
     }
 
     /// React to a hover-target transition (enter / leave / move),
-    /// offered to EVERY component after the hover walk names the new
-    /// target — the reaction half of hover, living with the surface
-    /// it drives (the menu's auto-switch/submenu machine, the context
-    /// menu's highlight, the explorer's status tooltip). Components
-    /// key off the target variants they own; reactions are
-    /// independent — one surface reacting never suppresses another's
-    /// leave-reaction (the old central ladder's early returns did).
+    /// offered to EVERY component after the tree names the new target —
+    /// the reaction half of hover, living with the surface it drives
+    /// (the menu's auto-switch/submenu machine, the context menu's
+    /// highlight, the explorer's status tooltip). Components key off
+    /// the target variants they own; reactions are independent — one
+    /// surface reacting never suppresses another's leave-reaction (the
+    /// old central ladder's early returns did).
     /// Return true to request a re-render beyond the target diff
     /// itself.
     fn on_hover_change(
@@ -335,17 +191,6 @@ pub(crate) trait ChromeComponent: Sync {
         _row: u16,
     ) -> bool {
         false
-    }
-
-    /// A pointer press (left / right / double, per `ev.press`) on one
-    /// of this component's boxes.
-    fn on_pointer(
-        &self,
-        _ed: &mut Editor,
-        _bx: &LayoutBox,
-        _ev: &ChromePointer,
-    ) -> AnyhowResult<Disposition> {
-        Ok(Disposition::Pass)
     }
 
     /// This component's overlay-layer contributions, from live state:
@@ -379,36 +224,6 @@ pub(crate) trait ChromeComponent: Sync {
         _event: &crossterm::event::KeyEvent,
     ) -> Option<AnyhowResult<crate::input::handler::InputResult>> {
         None
-    }
-
-    /// A wheel delta over one of this component's boxes. `Consumed`
-    /// stops the walk; a scroll surface already at its bound (or a
-    /// box whose real target the pointer missed) returns `Pass` so
-    /// the wheel keeps falling — scroll chaining.
-    fn on_wheel(
-        &self,
-        _ed: &mut Editor,
-        _bx: &LayoutBox,
-        _col: u16,
-        _row: u16,
-        _delta: i32,
-    ) -> AnyhowResult<Disposition> {
-        Ok(Disposition::Pass)
-    }
-
-    /// A HORIZONTAL wheel delta (Shift+wheel, or a native
-    /// ScrollLeft/ScrollRight) over one of this component's boxes —
-    /// same walk and chaining contract as [`Self::on_wheel`].
-    /// Surfaces with no horizontal axis simply decline.
-    fn on_hwheel(
-        &self,
-        _ed: &mut Editor,
-        _bx: &LayoutBox,
-        _col: u16,
-        _row: u16,
-        _delta: i32,
-    ) -> AnyhowResult<Disposition> {
-        Ok(Disposition::Pass)
     }
 }
 
@@ -444,59 +259,6 @@ pub(crate) fn components() -> &'static [&'static dyn ChromeComponent] {
         &status_bar::StatusBar,
         &base::Base,
     ]
-}
-
-/// Build the chrome surface tree for one event: every component
-/// contributes its live boxes, each stamped with its owner. Replaces
-/// the monolithic enumeration.
-pub(crate) fn chrome_tree(ed: &Editor) -> Vec<ChromeBox> {
-    // VALIDATED MEMO — a hit is an equality claim that is CHECKED, not
-    // trusted. Two keys, covering the tree's two input classes:
-    //
-    // 1. `ui_gen` match — the geometry epoch. `collect` reads paint
-    //    caches (`last_frame`, per-component layout mirrors) that only
-    //    move under `render`/`relayout`, and both bump. The event
-    //    funnels bump too (see `bump_ui_gen`), coarsely and cheaply.
-    // 2. Overlay-stack equality — the presence epoch, DERIVED instead
-    //    of enumerated. `overlay_stack()` is a cheap always-fresh build
-    //    of every component's activity predicates and claims; comparing
-    //    it to the snapshot taken when the cached tree was built
-    //    catches surface open/close/focus changes from ANY path —
-    //    plugin dispatch, tests driving Editor APIs directly — without
-    //    a hand-maintained bump roster (which CI's oracle proved
-    //    incomplete when a counter alone was tried).
-    //
-    // A rebuild advances `ui_tree_seq`, giving downstream memos (the
-    // hover-cell skip) a "tree provably unchanged" token. Debug builds
-    // still oracle-check every hit against a fresh build, so any input
-    // this two-key scheme fails to cover dies as an assertion instead
-    // of routing an event through a stale tree.
-    let stack = ed.overlay_stack();
-    if let Some((gen, built_from, cached)) = ed.chrome_tree_memo.borrow().as_ref() {
-        if *gen == ed.ui_gen && *built_from == stack {
-            debug_assert_eq!(
-                cached,
-                &chrome_tree_uncached(ed),
-                "chrome_tree memo hit diverges from live state — an input \
-                 changed under an unchanged ui_gen + overlay stack"
-            );
-            return cached.clone();
-        }
-    }
-    let fresh = chrome_tree_uncached(ed);
-    *ed.chrome_tree_memo.borrow_mut() = Some((ed.ui_gen, stack, fresh.clone()));
-    ed.ui_tree_seq.set(ed.ui_tree_seq.get().wrapping_add(1));
-    fresh
-}
-
-fn chrome_tree_uncached(ed: &Editor) -> Vec<ChromeBox> {
-    let frame = ed.active_chrome().last_frame;
-    let mut t = ChromeTreeBuilder::new(frame.width as u32, frame.height as u32);
-    for (i, c) in components().iter().enumerate() {
-        t.current_owner = i;
-        c.collect(ed, &mut t);
-    }
-    t.boxes
 }
 
 #[cfg(test)]
@@ -574,25 +336,6 @@ mod tests {
         ];
         let set: std::collections::HashSet<_> = ranks.iter().collect();
         assert_eq!(set.len(), ranks.len(), "two layers share a rank");
-    }
-
-    /// A declined box's opacity decides whether the walk goes on: an opaque
-    /// one absorbs the event, a transparent one lets it through.
-    #[test]
-    fn a_declined_opaque_box_absorbs_the_event() {
-        use super::{pointer_walk_step, Disposition, PointerWalkStep};
-        assert_eq!(
-            pointer_walk_step(Disposition::Pass, true),
-            PointerWalkStep::Stop,
-        );
-        assert_eq!(
-            pointer_walk_step(Disposition::Pass, false),
-            PointerWalkStep::Continue,
-        );
-        assert_eq!(
-            pointer_walk_step(Disposition::Consumed, false),
-            PointerWalkStep::Stop,
-        );
     }
 
     /// The base-layer contract `handle_key` degrades on (and

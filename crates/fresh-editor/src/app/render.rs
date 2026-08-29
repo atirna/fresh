@@ -1292,7 +1292,6 @@ impl Editor {
         // built before this pass may describe stale rects. Bump at the END so
         // the pass's own overlay/chrome queries can still share one rebuild,
         // while post-render events derive fresh.
-        self.bump_ui_gen();
     }
 
     /// The Confirm-each option's live value when it is shown (replace

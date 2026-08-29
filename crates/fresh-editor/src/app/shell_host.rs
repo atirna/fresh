@@ -1022,16 +1022,14 @@ impl Editor {
                 }
                 // **Every registered reaction, not one hand-picked one.**
                 // The tree says where the pointer is; what each surface does
-                // about it stays with that surface, exactly as it does for the
-                // legacy walk (`update_hover_target`). Calling
+                // about it stays with that surface. Calling
                 // `menu_hover_reaction` directly instead silently dropped the
                 // reactions belonging to two surfaces that had *also*
                 // migrated: the explorer's git-status tooltip
                 // (`FileExplorerStatusIndicator`) and the status bar's
-                // indicator styling. Neither is reachable from the legacy walk
-                // any more — those components no longer publish boxes — so a
-                // reaction this fact does not reach is a reaction that never
-                // runs.
+                // indicator styling. This is the only thing that reaches any
+                // of them — a reaction this fact does not run is a reaction
+                // that never runs.
                 //
                 // The pointer cell the reactions want is the one the fact
                 // arrived at; a hover fact is always produced by a pointer
