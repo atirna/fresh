@@ -234,17 +234,75 @@ provided at is the scope they belong to.
 
 | # | What | How | Avoid |
 |---|---|---|---|
-| F.1 | `Draw::Scrollbar` carries `{offset, content, window}` and no marker channel, so the plugin overview-ruler API keeps scrollbars behind a `Host`. | Extend the library's scrollbar, **before** the wave that needs it. | Working around it in the editor. Appendix risk 1: a wave that needs a library change is a signal to stop and fix the library, not to fork behaviour into the editor. |
+| F.1 | `Draw::Scrollbar` carries `{offset, content, window}` and no marker channel, so the plugin overview-ruler API keeps scrollbars behind a `Host`. | **Two options, and the prior art prefers the second.** Extend the library's scrollbar; or keep the library out of it — VS Code's overview ruler is a canvas overlay that services inject zones into (`afterLineNumber` + a semantic colour), mapping line numbers to fractions of the total height with no knowledge of text layout at all. That is an editor-side `OverviewRuler` node over the scroll track, and it keeps line-height and buffer knowledge out of a library whose goal 6 is composition. Settle it before the wave that needs it. | Working around it in the editor *by accident* — which is what happens if nobody chooses, since the `Host` is already there. Appendix risk 1: a wave that needs a library change is a signal to stop and fix the library. |
 | F.2 | `Paint::Lit` — a colour with no theme name, for plugin RGB and markdown spans. | Plugins register named keys; `resolve_theme_key` grows a dynamic tier. Then provenance is total. | Leaving it. It is the one thing in the display list that is not traceable to a theme entry, and it is honest about that only because it is temporary. |
-| F.3 | **A subtree is either mounted — reconciled, laid out, painted, hit-tested — or gone, with its elements disposed and its `Tasks` cancelled.** There is no mounted-but-inactive state. `Sizing::Cells(0)` still reconciles and lays out; `PointerMode::Ignore` removes only hits. | Genuinely absent, and generic: it is what a tab view, a prefetched route or an off-screen panel with an expensive measurement wants. **Not needed for windows** — a switch is a user action, one cold rebuild is ~163µs, and `Persisted` covers the state — so this is a library question to raise on its merits, not a blocker. | Reaching for it *for* the window case, or emulating it with a zero-sized subtree, which pays reconcile and layout to hide something. |
-| F.5 | **`Persisted` / `Store` / `PERSISTENCE_SCOPE` have zero tests and zero uses in the library**, and the demo under `tests/support/demo/` is single-document. 0.3 and 0.5 both rest on behaviour nobody has run. | A multi-document scenario in the demo — two documents, a switch, per-document incidental state that survives it — and unit tests for the four things that are currently assumptions: that `teardown` fires when a *key change* discards a subtree (not only on `Ui` drop); that it fires before the replacement's `attach`; that **deferred disposal** does not reorder those two; and that a `Persisted` under the wrong scope is detectable. | Adopting it on the strength of the doc comment. It is a good doc comment. |
-| F.4 | Nothing ties an **identity boundary** to a **persistence scope**. A subtree can be keyed without providing a `PersistenceScope`, or scoped without a key, and both mistakes are silent. | A single primitive that does both — `scope(id, child)` — so the invariant cannot be half-declared. Goal 2's spirit: derive it from structure rather than ask every author to remember two things that are always used together. | Documenting the pairing instead. 0.5 is the first place it matters and it will not be the last. |
+| F.3 | **A subtree is either mounted — reconciled, laid out, painted, hit-tested — or gone, with its elements disposed and its `Tasks` cancelled.** There is no mounted-but-inactive state. `Sizing::Cells(0)` still reconciles and lays out; `PointerMode::Ignore` removes only hits. | Genuinely absent, and generic. The shape to copy is React 19.2's `<Activity mode="hidden">`, and its precision is the useful part: keep the element tree **and its state**, *unmount the effects* (subscriptions, timers), and defer updates to a low-priority queue. Flutter's `Offstage` is the cautionary version — it drops the child from layout and paint but keeps tickers running unless `TickerMode` is also disabled, which is the manual orchestration a primitive exists to remove. **Not needed for windows** — a switch is a user action, one cold rebuild is ~163µs, and `Persisted` covers the state — so raise it on its merits. | Reaching for it *for* the window case, or emulating it with a zero-sized subtree, which pays reconcile and layout to hide something. |
+| ~~**F.5**~~ **Done** ([#3108](https://github.com/sinelaw/fresh/pull/3108)). | **`Persisted` / `Store` / `PERSISTENCE_SCOPE` had zero tests and zero uses in the library**, and the demo under `tests/support/demo/` is single-document. 0.3 and 0.5 both rest on behaviour nobody has run. | A multi-document scenario in the demo — two documents, a switch, per-document incidental state that survives it — and unit tests for the four things that are currently assumptions: that `teardown` fires when a *key change* discards a subtree (not only on `Ui` drop); that it fires before the replacement's `attach`; that **deferred disposal** does not reorder those two; and that a `Persisted` under the wrong scope is detectable. | Adopting it on the strength of the doc comment. It is a good doc comment. |
+| ~~**F.4**~~ **Done** ([#3108](https://github.com/sinelaw/fresh/pull/3108)). | Nothing tied an **identity boundary** to a **persistence scope**. A subtree can be keyed without providing a `PersistenceScope`, or scoped without a key, and both mistakes are silent. | A single primitive that does both — `scope(id, child)` — so the invariant cannot be half-declared. Goal 2's spirit: derive it from structure rather than ask every author to remember two things that are always used together. | Documenting the pairing instead. 0.5 is the first place it matters and it will not be the last. |
 
 ### G. Not a gap
 
 `HostRegion::Body`'s per-pane `Host` leaves. Buffer and terminal cells stay
 cells: that leaf never migrates, and S5 subdivided it rather than removing it.
 Listed so a reader working down this list does not try to close it.
+
+### Prior art, and where it changes the above
+
+A survey of Flutter, React, Compose, SwiftUI, VS Code, Zed, Emacs, IntelliJ,
+Unreal Slate, Unity, Godot and Dear ImGui against these twelve questions. What
+it changed, what it confirmed, and — because a survey that agrees with you is
+worth less than one that does not — what it got wrong about this codebase.
+
+**It changed two entries.**
+
+- **F.3 has a precise shape now**: React 19.2's `<Activity mode="hidden">` —
+  keep the tree *and its state*, **unmount the effects**, defer updates to a
+  low-priority queue. Flutter's `Offstage` is the cautionary version: it drops
+  the child from layout and paint but leaves tickers running unless
+  `TickerMode` is disabled too, which is exactly the manual orchestration a
+  primitive should remove.
+- **F.1 gained a better option.** VS Code's overview ruler is *architecturally
+  decoupled from text layout*: services inject zones (`afterLineNumber` plus a
+  semantic colour) into a canvas over the scroll track, and the ruler maps line
+  numbers to fractions of total height knowing nothing about the text engine.
+  An editor-side `OverviewRuler` node keeps line-height and buffer knowledge
+  out of the library, which is goal 6's argument. Extending `Draw::Scrollbar`
+  is now the *second* option, not the only one.
+
+**It confirmed four, which is worth recording because they were judgement
+calls.** Multi-document scoping as an editor-side convention over a
+lightweight generic scope node (0.5, and `scope()` is that node). Global chrome
+as editor-side, with an explicit warning against building a `Scaffold` or
+`Workspace` primitive — the dock stays ours (C.5b). Settings built from a
+declarative model application-side rather than by framework reflection (B.1).
+A logic-less serialized description for plugin UI, RFW-shaped (C.1).
+
+**And it was wrong about this codebase three times, each in the same
+direction** — recommending as a *new library primitive* something `fresh-ui`
+already has:
+
+- a "context-aware action dispatcher" resolving keys to intents — that is the
+  `focus/` module's Shortcuts → Intents → Actions chain, shipped. A.1 is
+  adoption, not construction.
+- an explicit pointer-capture API — shipped, and E.3 is adoption.
+- a "paint-phase theme context" so a colour change does not relayout —
+  `ThemeKey` is resolved at fold time, so it already cannot.
+
+That pattern is itself the finding, and it is §I restated from outside: the
+gaps a reader sees in this migration are mostly capabilities the library has
+and the editor has not adopted.
+
+**One suggestion worth keeping and not acting on yet.** Several engines make a
+document scope an *event* boundary as well as a state one, so an event in one
+document cannot bubble to the root and back down into another. Ours does not
+need it — only one window is mounted at a time — but if inactive windows ever
+become mounted (F.3), it becomes load-bearing on the same day.
+
+**On the evidence.** The Flutter, React and VS Code claims are checkable
+against primary sources; several game-engine and IntelliJ ones rest on
+secondary write-ups, and a few citations are blog posts. Treat the
+architecture as well-sourced and the performance characterisations as
+indicative.
 
 ---
 
