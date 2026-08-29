@@ -135,15 +135,30 @@ Editor-scoped, with the dock: the four modals, the workspace-trust prompt and
 the theme inspector — everything whose state is on the `Editor` and whose
 lifetime is not a window's.
 
-**And the objection to that shape has a principled answer.** A changed key at
-the window position *discards* the subtree, so switching windows throws away
-its element state. That is correct, and it is §4.3's state-home rule read
-backwards: **anything that must survive a window switch is model state, not
-view state** — it survives being off-screen, so it was never ephemeral. The
-things that must survive already live on the `Window` (the explorer's state,
-the split view states, the buffer set). The dock demonstrates the rule from the
-other side: its scroll survives switches precisely because the dock is *not* in
-the window subtree.
+**And the objection to that shape is already answered by a library primitive
+we have not adopted.** A changed key at the window position *discards* the
+subtree, so switching windows throws away its element state. Two things make
+that fine:
+
+- **Existing serialized view state is model state and stays where it is** —
+  the explorer's state, the split view states, the buffer set all live on the
+  `Window` already. The dock demonstrates the same rule from the other side:
+  its scroll survives switches precisely because the dock is *not* in the
+  window subtree.
+- **New incidental view state uses `Persisted`.** The library has
+  `behavior::Persisted<T>`, a host `Store` installed with `Ui::set_store`, and
+  a `PersistenceScope` ambient; a value is read at construction and written
+  back at teardown, and — in the behavior's own words — *"keys are anchored to
+  the enclosing `PersistenceScope` rather than to tree position, so moving a
+  widget does not lose its value and **two widgets at the same position under
+  different documents do not share one**."* Windows are the documents. That
+  sentence is this problem, written down in the library before we met it.
+
+So the window subtree carries two things at its root: the key that bounds
+identity, and `PersistenceScope(window_id)` that bounds persistence. Editor
+adoption of the second today: `Persisted<…>` **0 uses**, `Ui::set_store`
+**never called**. This is §I again — we were about to invent a workaround for
+a gap the library does not have.
 
 What this costs is discipline in one place instead of everywhere: one key, at
 one node, rather than `WindowId` threaded through every window-owned subtree
@@ -211,6 +226,8 @@ provided at is the scope they belong to.
 |---|---|---|---|
 | F.1 | `Draw::Scrollbar` carries `{offset, content, window}` and no marker channel, so the plugin overview-ruler API keeps scrollbars behind a `Host`. | Extend the library's scrollbar, **before** the wave that needs it. | Working around it in the editor. Appendix risk 1: a wave that needs a library change is a signal to stop and fix the library, not to fork behaviour into the editor. |
 | F.2 | `Paint::Lit` — a colour with no theme name, for plugin RGB and markdown spans. | Plugins register named keys; `resolve_theme_key` grows a dynamic tier. Then provenance is total. | Leaving it. It is the one thing in the display list that is not traceable to a theme entry, and it is honest about that only because it is temporary. |
+| F.3 | **A subtree is either mounted — reconciled, laid out, painted, hit-tested — or gone, with its elements disposed and its `Tasks` cancelled.** There is no mounted-but-inactive state. `Sizing::Cells(0)` still reconciles and lays out; `PointerMode::Ignore` removes only hits. | Genuinely absent, and generic: it is what a tab view, a prefetched route or an off-screen panel with an expensive measurement wants. **Not needed for windows** — a switch is a user action, one cold rebuild is ~163µs, and `Persisted` covers the state — so this is a library question to raise on its merits, not a blocker. | Reaching for it *for* the window case, or emulating it with a zero-sized subtree, which pays reconcile and layout to hide something. |
+| F.4 | Nothing ties an **identity boundary** to a **persistence scope**. A subtree can be keyed without providing a `PersistenceScope`, or scoped without a key, and both mistakes are silent. | A single primitive that does both — `scope(id, child)` — so the invariant cannot be half-declared. Goal 2's spirit: derive it from structure rather than ask every author to remember two things that are always used together. | Documenting the pairing instead. 0.5 is the first place it matters and it will not be the last. |
 
 ### G. Not a gap
 
