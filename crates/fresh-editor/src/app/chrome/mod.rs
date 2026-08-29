@@ -85,15 +85,6 @@ impl std::borrow::Borrow<LayoutBox> for ChromeBox {
 pub(crate) enum Disposition {
     /// Handled — the walk stops.
     Consumed,
-    /// Side effects applied, but the event must keep routing — the
-    /// act-then-continue guards (transient dismiss, explorer menu
-    /// clear). NOT interchangeable with `Pass`: on a `pointer_opaque`
-    /// box, `Pass` STOPS the walk (the opacity gate absorbs the
-    /// event) while `PassAfter` keeps walking — an observer's
-    /// continue must not be blocked by its own box's opacity. Today
-    /// every PassAfter producer is a non-opaque guard, so the two
-    /// only diverge if an opaque surface adopts observer semantics.
-    PassAfter,
     /// Not this surface's event — the walk continues to the next box.
     Pass,
 }
@@ -195,15 +186,21 @@ impl ChromeTreeBuilder {
 }
 
 /// What one press-walk step does to the walk, given the component's
-/// disposition and the box's opacity — the [`Disposition`] contract
-/// as CODE (pinned by the unit tests below) instead of prose:
-/// `PassAfter` continues even on an opaque box (an observer's
-/// continue must not be blocked by its own box's opacity), while a
-/// declined (`Pass`) opaque box absorbs the event.
+/// disposition and the box's opacity: a declined (`Pass`) opaque box
+/// absorbs the event, and a declined transparent one lets it through.
+///
+/// There used to be a third disposition, `PassAfter` — act, then keep
+/// routing even through an opaque box — for the act-then-continue
+/// guards: the transient dismiss, the explorer's menu clear, the
+/// right-click tab-menu clear. Every one of them is a capture-phase
+/// listener in the shell's tree now, which is what "observe the whole
+/// channel and do not claim" actually means: it fires before anything
+/// under the pointer, on every event, whether or not this walk is
+/// reached at all. A box could only ever observe the events the tree
+/// declined.
 pub(crate) fn pointer_walk_step(disp: Disposition, pointer_opaque: bool) -> PointerWalkStep {
     match disp {
         Disposition::Consumed => PointerWalkStep::Stop,
-        Disposition::PassAfter => PointerWalkStep::Continue,
         Disposition::Pass => {
             if pointer_opaque {
                 PointerWalkStep::Stop
@@ -593,19 +590,11 @@ mod tests {
         assert_eq!(set.len(), ranks.len(), "two layers share a rank");
     }
 
-    /// The `Disposition` contract as behavior, not prose: `PassAfter`
-    /// and `Pass` are NOT interchangeable on an opaque box — an
-    /// observer's continue survives its own box's opacity, a decline
-    /// does not. (Today every PassAfter producer is a non-opaque
-    /// guard; this pins the rule for the first opaque surface that
-    /// adopts observer semantics.)
+    /// A declined box's opacity decides whether the walk goes on: an opaque
+    /// one absorbs the event, a transparent one lets it through.
     #[test]
-    fn pass_after_is_not_pass_on_an_opaque_box() {
+    fn a_declined_opaque_box_absorbs_the_event() {
         use super::{pointer_walk_step, Disposition, PointerWalkStep};
-        assert_eq!(
-            pointer_walk_step(Disposition::PassAfter, true),
-            PointerWalkStep::Continue,
-        );
         assert_eq!(
             pointer_walk_step(Disposition::Pass, true),
             PointerWalkStep::Stop,

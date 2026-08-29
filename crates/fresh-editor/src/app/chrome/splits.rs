@@ -22,36 +22,16 @@ impl ChromeComponent for Splits {
                 t.rect("chrome:split_widget_panel", 120, *content_rect);
             }
         }
-        // The main tree's dividers are nodes in the shell's tree, and answer
-        // their own presses and hovers — see `view::shell::splits`. A box for
-        // them would be a rectangle recorded from the last paint, hit-tested
-        // to recover an identity the node simply has.
-        //
-        // A **grouped subtree** is different, and this is the boundary the
-        // migration keeps hitting: it is laid out inside a pane's *interior*,
-        // past the tab bar and the scrollbars the painter reserves, and that
-        // interior is still the painter's. So its dividers are still recorded
-        // rectangles, and they become nodes when the pane does.
-        for (_, direction, sep_x, sep_y, sep_len) in &ed.active_layout().grouped_separator_areas {
-            let (w, h) = match direction {
-                SplitDirection::Horizontal => (*sep_len as u32, 1),
-                SplitDirection::Vertical => (1, *sep_len as u32),
-            };
-            let mut b = LayoutBox::plain(
-                "chrome:group_separators",
-                *sep_y as u32,
-                *sep_x as u32,
-                w,
-                h,
-            );
-            b.z = 80;
-            t.push(b);
-        }
-        // The tab strip is a node in the shell's tree — one per pane, keyed by
-        // the leaf it belongs to (`shell::splits::tab_strip`). It answers for
-        // the split controls too: they are drawn *on top of* the tab row, and
-        // the two boxes here said so with z 70 over z 60, an ordering a node
-        // has to state itself because the tree runs before this walk.
+        // **Every divider and every tab strip is a node now**, so neither is
+        // here. The dividers went first for the main tree; a buffer group's
+        // held out longer, because a group's layout lives in a side map rather
+        // than in the split tree and used to be dispatched into a pane's
+        // interior only at *paint* time — leaving its separators as recorded
+        // rectangles. The description mounts that layout inside the pane's
+        // content, which is where the painter puts it, so they are the same
+        // nodes as the rest. The strips took the split controls with them:
+        // those are drawn over the tab row, which two boxes said with z 70
+        // over z 60 and a node has to say itself.
         for (_, _, _, scrollbar_rect, _, _) in &ed.active_layout().split_areas {
             t.rect("chrome:scrollbars", 50, *scrollbar_rect);
         }
@@ -65,24 +45,6 @@ impl ChromeComponent for Splits {
 
     fn hover(&self, ed: &mut Editor, bx: &LayoutBox, col: u16, row: u16) -> Option<HoverTarget> {
         match bx.kind {
-            "chrome:group_separators" => {
-                for (split_id, direction, sep_x, sep_y, sep_length) in
-                    &ed.active_layout().grouped_separator_areas
-                {
-                    let on_it = match direction {
-                        SplitDirection::Horizontal => {
-                            row == *sep_y && col >= *sep_x && col < sep_x + sep_length
-                        }
-                        SplitDirection::Vertical => {
-                            col == *sep_x && row >= *sep_y && row < sep_y + sep_length
-                        }
-                    };
-                    if on_it {
-                        return Some(HoverTarget::SplitSeparator(*split_id, *direction));
-                    }
-                }
-                None
-            }
             "chrome:scrollbars" => {
                 for (split_id, _buffer_id, _content_rect, scrollbar_rect, thumb_start, thumb_end) in
                     &ed.active_layout().split_areas
@@ -181,7 +143,6 @@ impl ChromeComponent for Splits {
         let consumed = match bx.kind {
             "chrome:scrollbars" => ed.handle_click_scrollbar(ev.col, ev.row),
             "chrome:h_scrollbar" => ed.handle_click_horizontal_scrollbar(ev.col, ev.row),
-            "chrome:group_separators" => ed.handle_click_group_separator(ev.col, ev.row),
             "chrome:editor" => {
                 let areas: Vec<_> = ed
                     .active_layout()
@@ -729,39 +690,6 @@ impl Editor {
     /// The main tree's dividers are nodes and carry their own identity; a
     /// grouped subtree is laid out inside a pane's interior, which is still a
     /// painter's, so this is the hit test that remains — over the rectangles
-    /// that painter recorded.
-    pub(super) fn handle_click_group_separator(
-        &mut self,
-        col: u16,
-        row: u16,
-    ) -> Option<AnyhowResult<()>> {
-        let areas = self.active_layout().grouped_separator_areas.clone();
-        for (split_id, direction, sep_x, sep_y, sep_length) in &areas {
-            let on_it = match direction {
-                SplitDirection::Horizontal => {
-                    row == *sep_y && col >= *sep_x && col < sep_x + sep_length
-                }
-                SplitDirection::Vertical => {
-                    col == *sep_x && row >= *sep_y && row < sep_y + sep_length
-                }
-            };
-            if on_it {
-                let ratio = self
-                    .split_manager_mut()
-                    .get_ratio((*split_id).into())
-                    .or_else(|| self.grouped_split_ratio(*split_id));
-                let st = &mut self.active_window_mut().mouse_state;
-                st.dragging_separator = Some((*split_id, *direction));
-                st.drag_start_position = Some((col, row));
-                if let Some(ratio) = ratio {
-                    self.active_window_mut().mouse_state.drag_start_ratio = Some(ratio);
-                }
-                return Some(Ok(()));
-            }
-        }
-        None
-    }
-
     /// What the pointer is on within a pane's tab strip.
     ///
     /// The strip is a node; its interior is the tab renderer's layout, so this

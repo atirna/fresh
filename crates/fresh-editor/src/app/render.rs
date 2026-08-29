@@ -2681,11 +2681,13 @@ impl Editor {
         // borrowed: a description is a value, and this one is a handful of
         // nodes.
         let pane_chrome = self.pane_chrome();
+        let groups = self.active_window().pane_groups();
         let splits = self.active_window().buffers.splits().map(|(mgr, _)| {
             crate::view::shell::splits::Splits {
                 root: mgr.root().clone(),
                 maximized: mgr.maximized_split().map(crate::model::event::LeafId),
                 chrome: pane_chrome.clone(),
+                groups,
             }
         });
         // The same map the painter will read for the same panes — filed here,

@@ -517,7 +517,7 @@ impl Editor {
             };
             match disp {
                 super::chrome::Disposition::Consumed => return Ok(()),
-                super::chrome::Disposition::PassAfter | super::chrome::Disposition::Pass => {}
+                super::chrome::Disposition::Pass => {}
             }
         }
         Ok(())
@@ -1056,9 +1056,9 @@ impl Editor {
     /// (left, right, double, triple). Build the per-event chrome
     /// tree, scan the boxes under the point top-down (`hit_stack`),
     /// offer the press to each box's owning component, and honor the
-    /// dispositions: `Consumed` stops the walk, `PassAfter` acts then
-    /// continues (guards), and a DECLINED opaque box absorbs the
-    /// press (nothing routes through a popup). Multi-box surfaces
+    /// dispositions: `Consumed` stops the walk, and a DECLINED opaque
+    /// box absorbs the press (nothing routes through a popup).
+    /// Multi-box surfaces
     /// (one box per popup / dropdown level) are dispatched once per
     /// surface — their handlers resolve by position over the whole
     /// collection; the dedup is keyed on (owner, kind) so it never
@@ -1091,7 +1091,7 @@ impl Editor {
                 modifiers,
             };
             let disp = super::chrome::components()[b.owner].on_pointer(self, &b.lb, &ev)?;
-            // Consumed stops; the PassAfter/Pass-vs-opacity contract is
+            // Consumed stops; the decline-vs-opacity contract is
             // `pointer_walk_step` (pure, unit-tested).
             if disp == super::chrome::Disposition::Consumed {
                 return Ok(());
@@ -1216,11 +1216,13 @@ impl Editor {
         Ok(())
     }
 
-    /// Handle right-click event — same engine. Ordering rides z; the
-    /// anywhere-clears (tab "+" menu, close-split confirm) are the
-    /// Splits component's top-band PassAfter guard, the overlay
-    /// prompt's swallow and the theme inspector's Ctrl+Right trigger
-    /// are boxes above the routable surfaces.
+    /// Handle right-click event — same engine, ordering rides z. What
+    /// used to sit above every routable surface here — the anywhere-clears
+    /// for the "+" tab menu and the close-split confirmation, the overlay
+    /// prompt's swallow, the theme inspector's Ctrl+Right trigger — are
+    /// capture-phase listeners on the shell's frame now. A box could only
+    /// observe the right-clicks this walk was reached for, which is not
+    /// what "anywhere" means.
     pub(super) fn handle_right_click(
         &mut self,
         tree: &[super::chrome::ChromeBox],

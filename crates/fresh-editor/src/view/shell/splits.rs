@@ -18,7 +18,6 @@
 //! the shell. The dividers' drags and the panes' content are the editor's, and
 //! are added where the grid is mounted.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use fresh_ui::{
@@ -299,6 +298,65 @@ mod tests {
         }
     }
 
+    /// **A buffer group's dividers are the pane's own dividers.**
+    ///
+    /// A group's layout lives in a side map on the window, not in the split
+    /// tree, and was dispatched into the pane's interior only at paint time —
+    /// so its separators stayed recorded rectangles (`chrome:group_separators`)
+    /// long after the main tree's became nodes, and a drag on one had to
+    /// search that list to find which container it was. Mounted in the pane's
+    /// content, they are ordinary dividers, at the cells the painter draws
+    /// them at: it derives those from `get_separators_with_ids(content_rect)`,
+    /// and the content node *is* that rectangle.
+    #[test]
+    fn a_groups_dividers_land_where_its_separators_are_drawn() {
+        let group = SplitNode::Grouped {
+            split_id: LeafId(SplitId(50)),
+            name: "g".into(),
+            layout: Box::new(split(SplitDirection::Vertical, leaf(20), leaf(21), 0.5, 30)),
+            active_inner_leaf: LeafId(SplitId(20)),
+        };
+        let host = LeafId(SplitId(0));
+        let with_tabs = PaneChrome {
+            tabs: true,
+            vscroll: true,
+            hscroll: false,
+        };
+        let s = Splits {
+            root: leaf(0),
+            maximized: None,
+            chrome: [(host, with_tabs)].into_iter().collect(),
+            groups: [(host, group.clone())].into_iter().collect(),
+        };
+        let (w, h) = (80u16, 24u16);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(overlay(&s), Size::new(w, h));
+
+        // The pane's content rect, as the interior divides it: a strip row off
+        // the top and the scrollbar column off the right.
+        let content = ui.rect_of(ui.find_by_key(&content_key(host)).expect("the content"));
+        assert_eq!(
+            (content.x, content.y, content.w, content.h),
+            (0, 1, w - 1, h - 1),
+            "past the strip and beside the bar"
+        );
+
+        let at = Rect::new(content.x as u16, content.y as u16, content.w, content.h);
+        let SplitNode::Grouped { layout, .. } = &group else {
+            unreachable!()
+        };
+        let want = layout.get_separators_with_ids(at);
+        assert_eq!(want.len(), 1, "one separator inside the group");
+        for (id, _dir, x, y, len) in want {
+            let r = ui.rect_of(ui.find_by_key(&divider_key(id)).expect("the divider"));
+            assert_eq!(
+                (r.x, r.y, r.h),
+                (x as i32, y as i32, len),
+                "{id:?} where the painter draws it"
+            );
+        }
+    }
+
     /// **A press on a pane's strip names that pane, because it is that pane's.**
     ///
     /// Two `LayoutBox`es covered the tab row — the strip at z 60 and the split
@@ -324,6 +382,7 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            groups: Default::default(),
         };
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(overlay(&s), Size::new(80, 24));
@@ -384,6 +443,7 @@ mod tests {
             chrome: [(LeafId(SplitId(0)), PaneChrome::default())]
                 .into_iter()
                 .collect(),
+            groups: Default::default(),
         };
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(overlay(&s), Size::new(80, 24));
@@ -583,6 +643,12 @@ pub struct Splits {
     /// painter that fills the `Host` leaf under it — so a pane's strip cannot
     /// be a row tall in one and absent in the other.
     pub chrome: std::collections::HashMap<LeafId, PaneChrome>,
+    /// The buffer group each pane is showing, if any, by the pane it is shown
+    /// in. A group's layout lives in a side map on the window rather than in
+    /// the split tree, and is dispatched at render time into the pane's
+    /// interior — so the grid a pane holds is stated here rather than found by
+    /// walking `root`.
+    pub groups: std::collections::HashMap<LeafId, SplitNode>,
 }
 
 /// The grid mounted over the body's `Host` leaf: geometry and the dividers'
@@ -596,12 +662,8 @@ pub struct Splits {
 /// both answered that by comparing a cell against a recorded list of
 /// rectangles, one at a time.
 pub fn overlay(s: &Splits) -> Node<UiMsg> {
-    dress(
-        grid::<UiMsg>(&s.root, s.maximized),
-        &s.root,
-        s.maximized,
-        &s.chrome,
-    )
+    let s = Rc::new(s.clone());
+    dress(grid::<UiMsg>(&s.root, s.maximized), &s)
 }
 
 /// Walk the built grid and give each node its pointer role.
@@ -609,26 +671,22 @@ pub fn overlay(s: &Splits) -> Node<UiMsg> {
 /// Done as a second pass rather than inside `grid` so the description stays
 /// message-agnostic: the model lays the same grid out with `M = ()`, and a
 /// gesture would make that impossible.
-fn dress(
-    n: Node<UiMsg>,
-    root: &SplitNode,
-    maximized: Option<LeafId>,
-    chrome: &HashMap<LeafId, PaneChrome>,
-) -> Node<UiMsg> {
+fn dress(n: Node<UiMsg>, s: &Rc<Splits>) -> Node<UiMsg> {
     // The grid is built by `layout_reader`s, so its structure is not walkable
     // before layout. Instead the dressing is applied by rebuilding: the same
     // recursion, with roles.
     let _ = n;
-    if let Some(id) = maximized {
-        if let Some(SplitNode::Leaf { split_id, .. }) = root.find(id.into()) {
+    if let Some(id) = s.maximized {
+        if let Some(SplitNode::Leaf { split_id, .. }) = s.root.find(id.into()) {
             return pane_inert::<UiMsg>().children([live_interior(
                 *split_id,
-                chrome.get(split_id).copied().unwrap_or_default(),
+                s.chrome.get(split_id).copied().unwrap_or_default(),
+                s,
             )]);
         }
         return pane_inert::<UiMsg>();
     }
-    dressed(root, chrome)
+    dressed(&s.root, s)
 }
 
 /// A pane, as far as the pointer is concerned: `Transparent`, so its interior
@@ -642,13 +700,16 @@ fn pane_inert<M: 'static>() -> Node<M> {
     row().pointer_mode(PointerMode::Transparent)
 }
 
-fn dressed(n: &SplitNode, chrome: &HashMap<LeafId, PaneChrome>) -> Node<UiMsg> {
+/// `s` is shared rather than cloned: a `layout_reader` outlives the build, so
+/// every `Split` node needs its own handle on what the panes below it hold.
+fn dressed(n: &SplitNode, s: &Rc<Splits>) -> Node<UiMsg> {
     match n {
         SplitNode::Leaf { split_id, .. } => pane_inert::<UiMsg>().children([live_interior(
             *split_id,
-            chrome.get(split_id).copied().unwrap_or_default(),
+            s.chrome.get(split_id).copied().unwrap_or_default(),
+            s,
         )]),
-        SplitNode::Grouped { layout, .. } => dressed(layout, chrome),
+        SplitNode::Grouped { layout, .. } => dressed(layout, s),
         SplitNode::Split {
             direction,
             first,
@@ -661,7 +722,7 @@ fn dressed(n: &SplitNode, chrome: &HashMap<LeafId, PaneChrome>) -> Node<UiMsg> {
             let (dir, ratio) = (*direction, *ratio);
             let (ff, fs, id) = (*fixed_first, *fixed_second, *split_id);
             let (a, b) = (first.clone(), second.clone());
-            let chrome = chrome.clone();
+            let s = s.clone();
             layout_reader(move |info: LayoutInfo| {
                 let whole = ratatui::layout::Rect::new(
                     0,
@@ -670,7 +731,7 @@ fn dressed(n: &SplitNode, chrome: &HashMap<LeafId, PaneChrome>) -> Node<UiMsg> {
                     info.constraints.max_h,
                 );
                 let (ra, rb) = split_rect_ext(whole, dir, ratio, ff, fs);
-                let (first, second) = (dressed(&a, &chrome), dressed(&b, &chrome));
+                let (first, second) = (dressed(&a, &s), dressed(&b, &s));
                 let div = divider(id, dir);
                 match dir {
                     SplitDirection::Vertical => {
@@ -729,8 +790,18 @@ fn divider(id: ContainerId, dir: SplitDirection) -> Node<UiMsg> {
 /// The shape is `pane_interior`'s — one statement of it, which the model also
 /// lays out with `M = ()` to derive rectangles. What the shell adds is the
 /// strip's gestures.
-fn live_interior(id: LeafId, c: PaneChrome) -> Node<UiMsg> {
-    pane_interior::<UiMsg>(id, c, tab_strip(id))
+fn live_interior(id: LeafId, c: PaneChrome, s: &Rc<Splits>) -> Node<UiMsg> {
+    // A pane showing an active buffer group holds that group's own grid in its
+    // content — laid out inside the pane's interior, past the strip and the
+    // scrollbar column, which is exactly where the painter puts it. That was
+    // the migration's standing boundary: the group's panels and dividers lived
+    // in a side map, so their separators stayed recorded rectangles while the
+    // main tree's became nodes. Nested here, they are the same nodes.
+    let content = match s.groups.get(&id) {
+        Some(g) => dressed(g, s),
+        None => row(),
+    };
+    pane_interior::<UiMsg>(id, c, tab_strip(id), content)
 }
 
 /// The tab strip, as one node per pane.
@@ -907,15 +978,21 @@ impl PaneChrome {
 /// The horizontal bar stops short of the vertical one's column rather than
 /// running under it. That is the painter's arithmetic and it is the one thing
 /// here a reader would get wrong from the picture alone.
-/// `tabs` is the strip's own node: `row()` where only its rectangle is wanted
-/// (the model's layout query), the gesture node where the pointer has to reach
-/// it. The key is applied here either way, so a caller cannot forget it.
-pub fn pane_interior<M: 'static>(id: LeafId, c: PaneChrome, tabs: Node<M>) -> Node<M> {
+/// `tabs` and `content` are those slots' own nodes: `row()` where only the
+/// rectangle is wanted (the model's layout query), something with gestures or
+/// children where the pointer has to reach into them. The keys are applied
+/// here either way, so a caller cannot forget one.
+pub fn pane_interior<M: 'static>(
+    id: LeafId,
+    c: PaneChrome,
+    tabs: Node<M>,
+    content: Node<M>,
+) -> Node<M> {
     let cells = |on: bool| Sizing::Cells(on as u16);
     col().children([
         tabs.key(tabs_key(id)).h(cells(c.tabs)),
         row().flex(1).children([
-            row().key(content_key(id)).flex(1),
+            content.key(content_key(id)).flex(1),
             row().key(vscroll_key(id)).w(cells(c.vscroll)),
         ]),
         row().h(cells(c.hscroll)).children([
