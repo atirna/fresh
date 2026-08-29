@@ -796,8 +796,6 @@ impl Editor {
         let crate::app::shell_host::BodyOutput {
             split_areas,
             tab_layouts,
-            close_split_areas,
-            maximize_split_areas,
             view_line_mappings,
             horizontal_scrollbar_areas,
             grouped_separator_areas,
@@ -1014,8 +1012,6 @@ impl Editor {
         self.active_layout_mut().split_areas = split_areas;
         self.active_layout_mut().horizontal_scrollbar_areas = horizontal_scrollbar_areas;
         self.active_layout_mut().tab_layouts = tab_layouts;
-        self.active_layout_mut().close_split_areas = close_split_areas;
-        self.active_layout_mut().maximize_split_areas = maximize_split_areas;
         self.active_layout_mut().view_line_mappings = view_line_mappings;
 
         // **The buffer answers where its caret is, and the layers hanging off
@@ -2681,10 +2677,19 @@ impl Editor {
         let pane_chrome = self.pane_chrome();
         let groups = self.active_window().pane_groups();
         let splits = self.active_window().buffers.splits().map(|(mgr, _)| {
+            // Which buttons the strips carry, by the painter's own rule. Both
+            // are frame-wide: they read "is there more than one pane" and "is
+            // one maximized", neither of which names a pane.
+            let is_maximized = mgr.is_maximized();
+            let several = mgr.visible_leaves().len() > 1;
             crate::view::shell::splits::Splits {
                 root: mgr.root().clone(),
                 maximized: mgr.maximized_split().map(crate::model::event::LeafId),
                 chrome: pane_chrome.clone(),
+                controls: crate::view::shell::splits::PaneControls {
+                    maximize: several || is_maximized,
+                    close: several && !is_maximized,
+                },
                 groups,
             }
         });
