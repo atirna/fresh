@@ -1,66 +1,23 @@
-//! The base surface: the tab context menu's dismissal and the wheel's
-//! drop floor (scroll surfaces each own their boxes in the Splits /
-//! FileExplorer components, or their nodes in the shell's tree; what
-//! falls to the base has nothing scrollable under the pointer).
+//! The editor content as the keyboard owner of last resort.
+//!
+//! The base surface had a pointer half, and both halves of it are in the
+//! shell's tree now. The **tab-menu dismissal** — a right-click anywhere
+//! clears the transient menus — is a capture-phase listener on the frame
+//! (`shell::splits::tab_menu_guard`), which is where "anywhere" can mean it:
+//! this walk only ever ran for the events the tree declined. The **wheel's
+//! drop floor** — chrome owning no scrollable content drops the notch rather
+//! than handing it to the focused pane (sinelaw/fresh#2969) — is the same
+//! statement made by nothing claiming: every scrollable surface claims its own
+//! wheel in the tree, and a notch nothing claimed simply ends.
 
-use crate::widgets::LayoutBox;
 use anyhow::Result as AnyhowResult;
 
-use super::{ChromeComponent, ChromePointer, ChromeTreeBuilder, Disposition, Editor, PointerPress};
+use super::{ChromeComponent, ChromeTreeBuilder, Editor};
 
 pub(crate) struct Base;
 
 impl ChromeComponent for Base {
-    fn collect(&self, _ed: &Editor, t: &mut ChromeTreeBuilder) {
-        t.full("chrome:base", 0);
-    }
-
-    fn on_pointer(
-        &self,
-        ed: &mut Editor,
-        _bx: &LayoutBox,
-        ev: &ChromePointer,
-    ) -> AnyhowResult<Disposition> {
-        if ev.press != PointerPress::Right {
-            return Ok(Disposition::Pass);
-        }
-        // A right-click that got this far was not on a tab strip — the strip
-        // is a node in the shell's tree and claims its own, raising the tab's
-        // context menu (`Editor::open_tab_context_menu`). What is left here is
-        // the other half of that statement: a right-click anywhere else
-        // dismisses the menu.
-        ed.active_window_mut().tab_context_menu = None;
-        Ok(Disposition::Consumed)
-    }
-
-    fn on_wheel(
-        &self,
-        _ed: &mut Editor,
-        _bx: &LayoutBox,
-        _col: u16,
-        _row: u16,
-        _delta: i32,
-    ) -> anyhow::Result<super::Disposition> {
-        // The wheel's floor: chrome that owns no scrollable content —
-        // the menu bar, the status bar, separators, empty frame —
-        // DROPS the wheel rather than handing it to the focused pane
-        // (sinelaw/fresh#2969). The scrollable surfaces (splits, tab
-        // strips, the explorer) each claim their own boxes above; what
-        // reaches the base has nothing under the pointer to move.
-        Ok(super::Disposition::Consumed)
-    }
-
-    fn on_hwheel(
-        &self,
-        _ed: &mut Editor,
-        _bx: &LayoutBox,
-        _col: u16,
-        _row: u16,
-        _delta: i32,
-    ) -> anyhow::Result<super::Disposition> {
-        // Same drop ruling as the vertical wheel.
-        Ok(super::Disposition::Consumed)
-    }
+    fn collect(&self, _ed: &Editor, _t: &mut ChromeTreeBuilder) {}
 
     fn layers(&self, ed: &Editor, out: &mut Vec<(u16, crate::app::overlay::Layer)>) {
         use crate::app::overlay::{Layer, LayerKind};

@@ -1004,20 +1004,25 @@ fn tab_strip(id: LeafId) -> Node<UiMsg> {
         )
 }
 
-/// **A right-click anywhere clears the two left-click-only menus**, then lets
-/// the click go on to whatever it was aimed at.
+/// **A right-click anywhere clears the transient tab menus**, then lets the
+/// click go on to whatever it was aimed at.
 ///
-/// The "+" new-tab menu and the close-split confirmation open on a left click
-/// and have no right-click behaviour of their own, so a right-click aimed
-/// past them should dismiss them the way clicking elsewhere does — including
-/// the right-click that *opens* a tab's context menu, which is aimed at a tab
-/// with the "+" menu still hanging over it.
+/// Three of them: the "+" new-tab menu, the close-split confirmation, and a
+/// tab's own context menu. None has right-click behaviour of its own, so a
+/// right-click aimed past any of them should dismiss it the way clicking
+/// elsewhere does — including the right-click that *opens* a tab's context
+/// menu, which is aimed at a tab with the "+" menu possibly hanging over it.
 ///
 /// A capture-phase listener that does not `stop()`: it runs before anything
-/// under the pointer sees the click, and the click continues. It was a
-/// full-screen box in the legacy walk at the top of the z band — but that walk
-/// runs only when the tree declines the event, so the guard silently did not
-/// fire for a right-click any migrated surface took. Here it always does.
+/// under the pointer sees the click, and the click continues. So a right-press
+/// on a tab clears all three here and the strip opens the new one after,
+/// which is what the base surface's "clear unless it was a tab" fork was
+/// spelling out as two branches of one statement.
+///
+/// It was a full-screen box in the legacy walk at the top of the z band — but
+/// that walk runs only when the tree declines the event, so the guard silently
+/// did not fire for a right-click any migrated surface took. Here it always
+/// does.
 pub fn tab_menu_guard(frame: Node<UiMsg>) -> Node<UiMsg> {
     gesture(frame).on_capture(
         GestureKind::Press,

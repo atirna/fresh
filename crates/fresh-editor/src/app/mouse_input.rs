@@ -210,6 +210,14 @@ impl Editor {
         // for the walk below, because a surface that moved into the tree must
         // not scroll at a different speed from the one beside it.
         let wheel_lines = self.config.editor.mouse_wheel_scroll_lines.max(1) as i32;
+        // **A multi-line notch slides rather than jumping**, and the split has
+        // to happen here, ahead of dispatch. The first line goes with this
+        // event and the rest are owed, walked one at a time by
+        // `step_pending_wheel_scroll`. It used to sit between the tree's
+        // dispatch and the legacy walk — which meant it applied only to the
+        // notches the tree *declined*, and once a surface's wheel became a node
+        // that was none of that surface's.
+        let wheel_lines = self.arm_wheel_walk(mouse_event, col, row, wheel_lines);
         if let Some(input) =
             crate::view::shell::input::mouse(mouse_event, clicks, wheel_lines, WHEEL_COLUMNS)
         {
@@ -362,24 +370,6 @@ impl Editor {
                 // re-rendering only on the enter/leave transition.
                 needs_render = self.update_widget_hover(col, row, None) || needs_render;
             }
-            MouseEventKind::ScrollUp => {
-                self.begin_wheel_scroll(&tree, col, row, mouse_event.modifiers, -1)?;
-                needs_render = true;
-            }
-            MouseEventKind::ScrollDown => {
-                self.begin_wheel_scroll(&tree, col, row, mouse_event.modifiers, 1)?;
-                needs_render = true;
-            }
-            MouseEventKind::ScrollLeft => {
-                // Native horizontal scroll left
-                self.handle_horizontal_scroll(&tree, col, row, -WHEEL_COLUMNS)?;
-                needs_render = true;
-            }
-            MouseEventKind::ScrollRight => {
-                // Native horizontal scroll right
-                self.handle_horizontal_scroll(&tree, col, row, WHEEL_COLUMNS)?;
-                needs_render = true;
-            }
             MouseEventKind::Down(MouseButton::Right) => {
                 // One walk for every right-click flavor: the overlay
                 // prompt's guard box swallows (mouse-modal), the theme
@@ -475,48 +465,52 @@ impl Editor {
         Ok(())
     }
 
-    /// Take one notch of the wheel, `direction` being -1 for up and +1
-    /// for down.
+    /// Split one wheel notch into the line that lands now and the lines the
+    /// walk still owes, returning the first. `lines` is the notch's full worth.
     ///
-    /// A notch is worth `mouse_wheel_scroll_lines` lines. The first
-    /// lands immediately, so the view answers the wheel on the same
-    /// frame; the rest are owed and walked one at a time by
-    /// [`Self::step_pending_wheel_scroll`], which is what makes a
-    /// multi-line notch slide rather than jump.
-    fn begin_wheel_scroll(
+    /// A notch is worth `mouse_wheel_scroll_lines`. The first lands with the
+    /// event itself, so the view answers the wheel on the same frame; the rest
+    /// are owed and walked one at a time by [`Self::step_pending_wheel_scroll`],
+    /// which is what makes a multi-line notch slide rather than jump.
+    fn arm_wheel_walk(
         &mut self,
-        tree: &[super::chrome::ChromeBox],
+        ev: crossterm::event::MouseEvent,
         col: u16,
         row: u16,
-        modifiers: crossterm::event::KeyModifiers,
-        direction: i32,
-    ) -> AnyhowResult<()> {
-        // Shift turns the wheel horizontal (same engine, other axis).
-        // That pans by columns, which the line-oriented setting has
-        // nothing to say about and there is no line-by-line walk for.
-        if modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
-            self.flush_pending_wheel_scroll(tree)?;
-            return self.dispatch_wheel(tree, true, col, row, direction * WHEEL_COLUMNS);
-        }
-
-        // A zero would make the wheel dead; the config's own clamp is
-        // not load-bearing here, but a hand-edited file reaches this too.
-        let lines = self.config.editor.mouse_wheel_scroll_lines.max(1) as u32;
+        lines: i32,
+    ) -> i32 {
+        use crossterm::event::{KeyModifiers, MouseEventKind};
+        // Only a vertical notch walks. Anything else — a press, a motion, a
+        // sideways wheel — leaves the gesture in progress alone; it plays out
+        // on its own frames.
+        let direction = match ev.kind {
+            MouseEventKind::ScrollDown => 1,
+            MouseEventKind::ScrollUp => -1,
+            _ => return lines,
+        };
+        // Shift turns the wheel horizontal. That pans by columns, which the
+        // line-oriented setting has nothing to say about and there is no
+        // line-by-line walk for — so it ends any gesture in flight rather than
+        // letting one keep playing under a sideways scroll.
+        let sideways = ev.modifiers.contains(KeyModifiers::SHIFT);
         // Nothing to walk for a single-line notch, and a user who turned
         // motion off gets the jump.
-        let walk = lines > 1 && self.config.editor.smooth_scroll && self.config.editor.animations;
+        let walk = !sideways
+            && lines > 1
+            && self.config.editor.smooth_scroll
+            && self.config.editor.animations;
         if !walk {
-            self.flush_pending_wheel_scroll(tree)?;
-            return self.dispatch_wheel(tree, false, col, row, direction * lines as i32);
+            self.flush_pending_wheel_scroll();
+            return lines;
         }
 
-        // A flick sends notches faster than they can be walked, so the
-        // lines the last one still owed carry over into this one — the
-        // walk tracks a single running total rather than a queue of
-        // notches. One aimed elsewhere, or the other way, cannot carry
-        // over; its lines are handed to the surface they were routed to
-        // instead, so a nudge of the mouse mid-scroll cannot swallow
-        // distance. Either way nothing is dropped.
+        // A flick sends notches faster than they can be walked, so the lines
+        // the last one still owed carry over into this one — the walk tracks a
+        // single running total rather than a queue of notches. One aimed
+        // elsewhere, or the other way, cannot carry over; its lines are handed
+        // to the surface they were routed to instead, so a nudge of the mouse
+        // mid-scroll cannot swallow distance. Either way nothing is dropped.
+        let lines = lines as u32;
         let carried = match self.pending_wheel_scroll.take() {
             Some(pending)
                 if pending.direction == direction && (pending.col, pending.row) == (col, row) =>
@@ -524,12 +518,11 @@ impl Editor {
                 pending.remaining
             }
             Some(pending) => {
-                self.deliver_owed(tree, &pending)?;
+                self.deliver_owed(&pending);
                 0
             }
             None => 0,
         };
-        self.dispatch_wheel(tree, false, col, row, direction)?;
         self.pending_wheel_scroll = Some(PendingWheelScroll {
             col,
             row,
@@ -538,35 +531,55 @@ impl Editor {
             max_backlog: lines * 2,
             last_step: Instant::now(),
         });
-        Ok(())
+        1
     }
 
     /// Hand a gesture the lines it still owes, all at once, to the
     /// surface its own notches were routed to.
-    fn deliver_owed(
-        &mut self,
-        tree: &[super::chrome::ChromeBox],
-        pending: &PendingWheelScroll,
-    ) -> AnyhowResult<()> {
+    fn deliver_owed(&mut self, pending: &PendingWheelScroll) {
         if pending.remaining == 0 {
-            return Ok(());
+            return;
         }
-        let delta = pending.direction * pending.remaining as i32;
-        self.dispatch_wheel(tree, false, pending.col, pending.row, delta)
+        self.deliver_wheel(
+            pending.col,
+            pending.row,
+            pending.direction,
+            pending.remaining,
+        );
+    }
+
+    /// Hand `lines` of owed wheel to whatever is under `(col, row)`, through
+    /// the same route a real notch takes.
+    ///
+    /// **One route.** The walk replays into the tree, exactly as the notch it
+    /// came from did, so the surface that took the first line takes the rest
+    /// — rather than the walk having a delivery path of its own that could
+    /// route somewhere else.
+    fn deliver_wheel(&mut self, col: u16, row: u16, direction: i32, lines: u32) {
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        let ev = MouseEvent {
+            kind: match direction {
+                d if d > 0 => MouseEventKind::ScrollDown,
+                _ => MouseEventKind::ScrollUp,
+            },
+            column: col,
+            row,
+            modifiers: KeyModifiers::empty(),
+        };
+        if let Some(input) = crate::view::shell::input::mouse(ev, 1, lines as i32, WHEEL_COLUMNS) {
+            self.shell_dispatch(input);
+        }
     }
 
     /// End any playing-out gesture, delivering what it still owes rather
     /// than dropping it. A wheel turned sideways, or a walk switched off
     /// mid-gesture, must not cost the view the distance already asked
     /// for.
-    fn flush_pending_wheel_scroll(
-        &mut self,
-        tree: &[super::chrome::ChromeBox],
-    ) -> AnyhowResult<()> {
+    fn flush_pending_wheel_scroll(&mut self) {
         let Some(pending) = self.pending_wheel_scroll.take() else {
-            return Ok(());
+            return;
         };
-        self.deliver_owed(tree, &pending)
+        self.deliver_owed(&pending);
     }
 
     /// True while a wheel gesture still owes lines. The event loop keeps
@@ -609,13 +622,7 @@ impl Editor {
             self.pending_wheel_scroll = None;
         }
 
-        let tree = super::chrome::chrome_tree(self);
-        if let Err(err) = self.dispatch_wheel(&tree, false, col, row, direction * due as i32) {
-            // The gesture is already cleared or decremented above, so a
-            // failed replay drops those lines rather than retrying into
-            // the same error every frame.
-            tracing::warn!("smooth scroll step failed: {err}");
-        }
+        self.deliver_wheel(col, row, direction, due);
     }
 
     /// Route a horizontal scroll (Shift+wheel, native ScrollLeft /

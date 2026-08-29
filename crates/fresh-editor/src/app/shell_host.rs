@@ -963,8 +963,10 @@ impl Editor {
                 }
             }
             UiFact::ClearTabMenus => {
-                self.active_window_mut().new_tab_menu = None;
-                self.active_window_mut().close_split_menu = None;
+                let w = self.active_window_mut();
+                w.new_tab_menu = None;
+                w.close_split_menu = None;
+                w.tab_context_menu = None;
             }
             UiFact::MenuNav(step) => self.menu_nav(step),
             UiFact::CloseContextMenu => {

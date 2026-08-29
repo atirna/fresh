@@ -129,11 +129,13 @@ pub enum UiFact {
     /// no terminal live/scrollback transition — panning is not reading.
     PanePan { pane: LeafId, delta: i32 },
 
-    /// A right-click landed somewhere — anywhere — so the two left-click-only
-    /// menus (the "+" new-tab menu, the close-split confirmation) close.
+    /// A right-click landed somewhere — anywhere — so the three transient tab
+    /// menus close: the "+" new-tab menu, the close-split confirmation, and a
+    /// tab's context menu.
     ///
     /// An observation, not a claim: the click goes on to whatever it was aimed
-    /// at. See `shell::splits::tab_menu_guard`.
+    /// at, which is how the same press that clears a tab's context menu can go
+    /// on to open the next one. See `shell::splits::tab_menu_guard`.
     ClearTabMenus,
     /// A click on a status-bar element that answers one.
     ///
