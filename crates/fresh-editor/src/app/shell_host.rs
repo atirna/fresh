@@ -100,6 +100,14 @@ pub fn paint_body(
     let screen_width = buf.area.width;
     let active_window_id = editor.active_window;
 
+    // What the shell's description of this same grid says each pane has. It
+    // was resolved when the frame was built — this painter is the other half
+    // of that frame, not a second opinion about it. Taken before the window
+    // borrow below, like every other fact this assembly needs off the editor.
+    // Cloned rather than taken: a frame may fold more than once, and the
+    // second pass must not paint panes with no chrome at all.
+    let pane_chrome = editor.pending_pane_chrome.clone();
+
     let win = match editor.windows.get_mut(&active_window_id) {
         Some(w) => w,
         None => return BodyOutput::default(),
@@ -160,6 +168,7 @@ pub fn paint_body(
             tab_bar_visible,
             session_mode,
             &scrollback_view_splits,
+            &pane_chrome,
             cell_theme_map_mut,
             screen_width,
             caret,
@@ -836,6 +845,10 @@ impl Editor {
                 }
             }
             UiFact::StatusBarTokenClicked(key) => self.fire_status_bar_token_click(&key),
+            UiFact::ClearTabMenus => {
+                self.active_window_mut().new_tab_menu = None;
+                self.active_window_mut().close_split_menu = None;
+            }
             UiFact::MenuNav(step) => self.menu_nav(step),
             UiFact::CloseContextMenu => {
                 self.active_window_mut().close_context_menus();

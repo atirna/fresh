@@ -18,6 +18,7 @@
 //! the shell. The dividers' drags and the panes' content are the editor's, and
 //! are added where the grid is mounted.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use fresh_ui::{
@@ -468,6 +469,11 @@ mod tests {
 pub struct Splits {
     pub root: SplitNode,
     pub maximized: Option<LeafId>,
+    /// Which chrome each visible pane has. Resolved once, by the editor, and
+    /// read by both halves of the frame — the description below and the
+    /// painter that fills the `Host` leaf under it — so a pane's strip cannot
+    /// be a row tall in one and absent in the other.
+    pub chrome: std::collections::HashMap<LeafId, PaneChrome>,
 }
 
 /// The grid mounted over the body's `Host` leaf: geometry and the dividers'
@@ -480,7 +486,12 @@ pub struct Splits {
 /// `handle_click_split_separator` searched a recorded list of separator
 /// rectangles to answer that, comparing a click against each in turn.
 pub fn overlay(s: &Splits) -> Node<UiMsg> {
-    dress(grid::<UiMsg>(&s.root, s.maximized), &s.root, s.maximized)
+    dress(
+        grid::<UiMsg>(&s.root, s.maximized),
+        &s.root,
+        s.maximized,
+        &s.chrome,
+    )
 }
 
 /// Walk the built grid and give each node its pointer role.
@@ -488,25 +499,41 @@ pub fn overlay(s: &Splits) -> Node<UiMsg> {
 /// Done as a second pass rather than inside `grid` so the description stays
 /// message-agnostic: the model lays the same grid out with `M = ()`, and a
 /// gesture would make that impossible.
-fn dress(n: Node<UiMsg>, root: &SplitNode, maximized: Option<LeafId>) -> Node<UiMsg> {
+fn dress(
+    n: Node<UiMsg>,
+    root: &SplitNode,
+    maximized: Option<LeafId>,
+    chrome: &HashMap<LeafId, PaneChrome>,
+) -> Node<UiMsg> {
     // The grid is built by `layout_reader`s, so its structure is not walkable
     // before layout. Instead the dressing is applied by rebuilding: the same
     // recursion, with roles.
     let _ = n;
-    if maximized.is_some() {
+    if let Some(id) = maximized {
+        if let Some(SplitNode::Leaf { split_id, .. }) = root.find(id.into()) {
+            return pane_inert::<UiMsg>().children([pane_interior::<UiMsg>(
+                *split_id,
+                chrome.get(split_id).copied().unwrap_or_default(),
+            )]);
+        }
         return pane_inert::<UiMsg>();
     }
-    dressed(root)
+    dressed(root, chrome)
 }
 
 fn pane_inert<M: 'static>() -> Node<M> {
     row().pointer_mode(PointerMode::Ignore)
 }
 
-fn dressed(n: &SplitNode) -> Node<UiMsg> {
+fn dressed(n: &SplitNode, chrome: &HashMap<LeafId, PaneChrome>) -> Node<UiMsg> {
     match n {
-        SplitNode::Leaf { .. } => pane_inert::<UiMsg>(),
-        SplitNode::Grouped { layout, .. } => dressed(layout),
+        SplitNode::Leaf { split_id, .. } => {
+            pane_inert::<UiMsg>().children([pane_interior::<UiMsg>(
+                *split_id,
+                chrome.get(split_id).copied().unwrap_or_default(),
+            )])
+        }
+        SplitNode::Grouped { layout, .. } => dressed(layout, chrome),
         SplitNode::Split {
             direction,
             first,
@@ -519,6 +546,7 @@ fn dressed(n: &SplitNode) -> Node<UiMsg> {
             let (dir, ratio) = (*direction, *ratio);
             let (ff, fs, id) = (*fixed_first, *fixed_second, *split_id);
             let (a, b) = (first.clone(), second.clone());
+            let chrome = chrome.clone();
             layout_reader(move |info: LayoutInfo| {
                 let whole = ratatui::layout::Rect::new(
                     0,
@@ -527,7 +555,7 @@ fn dressed(n: &SplitNode) -> Node<UiMsg> {
                     info.constraints.max_h,
                 );
                 let (ra, rb) = split_rect_ext(whole, dir, ratio, ff, fs);
-                let (first, second) = (dressed(&a), dressed(&b));
+                let (first, second) = (dressed(&a, &chrome), dressed(&b, &chrome));
                 let div = divider(id, dir);
                 match dir {
                     SplitDirection::Vertical => {

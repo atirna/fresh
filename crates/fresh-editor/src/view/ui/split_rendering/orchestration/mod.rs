@@ -111,6 +111,10 @@ pub(crate) fn render_content(
     // column; a scrollback split keeps its scrollbar. Per-split (not a single
     // window flag) so two splits on the same terminal can differ (fresh#2595).
     scrollback_view_splits: &std::collections::HashSet<LeafId>,
+    // What chrome each of the split manager's panes has, resolved once with
+    // the shell's description of the same grid — see `Window::pane_chrome`.
+    // A buffer group's panel is not one of those panes, and resolves below.
+    pane_chrome: &HashMap<LeafId, PaneChrome>,
     cell_theme_map: &mut Vec<crate::app::types::CellThemeInfo>,
     screen_width: u16,
     pending_hardware_cursor: &mut Option<(u16, u16)>,
@@ -169,9 +173,7 @@ pub(crate) fn render_content(
         &base_visible,
         split_view_states.as_deref_mut(),
         grouped_subtrees,
-        tab_bar_visible,
-        show_vertical_scrollbar,
-        show_horizontal_scrollbar,
+        pane_chrome,
     );
 
     // Collect areas for mouse handling
@@ -229,19 +231,23 @@ pub(crate) fn render_content(
         // terminal in two panes can differ — fresh#2595). The rule that
         // narrows the window's offer by these is `PaneChrome::resolve`, and
         // the shell's description resolves the same one for the same pane.
-        let chrome = PaneChrome::resolve(
-            window_chrome,
-            PaneKind {
-                inner_group_leaf: is_inner_group_leaf,
-                suppress_chrome: split_view_states
-                    .as_deref()
-                    .and_then(|svs| svs.get(&split_id))
-                    .is_some_and(|vs| vs.suppress_chrome),
-                scrollable: buffers.get(&buffer_id).is_none_or(|s| s.scrollable),
-                terminal_live_grid: active_buf_is_terminal
-                    && !scrollback_view_splits.contains(&split_id),
-            },
-        );
+        let chrome = if is_inner_group_leaf {
+            PaneChrome::resolve(
+                window_chrome,
+                PaneKind {
+                    inner_group_leaf: true,
+                    suppress_chrome: split_view_states
+                        .as_deref()
+                        .and_then(|svs| svs.get(&split_id))
+                        .is_some_and(|vs| vs.suppress_chrome),
+                    scrollable: buffers.get(&buffer_id).is_none_or(|s| s.scrollable),
+                    terminal_live_grid: active_buf_is_terminal
+                        && !scrollback_view_splits.contains(&split_id),
+                },
+            )
+        } else {
+            pane_chrome.get(&split_id).copied().unwrap_or_default()
+        };
         let split_tab_bar_visible = chrome.tabs;
         // A pane whose content is pinned to its size: it earns no scrollbar,
         // and its viewport does not scroll to follow the cursor either — the
@@ -649,9 +655,7 @@ pub(crate) fn render_content(
         split_view_states.as_deref(),
         grouped_subtrees,
         theme,
-        tab_bar_visible,
-        show_vertical_scrollbar,
-        show_horizontal_scrollbar,
+        pane_chrome,
     );
 
     // Record vertical-scrollbar theme keys for the inspector, from the
@@ -678,9 +682,7 @@ fn expand_visible_buffers(
     base_visible: &[(LeafId, BufferId, Rect)],
     mut split_view_states: Option<&mut HashMap<LeafId, crate::view::split::SplitViewState>>,
     grouped_subtrees: &HashMap<LeafId, crate::view::split::SplitNode>,
-    tab_bar_visible: bool,
-    show_vertical_scrollbar: bool,
-    show_horizontal_scrollbar: bool,
+    pane_chrome: &HashMap<LeafId, PaneChrome>,
 ) -> Vec<VisibleBuffer> {
     let mut visible_buffers: Vec<VisibleBuffer> = Vec::new();
     for (main_split_id, main_buffer_id, split_area) in base_visible {
@@ -706,15 +708,7 @@ fn expand_visible_buffers(
         let main_layout = split_layout(
             *main_split_id,
             *split_area,
-            outer_chrome(
-                tab_bar_visible,
-                show_vertical_scrollbar,
-                show_horizontal_scrollbar,
-                split_view_states
-                    .as_deref()
-                    .and_then(|svs| svs.get(main_split_id))
-                    .is_some_and(|vs| vs.suppress_chrome),
-            ),
+            pane_chrome.get(main_split_id).copied().unwrap_or_default(),
         );
         let inner_leaves = grouped.get_leaves_with_rects(main_layout.content_rect);
         visible_buffers.push((
@@ -1041,30 +1035,6 @@ fn render_composite_split(
     }
 }
 
-/// The chrome of a pane laid out for a reason other than painting it: the
-/// outer pane of an active buffer group (whose *content rect* is where the
-/// group's own leaves go), and `flush_layout`'s view-line mappings.
-///
-/// **These three resolve the rule with a default `PaneKind`** — as if the pane
-/// held an ordinary scrollable buffer — because none of them is handed the
-/// buffer map or the scrollback set that the two refinements need. When the
-/// pane is a `Fixed` panel or a terminal streaming its live grid, the pane
-/// they compute is a column wider than the one the paint records. Stated once,
-/// here, instead of three copies of the boolean algebra that hid it.
-fn outer_chrome(tab_bar: bool, vscroll: bool, hscroll: bool, suppress_chrome: bool) -> PaneChrome {
-    PaneChrome::resolve(
-        PaneChrome {
-            tabs: tab_bar,
-            vscroll,
-            hscroll,
-        },
-        PaneKind {
-            suppress_chrome,
-            ..PaneKind::default()
-        },
-    )
-}
-
 /// Render the internal separators of any active buffer groups and return their
 /// hit areas (with container IDs) so the hit-test path can wire up dragging.
 /// A group's Split nodes live in the side-map, not the main split tree, so
@@ -1077,9 +1047,7 @@ fn render_grouped_separators(
     split_view_states: Option<&HashMap<LeafId, crate::view::split::SplitViewState>>,
     grouped_subtrees: &HashMap<LeafId, crate::view::split::SplitNode>,
     theme: &crate::view::theme::Theme,
-    tab_bar_visible: bool,
-    show_vertical_scrollbar: bool,
-    show_horizontal_scrollbar: bool,
+    pane_chrome: &HashMap<LeafId, PaneChrome>,
 ) -> Vec<(
     crate::model::event::ContainerId,
     SplitDirection,
@@ -1098,14 +1066,7 @@ fn render_grouped_separators(
         let main_layout = split_layout(
             *main_split_id,
             *split_area,
-            outer_chrome(
-                tab_bar_visible,
-                show_vertical_scrollbar,
-                show_horizontal_scrollbar,
-                split_view_states
-                    .and_then(|svs| svs.get(main_split_id))
-                    .is_some_and(|vs| vs.suppress_chrome),
-            ),
+            pane_chrome.get(main_split_id).copied().unwrap_or_default(),
         );
         if let crate::view::split::SplitNode::Grouped { layout, .. } = grouped {
             for (id, direction, x, y, length) in
@@ -1168,9 +1129,7 @@ pub(crate) fn compute_content_layout(
     use_terminal_bg: bool,
     session_mode: bool,
     software_cursor_only: bool,
-    tab_bar_visible: bool,
-    show_vertical_scrollbar: bool,
-    show_horizontal_scrollbar: bool,
+    pane_chrome: &HashMap<LeafId, PaneChrome>,
     diagnostics_inline_text: bool,
     show_tilde: bool,
     bracket_highlight: BracketHighlightSettings,
@@ -1185,14 +1144,7 @@ pub(crate) fn compute_content_layout(
         let layout = split_layout(
             split_id,
             split_area,
-            outer_chrome(
-                tab_bar_visible,
-                show_vertical_scrollbar,
-                show_horizontal_scrollbar,
-                split_view_states
-                    .get(&split_id)
-                    .is_some_and(|vs| vs.suppress_chrome),
-            ),
+            pane_chrome.get(&split_id).copied().unwrap_or_default(),
         );
 
         let state = match buffers.get_mut(&buffer_id) {
