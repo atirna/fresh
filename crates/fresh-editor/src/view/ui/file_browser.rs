@@ -171,7 +171,12 @@ impl FileBrowserRenderer {
             ScrollbarColors::from_theme(theme)
         };
         let (thumb_start, thumb_end) = if draw {
-            render_scrollbar(frame, scrollbar_area, &scrollbar_state, &colors)
+            render_scrollbar(
+                frame.buffer_mut(),
+                scrollbar_area,
+                &scrollbar_state,
+                &colors,
+            )
         } else {
             // Same geometry the painted path would produce — the native
             // frontend draws its own thumb from these numbers.

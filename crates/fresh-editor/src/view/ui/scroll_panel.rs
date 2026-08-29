@@ -392,7 +392,12 @@ impl ScrollablePanel {
             let sb_area = Rect::new(area.x + content_area.width, area.y, 1, area.height);
             let scrollbar_state = self.scroll.to_scrollbar_state();
             let scrollbar_colors = ScrollbarColors::from_theme(theme);
-            render_scrollbar(frame, sb_area, &scrollbar_state, &scrollbar_colors);
+            render_scrollbar(
+                frame.buffer_mut(),
+                sb_area,
+                &scrollbar_state,
+                &scrollbar_colors,
+            );
             Some(sb_area)
         } else {
             None

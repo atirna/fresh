@@ -2573,7 +2573,7 @@ impl Window {
     /// `Editor` or to any other window.
     pub fn render_terminal_splits(
         &self,
-        frame: &mut ratatui::Frame,
+        buf: &mut ratatui::buffer::Buffer,
         split_areas: &[(
             crate::model::event::LeafId,
             BufferId,
@@ -2626,14 +2626,14 @@ impl Window {
                 .terminal_link_hover
                 .as_ref()
                 .and_then(|h| (h.buffer_id == *buffer_id).then(|| (h.row, h.cols.clone())));
-            frame.render_widget(ratatui::widgets::Clear, *content_rect);
+            ratatui::widgets::Widget::render(ratatui::widgets::Clear, *content_rect, buf);
             let theme = self.resources.theme.read().unwrap();
             render::render_terminal_content(
                 &content,
                 cursor_pos,
                 cursor_visible,
                 *content_rect,
-                frame.buffer_mut(),
+                buf,
                 theme.terminal_fg,
                 theme.terminal_bg,
                 link_highlight,
