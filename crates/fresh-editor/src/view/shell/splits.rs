@@ -269,7 +269,13 @@ mod tests {
                         Rect::new(0, 0, 3, 2),
                         Rect::new(12, 5, 200, 60),
                     ] {
-                        let got = split_layout(at, tabs, vs, hs);
+                        let id = LeafId(SplitId(9));
+                        let c = PaneChrome {
+                            tabs,
+                            vscroll: vs,
+                            hscroll: hs,
+                        };
+                        let got = split_layout(id, at, c);
                         let want = reference_split_layout(at, tabs, vs, hs);
                         assert_eq!(
                             (
@@ -292,6 +298,48 @@ mod tests {
         }
     }
 
+    /// **An inner panel is a pane with two of its three parts off.**
+    ///
+    /// A buffer group's panel is laid out inside its outer pane's interior, so
+    /// it has no strip and no bottom bar — only the scrollbar its own content
+    /// earns. `render_content` wrote those four rectangles by hand right where
+    /// it branched on the panel; this is that branch, and it is the same
+    /// `pane_interior` every other pane gets.
+    #[test]
+    fn an_inner_panel_is_a_pane_with_two_parts_off() {
+        use crate::view::ui::split_rendering::layout::split_layout;
+        for vs in [true, false] {
+            for at in [
+                Rect::new(0, 0, 80, 24),
+                Rect::new(7, 3, 40, 12),
+                Rect::new(0, 0, 1, 1),
+            ] {
+                let got = split_layout(
+                    LeafId(SplitId(9)),
+                    at,
+                    PaneChrome {
+                        tabs: false,
+                        vscroll: vs,
+                        hscroll: false,
+                    },
+                );
+                let bar = at.width.min(vs as u16);
+                assert_eq!(
+                    got.content_rect,
+                    Rect::new(at.x, at.y, at.width - bar, at.height),
+                    "the panel's whole area but the bar's column, vscroll={vs} at {at:?}"
+                );
+                assert_eq!(
+                    got.scrollbar_rect,
+                    Rect::new(at.x + at.width - bar, at.y, bar, at.height),
+                    "and the bar beside it, vscroll={vs} at {at:?}"
+                );
+                assert_eq!(got.tabs_rect.height, 0, "no strip");
+                assert_eq!(got.horizontal_scrollbar_rect.height, 0, "no bottom bar");
+            }
+        }
+    }
+
     /// **The one case where the arithmetic was wrong, and the layout is not.**
     ///
     /// A pane one row tall with both a tab strip and a horizontal scrollbar
@@ -308,7 +356,15 @@ mod tests {
         use crate::view::ui::split_rendering::layout::{reference_split_layout, split_layout};
         let at = Rect::new(0, 0, 1, 1);
         let old = reference_split_layout(at, true, true, true);
-        let new = split_layout(at, true, true, true);
+        let new = split_layout(
+            LeafId(SplitId(9)),
+            at,
+            PaneChrome {
+                tabs: true,
+                vscroll: true,
+                hscroll: true,
+            },
+        );
         assert_eq!(
             old.tabs_rect,
             Rect::new(0, 0, 1, 1),
@@ -473,18 +529,75 @@ fn divider(id: ContainerId, dir: SplitDirection) -> Node<UiMsg> {
 
 // ── the pane's interior ─────────────────────────────────────────────────────
 
-/// The parts of a pane, by role.
-pub fn tabs_key() -> Key {
-    Key::Str("pane_tabs".into())
+/// The parts of a pane, by role and by the pane they belong to.
+///
+/// Keyed per leaf because `find_by_key` takes the first match in tree order: a
+/// grid of panes puts several interiors in one tree, and a bare `"pane_tabs"`
+/// would name whichever pane came first.
+pub fn tabs_key(id: LeafId) -> Key {
+    Key::Pair("pane_tabs".into(), id.0 .0 as u64)
 }
-pub fn content_key() -> Key {
-    Key::Str("pane_content".into())
+pub fn content_key(id: LeafId) -> Key {
+    Key::Pair("pane_content".into(), id.0 .0 as u64)
 }
-pub fn vscroll_key() -> Key {
-    Key::Str("pane_vscroll".into())
+pub fn vscroll_key(id: LeafId) -> Key {
+    Key::Pair("pane_vscroll".into(), id.0 .0 as u64)
 }
-pub fn hscroll_key() -> Key {
-    Key::Str("pane_hscroll".into())
+pub fn hscroll_key(id: LeafId) -> Key {
+    Key::Pair("pane_hscroll".into(), id.0 .0 as u64)
+}
+
+/// Which of a pane's three chrome parts exist.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PaneChrome {
+    pub tabs: bool,
+    pub vscroll: bool,
+    pub hscroll: bool,
+}
+
+/// What a pane is, in the parts that decide its chrome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaneKind {
+    /// A panel inside an active buffer group. It is laid out *within* the
+    /// outer pane's interior, so it has no strip and no bottom bar of its
+    /// own — only the scrollbar its own content earns.
+    pub inner_group_leaf: bool,
+    /// The view asked for no tab strip (a group's panel, a plugin's dock).
+    pub suppress_chrome: bool,
+    /// The buffer scrolls at all. A `Fixed` panel does not, and never had a
+    /// bar in either direction.
+    pub scrollable: bool,
+    /// A terminal streaming its live PTY grid gives up the scrollbar column so
+    /// the grid can use it. A terminal held in read-only scrollback keeps it,
+    /// per split, so one terminal in two panes can differ (fresh#2595).
+    pub terminal_live_grid: bool,
+}
+
+impl Default for PaneKind {
+    fn default() -> Self {
+        Self {
+            inner_group_leaf: false,
+            suppress_chrome: false,
+            scrollable: true,
+            terminal_live_grid: false,
+        }
+    }
+}
+
+impl PaneChrome {
+    /// **The rule, stated once.** What the window offers, narrowed by what
+    /// this pane is.
+    ///
+    /// `window` is the frame-wide half — the tab bar's visibility and the two
+    /// scrollbar config flags — which is why it is the same type: at the
+    /// window level these are "offered", at the pane level "present".
+    pub fn resolve(window: PaneChrome, pane: PaneKind) -> Self {
+        PaneChrome {
+            tabs: window.tabs && !pane.inner_group_leaf && !pane.suppress_chrome,
+            vscroll: window.vscroll && pane.scrollable && !pane.terminal_live_grid,
+            hscroll: window.hscroll && pane.scrollable && !pane.inner_group_leaf,
+        }
+    }
 }
 
 /// How a pane divides itself: a tab strip on top, the content with its
@@ -498,18 +611,18 @@ pub fn hscroll_key() -> Key {
 /// The horizontal bar stops short of the vertical one's column rather than
 /// running under it. That is the painter's arithmetic and it is the one thing
 /// here a reader would get wrong from the picture alone.
-pub fn pane_interior<M: 'static>(tabs: bool, vscroll: bool, hscroll: bool) -> Node<M> {
+pub fn pane_interior<M: 'static>(id: LeafId, c: PaneChrome) -> Node<M> {
     let cells = |on: bool| Sizing::Cells(on as u16);
     col().children([
-        row().key(tabs_key()).h(cells(tabs)),
+        row().key(tabs_key(id)).h(cells(c.tabs)),
         row().flex(1).children([
-            row().key(content_key()).flex(1),
-            row().key(vscroll_key()).w(cells(vscroll)),
+            row().key(content_key(id)).flex(1),
+            row().key(vscroll_key(id)).w(cells(c.vscroll)),
         ]),
-        row().h(cells(hscroll)).children([
-            row().key(hscroll_key()).flex(1),
+        row().h(cells(c.hscroll)).children([
+            row().key(hscroll_key(id)).flex(1),
             // The column the vertical bar occupies, kept clear.
-            row().w(cells(vscroll)),
+            row().w(cells(c.vscroll)),
         ]),
     ])
 }

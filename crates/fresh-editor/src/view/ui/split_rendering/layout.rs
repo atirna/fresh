@@ -8,6 +8,7 @@ use crate::model::buffer::Buffer;
 use crate::model::cursor::Cursors;
 use crate::model::event::{BufferId, LeafId, SplitDirection};
 use crate::state::{EditorState, ViewMode};
+use crate::view::shell::splits::PaneChrome;
 use crate::view::split::{SplitViewState, TabTarget};
 use crate::view::theme::Theme;
 use crate::view::ui::view_pipeline::ViewLine;
@@ -62,22 +63,13 @@ pub(super) struct ViewPreferences {
 /// `shell::splits::pane_interior` now, laid out at the pane's own size, so
 /// there is one statement of how a pane divides itself and the chrome that
 /// hangs off these rectangles can become nodes against the same description.
-pub(crate) fn split_layout(
-    split_area: Rect,
-    tab_bar_visible: bool,
-    show_vertical_scrollbar: bool,
-    show_horizontal_scrollbar: bool,
-) -> SplitLayout {
+pub(crate) fn split_layout(id: LeafId, split_area: Rect, chrome: PaneChrome) -> SplitLayout {
     use crate::view::shell::splits::{
         content_key, hscroll_key, pane_interior, tabs_key, vscroll_key,
     };
     let mut ui: fresh_ui::Ui<()> = fresh_ui::Ui::new();
     ui.frame(
-        pane_interior::<()>(
-            tab_bar_visible,
-            show_vertical_scrollbar,
-            show_horizontal_scrollbar,
-        ),
+        pane_interior::<()>(id, chrome),
         fresh_ui::Size::new(split_area.width, split_area.height),
     );
     let at = |k: fresh_ui::Key| -> Rect {
@@ -93,10 +85,10 @@ pub(crate) fn split_layout(
         )
     };
     SplitLayout {
-        tabs_rect: at(tabs_key()),
-        content_rect: at(content_key()),
-        scrollbar_rect: at(vscroll_key()),
-        horizontal_scrollbar_rect: at(hscroll_key()),
+        tabs_rect: at(tabs_key(id)),
+        content_rect: at(content_key(id)),
+        scrollbar_rect: at(vscroll_key(id)),
+        horizontal_scrollbar_rect: at(hscroll_key(id)),
     }
 }
 
