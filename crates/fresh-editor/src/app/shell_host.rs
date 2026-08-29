@@ -98,16 +98,47 @@ pub struct BodyPainter<'a> {
     out: BodyOutput,
     /// The frame's width, for the theme runs recorded in [`Self::finish`].
     screen_width: u16,
+    /// What the shell's description of this same grid says each pane has.
+    ///
+    /// Resolved when the frame was built — this painter is the other half of
+    /// that frame, not a second opinion about it. Held here rather than
+    /// cloned inside [`with_grid`], because the fold calls that once *per
+    /// pane*: a clone in there is a copy of the whole map for every pane on
+    /// screen, every frame.
+    pane_chrome: std::collections::HashMap<LeafId, PaneChrome>,
+    /// The splits whose active buffer is a terminal shown in read-only
+    /// scrollback. Gathered once per frame, for the same reason.
+    scrollback: HashSet<LeafId>,
 }
 
 impl<'a> BodyPainter<'a> {
     pub fn new(editor: &'a mut Editor, state: BodyState) -> Self {
+        // Cloned rather than taken: a frame may fold more than once, and the
+        // second pass must not paint panes with no chrome at all.
+        let pane_chrome = editor.pending_pane_chrome.clone();
+        let scrollback = editor
+            .windows
+            .get(&editor.active_window)
+            .and_then(|win| {
+                win.buffers.splits().map(|(_, vs_map)| {
+                    vs_map
+                        .iter()
+                        .filter(|(leaf, svs)| {
+                            win.split_terminal_scrollback(**leaf, svs.active_buffer)
+                        })
+                        .map(|(leaf, _)| *leaf)
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
         Self {
             editor,
             state,
             pass: None,
             out: BodyOutput::default(),
             screen_width: 0,
+            pane_chrome,
+            scrollback,
         }
     }
 
@@ -149,6 +180,8 @@ impl<'a> BodyPainter<'a> {
             self.editor,
             state,
             buf.area.width,
+            &self.pane_chrome,
+            &self.scrollback,
             |facts, stores, mgr, window_chrome| {
                 let base_visible = mgr.get_visible_buffers(area);
                 let pass = prepare_content(
@@ -192,6 +225,8 @@ impl<'a> BodyPainter<'a> {
             self.editor,
             state,
             buf.area.width,
+            &self.pane_chrome,
+            &self.scrollback,
             |facts, stores, _mgr, _window_chrome| {
                 paint_leaf(buf, pane, facts, pass, stores, out, caret);
             },
@@ -212,6 +247,8 @@ fn with_grid<R>(
     editor: &mut Editor,
     state: BodyState,
     screen_width: u16,
+    pane_chrome: &std::collections::HashMap<LeafId, PaneChrome>,
+    scrollback_view_splits: &HashSet<LeafId>,
     f: impl FnOnce(&FrameFacts<'_>, &mut Stores<'_>, &crate::view::split::SplitManager, PaneChrome) -> R,
 ) -> Option<R> {
     // Built before the `&mut editor.windows` borrow below; it only borrows
@@ -223,14 +260,6 @@ fn with_grid<R>(
     );
     let session_mode = editor.session_mode || !editor.software_cursor_only;
     let active_window_id = editor.active_window;
-
-    // What the shell's description of this same grid says each pane has. It
-    // was resolved when the frame was built — this painter is the other half
-    // of that frame, not a second opinion about it. Taken before the window
-    // borrow below, like every other fact this assembly needs off the editor.
-    // Cloned rather than taken: a frame may fold more than once, and the
-    // second pass must not paint panes with no chrome at all.
-    let pane_chrome = editor.pending_pane_chrome.clone();
 
     let win = editor.windows.get_mut(&active_window_id)?;
 
@@ -248,17 +277,6 @@ fn with_grid<R>(
     };
     let metadata_ref = &win.buffer_metadata;
     let preview_buffer = win.preview.map(|(_, b)| b);
-    let scrollback_view_splits: HashSet<LeafId> = win
-        .buffers
-        .splits()
-        .map(|(_, vs_map)| {
-            vs_map
-                .iter()
-                .filter(|(leaf, svs)| win.split_terminal_scrollback(**leaf, svs.active_buffer))
-                .map(|(leaf, _)| *leaf)
-                .collect()
-        })
-        .unwrap_or_default();
     let event_logs_mut = &mut win.event_logs;
     let grouped_ref = &win.grouped_subtrees;
     let composite_buffers_mut = &mut win.composite_buffers;
@@ -277,8 +295,8 @@ fn with_grid<R>(
             buffer_metadata: metadata_ref,
             preview_buffer,
             grouped_subtrees: grouped_ref,
-            pane_chrome: &pane_chrome,
-            scrollback_view_splits: &scrollback_view_splits,
+            pane_chrome,
+            scrollback_view_splits,
             lsp_waiting: state.lsp_waiting,
             hide_cursor: state.hide_cursor,
             hovered_tab: state.hovered_tab,
