@@ -928,6 +928,27 @@ impl SplitNode {
         }
     }
 
+    /// The leaves this subtree shows, without their rectangles.
+    ///
+    /// The same walk as [`Self::get_leaves_with_rects`] with the geometry
+    /// dropped — which is all of it, since the partition never changes which
+    /// leaves there are.
+    pub fn visible_leaves(&self) -> Vec<(LeafId, BufferId)> {
+        match self {
+            Self::Leaf {
+                buffer_id,
+                split_id,
+                ..
+            } => vec![(*split_id, *buffer_id)],
+            Self::Split { first, second, .. } => {
+                let mut out = first.visible_leaves();
+                out.extend(second.visible_leaves());
+                out
+            }
+            Self::Grouped { layout, .. } => layout.visible_leaves(),
+        }
+    }
+
     /// Walk the tree using an "active group" predicate. For each Grouped node
     /// encountered, the predicate is called with the Grouped node's split_id;
     /// if it returns `true`, the node's layout is recursed into (with the
@@ -1661,6 +1682,29 @@ impl SplitManager {
             // Maximized split no longer exists, clear it and fall through
         }
         self.root.get_leaves_with_rects(viewport_rect)
+    }
+
+    /// Which leaves are visible, without asking where they are.
+    ///
+    /// **The set does not depend on the box.** `get_leaves_with_rects`
+    /// partitions whatever rectangle it is given, so which leaves come back is
+    /// a fact about the tree and the maximized split alone — a caller that
+    /// wants only the set had to invent a rectangle to get it, and
+    /// `flush_layout` invented the whole terminal, which is not the box the
+    /// grid is laid out in at all. An invented input whose value cannot matter
+    /// is a claim that it might.
+    pub fn visible_leaves(&self) -> Vec<(LeafId, BufferId)> {
+        if let Some(maximized_id) = self.maximized_split {
+            if let Some(SplitNode::Leaf {
+                buffer_id,
+                split_id,
+                ..
+            }) = self.root.find(maximized_id)
+            {
+                return vec![(*split_id, *buffer_id)];
+            }
+        }
+        self.root.visible_leaves()
     }
 
     /// Get all split separator positions for rendering borders

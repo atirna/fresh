@@ -1733,19 +1733,32 @@ list.
    the tree *is* the layout and `get_leaves_with_rects` becomes a read of it;
    `WindowLayoutCache::split_areas` already holds exactly that answer.
 
-   What stops the swap is that `SplitManager::get_visible_buffers` has around
-   eight callers outside the render path — `plugin_dispatch`, `window`,
-   `composite_buffer_actions`, `lifecycle`, `terminal`, `app::mod` — and they
-   are not all asking the same question. Most want "where are the leaves right
-   now", which is a read. At least one (`composite_buffer_actions`) passes a
-   *constructed* rectangle and wants the pure function: "where would they be in
-   a box this size". Those two need different answers, and today one signature
-   serves both by being a pure function everybody re-runs.
+   What stops the swap is `SplitManager::get_visible_buffers`, which has
+   around eight callers outside the render path — `plugin_dispatch`, `window`,
+   `composite_buffer_actions`, `lifecycle`, `terminal`. An earlier draft of
+   this paragraph said they ask two different questions, a read and a
+   hypothetical. **They do not**, and the correction matters: the one caller
+   that looked hypothetical (`composite_buffer_actions::flush_layout`) passed a
+   rectangle it invented — the whole terminal, which is not the box the grid is
+   laid out in — and then dropped every rect it got back. It wanted the leaf
+   *set*, which does not depend on the box at all. It asks `visible_leaves()`
+   now, and the invented rectangle is gone.
 
-   So S5 opens with a model-side decision — split that query into a read and a
-   hypothetical — and only then does the description land. Attempting the
-   description first is what produces the second walk this entry exists to
-   forbid.
+   So there is one question: **where are the leaves in the box the editor
+   currently has**. What makes it awkward is *when* it is asked. `apply_layout`
+   calls it after setting a new size and before the frame that would lay
+   anything out, so it cannot be a read of the last laid-out tree — it needs
+   the answer for a size no tree has seen yet.
+
+   `fresh-ui` can give that answer: `Ui::frame(node, size)` lays a description
+   out at any size, not only the current one. So the end state is one
+   implementation — the grid description — asked live by the render path and
+   speculatively by `apply_layout`. What has to be settled first is whether
+   laying out a fresh `Ui` is cheap enough for the callers that are per-frame
+   (`split_tabs_width` is), which is §6.2 item 10's unmeasured question finally
+   becoming load-bearing. Measure it, then swap; a description that recurses
+   beside the model's own walk instead is the second derivation this entry
+   exists to forbid.
 
    **The order, therefore:**
    1. A leaf host id space (`HostRegion` is a small fixed enum; a leaf's id is
