@@ -57,7 +57,7 @@ use std::collections::HashMap;
 /// [`expand_visible_buffers`], which expands any active buffer-group tab into
 /// its inner panels.
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum RenderKind {
+pub(crate) enum RenderKind {
     /// Regular split: render the tab bar and the buffer content.
     Normal,
     /// Main split whose buffer group is active: render the tab bar (to show
@@ -87,6 +87,97 @@ pub(crate) struct ContentPass {
     pub has_multiple_splits: bool,
 }
 
+/// What every pane in a frame reads and none of them writes.
+///
+/// The appearance and the hover state, which are the frame's, not a pane's.
+/// It is `Copy` because `RenderStyle` is: this is a bundle of borrows and
+/// flags, so passing it costs what passing its parts cost.
+#[derive(Clone, Copy)]
+pub(crate) struct FrameFacts<'a> {
+    pub style: RenderStyle<'a>,
+    pub buffer_metadata: &'a HashMap<BufferId, BufferMetadata>,
+    /// Buffer id of the window's single preview tab (`window.preview`), or
+    /// `None`. Drives the italic "(preview)" tab styling.
+    pub preview_buffer: Option<BufferId>,
+    pub grouped_subtrees: &'a HashMap<LeafId, crate::view::split::SplitNode>,
+    /// What chrome each of the split manager's panes has, resolved once with
+    /// the shell's description of the same grid — see `Window::pane_chrome`.
+    /// A buffer group's panel is not one of those panes, and resolves in
+    /// [`paint_leaf`].
+    pub pane_chrome: &'a HashMap<LeafId, PaneChrome>,
+    /// The splits whose active buffer is a terminal being shown in read-only
+    /// scrollback. Any terminal split NOT listed here is showing its live PTY
+    /// grid, so its vertical scrollbar is suppressed and the grid reclaims
+    /// that column; a scrollback split keeps its scrollbar. Per-split (not a
+    /// single window flag) so two splits on the same terminal can differ
+    /// (fresh#2595).
+    pub scrollback_view_splits: &'a std::collections::HashSet<LeafId>,
+    pub lsp_waiting: bool,
+    pub hide_cursor: bool,
+    /// `(target, split_id, is_close_button)`.
+    pub hovered_tab: Option<(crate::view::split::TabTarget, LeafId, bool)>,
+    pub hovered_close_split: Option<LeafId>,
+    pub hovered_maximize_split: Option<LeafId>,
+    pub is_maximized: bool,
+    pub session_mode: bool,
+    /// When false, the tab bar computes its layout but paints no cells (web
+    /// renders tabs natively). Panes always draw. TUI passes `true`.
+    pub draw_tab_bar: bool,
+    pub screen_width: u16,
+}
+
+/// The stores a pane paints out of and writes its viewport back into.
+///
+/// Every one of these is shared by the whole frame; what makes them a
+/// separate carrier from [`FrameFacts`] is that a pane *changes* them, so
+/// they are borrowed mutably and cannot ride along in a `Copy` bundle.
+pub(crate) struct Stores<'a> {
+    pub buffers: &'a mut HashMap<BufferId, EditorState>,
+    pub event_logs: &'a mut HashMap<BufferId, EventLog>,
+    pub composite_buffers:
+        &'a mut HashMap<BufferId, crate::model::composite_buffer::CompositeBuffer>,
+    pub composite_view_states:
+        &'a mut HashMap<(LeafId, BufferId), crate::view::composite_view::CompositeViewState>,
+    pub split_view_states: Option<&'a mut HashMap<LeafId, crate::view::split::SplitViewState>>,
+    pub cell_theme_map: &'a mut Vec<crate::app::types::CellThemeInfo>,
+}
+
+/// Every rectangle the grid produces, which is what chrome reads *after*
+/// paint: click-to-byte mapping, the scrollbar and separator drags, the tab
+/// hit tests.
+///
+/// **A sink, not a return value.** A pane appends to it, and the frame's
+/// panes may be painted one call at a time — one `Host` each — so there is
+/// nothing for a pane to return this in.
+#[derive(Default)]
+pub(crate) struct PaneAreas {
+    pub split_areas: Vec<(LeafId, BufferId, Rect, Rect, usize, usize)>,
+    pub tab_layouts: HashMap<LeafId, crate::view::ui::tabs::TabLayout>,
+    pub close_split_areas: Vec<(LeafId, u16, u16, u16)>,
+    pub maximize_split_areas: Vec<(LeafId, u16, u16, u16)>,
+    pub view_line_mappings: HashMap<LeafId, Vec<ViewLineMapping>>,
+    /// Rect plus `max_content_width`, `thumb_start`, `thumb_end`.
+    pub horizontal_scrollbar_areas: Vec<(LeafId, BufferId, Rect, usize, usize, usize)>,
+    /// Hit areas for the separators inside active `Grouped` subtrees.
+    pub grouped_separator_areas: Vec<(
+        crate::model::event::ContainerId,
+        SplitDirection,
+        u16,
+        u16,
+        u16,
+    )>,
+}
+
+/// Paint every pane in `area`, and every separator between them.
+///
+/// **One frame's grid, in one call.** The shell's own path does not come
+/// through here — it folds a display list and calls the three phases below
+/// one `Host` at a time, so that a pane's rectangle is the one layout gave
+/// it. What still wants a whole grid painted into a rectangle it computed
+/// itself is the session preview, which draws another window's layout
+/// offscreen; this is that caller's entry point, and it is the same three
+/// phases in the same order.
+///
 /// # Returns
 /// * Vec of (split_id, buffer_id, content_rect, scrollbar_rect, thumb_start, thumb_end) for mouse handling
 #[allow(clippy::too_many_arguments)]
@@ -97,8 +188,6 @@ pub(crate) fn render_content(
     split_manager: &SplitManager,
     buffers: &mut HashMap<BufferId, EditorState>,
     buffer_metadata: &HashMap<BufferId, BufferMetadata>,
-    // Buffer id of the window's single preview tab (`window.preview`), or
-    // `None`. Drives the italic "(preview)" tab styling.
     preview_buffer: Option<BufferId>,
     event_logs: &mut HashMap<BufferId, EventLog>,
     composite_buffers: &mut HashMap<BufferId, crate::model::composite_buffer::CompositeBuffer>,
@@ -106,35 +195,22 @@ pub(crate) fn render_content(
         (LeafId, BufferId),
         crate::view::composite_view::CompositeViewState,
     >,
-    // Appearance/policy group (theme + ANSI backdrop + editor render config),
-    // identical for every split. Unpacked into locals at the top of the body
-    // and threaded as-is into render_buffer_in_split.
     style: crate::view::ui::RenderStyle<'_>,
     lsp_waiting: bool,
-    mut split_view_states: Option<&mut HashMap<LeafId, crate::view::split::SplitViewState>>,
+    split_view_states: Option<&mut HashMap<LeafId, crate::view::split::SplitViewState>>,
     grouped_subtrees: &HashMap<LeafId, crate::view::split::SplitNode>,
     hide_cursor: bool,
-    hovered_tab: Option<(crate::view::split::TabTarget, LeafId, bool)>, // (target, split_id, is_close_button)
+    hovered_tab: Option<(crate::view::split::TabTarget, LeafId, bool)>,
     hovered_close_split: Option<LeafId>,
     hovered_maximize_split: Option<LeafId>,
     is_maximized: bool,
     tab_bar_visible: bool,
     session_mode: bool,
-    // The splits whose active buffer is a terminal being shown in read-only
-    // scrollback. Any terminal split NOT listed here is showing its live PTY
-    // grid, so its vertical scrollbar is suppressed and the grid reclaims that
-    // column; a scrollback split keeps its scrollbar. Per-split (not a single
-    // window flag) so two splits on the same terminal can differ (fresh#2595).
     scrollback_view_splits: &std::collections::HashSet<LeafId>,
-    // What chrome each of the split manager's panes has, resolved once with
-    // the shell's description of the same grid — see `Window::pane_chrome`.
-    // A buffer group's panel is not one of those panes, and resolves below.
     pane_chrome: &HashMap<LeafId, PaneChrome>,
     cell_theme_map: &mut Vec<crate::app::types::CellThemeInfo>,
     screen_width: u16,
     pending_hardware_cursor: &mut Option<(u16, u16)>,
-    // When false, the tab bar computes its layout but paints no cells (web
-    // renders tabs natively). Panes always draw. TUI passes `true`.
     draw_tab_bar: bool,
 ) -> (
     Vec<(LeafId, BufferId, Rect, Rect, usize, usize)>,
@@ -153,122 +229,85 @@ pub(crate) fn render_content(
 ) {
     let _span = tracing::trace_span!("render_content").entered();
 
-    // Unpack the style group. `theme` is forwarded to the sub-painters; the
-    // whole `style` (incl. `ansi_background` + full `cfg`) is threaded as-is
-    // into render_buffer_in_split. Only the `cfg` flags this layer reads itself
-    // (per-split flag math, scrollbars, composite) are bound below; the rest
-    // ride along inside `style.cfg`.
-    let crate::view::ui::RenderStyle { theme, cfg, .. } = style;
-    let EditorRenderConfig {
-        large_file_threshold_bytes,
-        use_terminal_bg,
-        show_vertical_scrollbar,
-        show_horizontal_scrollbar,
-        show_tilde,
-        highlight_current_column,
-        hide_current_line_on_selection,
-        ..
-    } = cfg;
+    let facts = FrameFacts {
+        style,
+        buffer_metadata,
+        preview_buffer,
+        grouped_subtrees,
+        pane_chrome,
+        scrollback_view_splits,
+        lsp_waiting,
+        hide_cursor,
+        hovered_tab,
+        hovered_close_split,
+        hovered_maximize_split,
+        is_maximized,
+        session_mode,
+        draw_tab_bar,
+        screen_width,
+    };
+    let mut stores = Stores {
+        buffers,
+        event_logs,
+        composite_buffers,
+        composite_view_states,
+        split_view_states,
+        cell_theme_map,
+    };
 
     // The window's half of the pane-chrome rule: what the frame offers every
-    // pane, before each narrows it by what it is. Bound once so the loop below
-    // and the three other layouts in this module read the same offer.
+    // pane, before each narrows it by what it is. Bound once so the panes
+    // below and the three other layouts in this module read the same offer.
     let window_chrome = PaneChrome {
         tabs: tab_bar_visible,
-        vscroll: show_vertical_scrollbar,
-        hscroll: show_horizontal_scrollbar,
+        vscroll: style.cfg.show_vertical_scrollbar,
+        hscroll: style.cfg.show_horizontal_scrollbar,
     };
 
     let base_visible = split_manager.get_visible_buffers(area);
     let pass = prepare_content(
         &base_visible,
         split_manager,
-        split_view_states.as_deref_mut(),
+        stores.split_view_states.as_deref_mut(),
         grouped_subtrees,
         pane_chrome,
         window_chrome,
     );
-    let ContentPass {
-        visible: visible_buffers,
-        active_split_id,
-        has_multiple_splits,
-        ..
-    } = pass;
 
-    // Collect areas for mouse handling
-    let mut split_areas = Vec::new();
-    let mut horizontal_scrollbar_areas: Vec<(LeafId, BufferId, Rect, usize, usize, usize)> =
-        Vec::new();
-    let mut tab_layouts: HashMap<LeafId, crate::view::ui::tabs::TabLayout> = HashMap::new();
-    let mut close_split_areas = Vec::new();
-    let mut maximize_split_areas = Vec::new();
-    let mut view_line_mappings: HashMap<LeafId, Vec<ViewLineMapping>> = HashMap::new();
-
-    // Render each split.
-    for (main_split_id, split_id, buffer_id, split_area, kind) in visible_buffers {
+    let mut out = PaneAreas::default();
+    for pane in pass.visible.iter().copied() {
         paint_leaf(
             buf,
-            main_split_id,
-            split_id,
-            buffer_id,
-            split_area,
-            kind,
-            style,
-            theme,
-            buffer_metadata,
-            preview_buffer,
-            grouped_subtrees,
-            pane_chrome,
-            window_chrome,
-            scrollback_view_splits,
-            active_split_id,
-            has_multiple_splits,
-            is_maximized,
-            hovered_tab,
-            hovered_close_split,
-            hovered_maximize_split,
-            lsp_waiting,
-            hide_cursor,
-            session_mode,
-            draw_tab_bar,
-            screen_width,
-            large_file_threshold_bytes,
-            use_terminal_bg,
-            show_horizontal_scrollbar,
-            show_tilde,
-            highlight_current_column,
-            hide_current_line_on_selection,
-            buffers,
-            event_logs,
-            composite_buffers,
-            composite_view_states,
-            split_view_states.as_deref_mut(),
-            cell_theme_map,
+            pane,
+            &facts,
+            &pass,
+            &mut stores,
+            &mut out,
             pending_hardware_cursor,
-            &mut split_areas,
-            &mut horizontal_scrollbar_areas,
-            &mut tab_layouts,
-            &mut close_split_areas,
-            &mut maximize_split_areas,
-            &mut view_line_mappings,
         );
     }
-
-    let grouped_separator_areas = paint_separators(
+    paint_separators(
         buf,
         area,
         split_manager,
         &base_visible,
-        split_view_states.as_deref(),
-        grouped_subtrees,
-        theme,
-        pane_chrome,
+        &facts,
+        &stores,
+        &mut out,
     );
-
     // Record vertical-scrollbar theme keys for the inspector, from the
-    // thumb/track geometry just computed for each split.
-    record_scrollbar_theme_runs(&split_areas, cell_theme_map, screen_width);
+    // thumb/track geometry the panes just computed.
+    record_scrollbar_theme_runs(&out.split_areas, stores.cell_theme_map, screen_width);
 
+    let PaneAreas {
+        split_areas,
+        tab_layouts,
+        close_split_areas,
+        maximize_split_areas,
+        view_line_mappings,
+        horizontal_scrollbar_areas,
+        grouped_separator_areas,
+    } = out;
     (
         split_areas,
         tab_layouts,
@@ -281,44 +320,35 @@ pub(crate) fn render_content(
 }
 
 /// Paint every separator in the frame — the main tree's and, inside each pane
-/// showing an active buffer group, that group's own — and return the grouped
+/// showing an active buffer group, that group's own — and record the grouped
 /// ones' hit areas.
 ///
-/// **Not a pane's**, which is why it is here rather than in `paint_leaf`: a
-/// separator is the gap *between* two panes and belongs to neither. It paints
-/// before any of them, and cannot overlap one.
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
+/// **Not a pane's**, which is why it is here rather than in [`paint_leaf`]: a
+/// separator is the gap *between* two panes and belongs to neither. It cannot
+/// overlap one, so it may paint before or after them.
 pub(crate) fn paint_separators(
     buf: &mut ratatui::buffer::Buffer,
     area: Rect,
     split_manager: &SplitManager,
     base_visible: &[(LeafId, BufferId, Rect)],
-    split_view_states: Option<&HashMap<LeafId, crate::view::split::SplitViewState>>,
-    grouped_subtrees: &HashMap<LeafId, crate::view::split::SplitNode>,
-    theme: &crate::view::theme::Theme,
-    pane_chrome: &HashMap<LeafId, PaneChrome>,
-) -> Vec<(
-    crate::model::event::ContainerId,
-    SplitDirection,
-    u16,
-    u16,
-    u16,
-)> {
+    f: &FrameFacts<'_>,
+    s: &Stores<'_>,
+    out: &mut PaneAreas,
+) {
     for (direction, x, y, length) in split_manager.get_separators(area) {
-        render_separator(buf, direction, x, y, length, theme);
+        render_separator(buf, direction, x, y, length, f.style.theme);
     }
     // Walk the visible splits again to render internal separators of any
     // active buffer groups (their Split nodes live in the side-map, not the
     // main split tree, so `split_manager` doesn't know about them).
-    render_grouped_separators(
+    out.grouped_separator_areas = render_grouped_separators(
         buf,
         base_visible,
-        split_view_states,
-        grouped_subtrees,
-        theme,
-        pane_chrome,
-    )
+        s.split_view_states.as_deref(),
+        f.grouped_subtrees,
+        f.style.theme,
+        f.pane_chrome,
+    );
 }
 
 /// Resolve what every pane in this frame shares. See [`ContentPass`].
@@ -347,69 +377,76 @@ pub(crate) fn prepare_content(
 /// Paint one pane: its tab strip, its buffer (or composite, or placeholder),
 /// and its two scrollbars — and record the rectangles chrome reads back.
 ///
-/// **The per-leaf half of `render_content`.** The loop this came out of mixed
+/// **The per-pane half of a frame's paint.** The loop this came out of mixed
 /// three things: a preamble computed once for the frame, this, and seven
 /// accumulators. Only this part is a pane's, and separating it is what lets a
 /// pane become its own `Host` in the shell's tree rather than a slice of one
 /// rectangle that paints them all.
 ///
-/// The signature is wide on purpose, for now: every parameter is named exactly
-/// as the local it replaced, so the body moved without a single edit inside
-/// it. Bundling them into a frame-wide context and a sink is the next step,
-/// and one the compiler checks.
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
-fn paint_leaf(
+/// `pane` carries the rectangle to paint into. For the shell that rectangle
+/// is the one *layout* gave the pane's `Host`; for a caller that lays the
+/// grid out itself it is [`prepare_content`]'s. They agree — the description
+/// and the model share `split_rect_ext` — and the parity tests in
+/// `view::shell::splits` are what says so.
+pub(crate) fn paint_leaf(
     buf: &mut ratatui::buffer::Buffer,
-    main_split_id: LeafId,
-    split_id: LeafId,
-    buffer_id: BufferId,
-    split_area: Rect,
-    kind: RenderKind,
-    // -- frame-wide, read-only ------------------------------------------------
-    style: RenderStyle<'_>,
-    theme: &crate::view::theme::Theme,
-    buffer_metadata: &HashMap<BufferId, BufferMetadata>,
-    preview_buffer: Option<BufferId>,
-    grouped_subtrees: &HashMap<LeafId, crate::view::split::SplitNode>,
-    pane_chrome: &HashMap<LeafId, PaneChrome>,
-    window_chrome: PaneChrome,
-    scrollback_view_splits: &std::collections::HashSet<LeafId>,
-    active_split_id: LeafId,
-    has_multiple_splits: bool,
-    is_maximized: bool,
-    hovered_tab: Option<(crate::view::split::TabTarget, LeafId, bool)>,
-    hovered_close_split: Option<LeafId>,
-    hovered_maximize_split: Option<LeafId>,
-    lsp_waiting: bool,
-    hide_cursor: bool,
-    session_mode: bool,
-    draw_tab_bar: bool,
-    screen_width: u16,
-    large_file_threshold_bytes: u64,
-    use_terminal_bg: bool,
-    show_horizontal_scrollbar: bool,
-    show_tilde: bool,
-    highlight_current_column: bool,
-    hide_current_line_on_selection: bool,
-    // -- frame-wide, written --------------------------------------------------
-    buffers: &mut HashMap<BufferId, EditorState>,
-    event_logs: &mut HashMap<BufferId, EventLog>,
-    composite_buffers: &mut HashMap<BufferId, crate::model::composite_buffer::CompositeBuffer>,
-    composite_view_states: &mut HashMap<
-        (LeafId, BufferId),
-        crate::view::composite_view::CompositeViewState,
-    >,
-    mut split_view_states: Option<&mut HashMap<LeafId, crate::view::split::SplitViewState>>,
-    cell_theme_map: &mut Vec<crate::app::types::CellThemeInfo>,
+    pane: VisibleBuffer,
+    f: &FrameFacts<'_>,
+    pass: &ContentPass,
+    s: &mut Stores<'_>,
+    out: &mut PaneAreas,
     pending_hardware_cursor: &mut Option<(u16, u16)>,
-    split_areas: &mut Vec<(LeafId, BufferId, Rect, Rect, usize, usize)>,
-    horizontal_scrollbar_areas: &mut Vec<(LeafId, BufferId, Rect, usize, usize, usize)>,
-    tab_layouts: &mut HashMap<LeafId, crate::view::ui::tabs::TabLayout>,
-    close_split_areas: &mut Vec<(LeafId, u16, u16, u16)>,
-    maximize_split_areas: &mut Vec<(LeafId, u16, u16, u16)>,
-    view_line_mappings: &mut HashMap<LeafId, Vec<ViewLineMapping>>,
 ) {
+    // Unpacked into the names the body below uses. The body is the loop's,
+    // moved without an edit inside it; the carriers are what replaced its
+    // forty parameters.
+    let (main_split_id, split_id, buffer_id, split_area, kind) = pane;
+    let FrameFacts {
+        style,
+        buffer_metadata,
+        preview_buffer,
+        grouped_subtrees,
+        pane_chrome,
+        scrollback_view_splits,
+        lsp_waiting,
+        hide_cursor,
+        hovered_tab,
+        hovered_close_split,
+        hovered_maximize_split,
+        is_maximized,
+        session_mode,
+        draw_tab_bar,
+        screen_width,
+    } = *f;
+    let theme = style.theme;
+    let EditorRenderConfig {
+        large_file_threshold_bytes,
+        use_terminal_bg,
+        show_horizontal_scrollbar,
+        show_tilde,
+        highlight_current_column,
+        hide_current_line_on_selection,
+        ..
+    } = style.cfg;
+    let window_chrome = pass.window_chrome;
+    let active_split_id = pass.active_split_id;
+    let has_multiple_splits = pass.has_multiple_splits;
+    let buffers = &mut *s.buffers;
+    let event_logs = &mut *s.event_logs;
+    let composite_buffers = &mut *s.composite_buffers;
+    let composite_view_states = &mut *s.composite_view_states;
+    let mut split_view_states = s.split_view_states.as_deref_mut();
+    let cell_theme_map = &mut *s.cell_theme_map;
+    let PaneAreas {
+        split_areas,
+        tab_layouts,
+        close_split_areas,
+        maximize_split_areas,
+        view_line_mappings,
+        horizontal_scrollbar_areas,
+        ..
+    } = out;
+
     let is_active = split_id == active_split_id;
     let is_inner_group_leaf = kind == RenderKind::InnerLeaf;
     let skip_content = kind == RenderKind::GroupTabBarOnly;
@@ -1269,7 +1306,7 @@ fn render_grouped_separators(
 
 /// Record vertical-scrollbar theme keys (thumb vs. track) for the theme
 /// inspector, from the geometry computed for each split during rendering.
-fn record_scrollbar_theme_runs(
+pub(crate) fn record_scrollbar_theme_runs(
     split_areas: &[(LeafId, BufferId, Rect, Rect, usize, usize)],
     cell_theme_map: &mut [crate::app::types::CellThemeInfo],
     screen_width: u16,
