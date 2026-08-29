@@ -282,6 +282,17 @@ impl Frame {
     }
 }
 
+/// The name of a window's identity key and persistence scope.
+///
+/// One function because two callers have to agree and neither can check the
+/// other: `frame_tree` writes the scope into the tree, and
+/// `Editor::forget_window_ui_state` drops it when the window closes. Spelled
+/// apart, a rename in one place leaks every closed window's values forever and
+/// nothing fails.
+pub fn window_scope(id: u64) -> String {
+    format!("window:{id}")
+}
+
 /// The frame description: one `Host` per region.
 ///
 /// **Every** region is present, hidden ones at zero size, mirroring the
@@ -415,7 +426,7 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // node for the key and the `PersistenceScope`, because a subtree that
     // declares only one of them is silently wrong in either direction.
     let window_area = match f.window {
-        Some(id) => fresh_ui::scope(format!("window:{id}"), chrome),
+        Some(id) => fresh_ui::scope(window_scope(id), chrome),
         None => chrome,
     };
     // Native around a `Host` content leaf: the column answers its own pointer
@@ -535,4 +546,95 @@ pub fn region_rects(
     let mut ui: Ui<UiMsg> = Ui::new();
     ui.frame(frame_tree(f), Size::new(size.width, size.height));
     regions_of(&ui, size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::event::BufferId;
+    use crate::view::shell::splits::{leaf_key, PaneControls, Splits};
+    use crate::view::split::SplitNode;
+    use fresh_core::SplitId;
+    use fresh_ui::{Size, Ui};
+
+    /// One pane, so the two windows collide at the *first* split id — which is
+    /// the case that matters: `SplitManager::next_split_id` starts at 1 in
+    /// every window, so this is the default layout of two workspaces rather
+    /// than a contrived one.
+    fn one_pane_in(window: Option<u64>) -> Frame {
+        Frame {
+            window,
+            splits: Some(Splits {
+                root: SplitNode::leaf(BufferId(1), SplitId(1)),
+                maximized: None,
+                chrome: Default::default(),
+                controls: PaneControls {
+                    maximize: false,
+                    close: false,
+                },
+                groups: Default::default(),
+            }),
+            ..Frame::default()
+        }
+    }
+
+    /// The element the first pane is reconciled onto, across two frames.
+    fn pane_across(
+        a: Frame,
+        b: Frame,
+    ) -> (Option<fresh_ui::ElementId>, Option<fresh_ui::ElementId>) {
+        let key = leaf_key(crate::model::event::LeafId(SplitId(1)));
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(frame_tree(a), Size::new(80, 24));
+        let first = ui.find_by_key(&key);
+        ui.frame(frame_tree(b), Size::new(80, 24));
+        (first, ui.find_by_key(&key))
+    }
+
+    /// **The bug the window scope exists to prevent.** Reconciliation is by
+    /// `(type, key)` at a position; two windows' first panes carry the same
+    /// key at the same position, so without something naming the window the
+    /// tree matches them and window B's pane inherits window A's element —
+    /// and, once panes own state, its scroll offset.
+    #[test]
+    fn two_windows_first_panes_are_not_one_element() {
+        let (a, b) = pane_across(one_pane_in(Some(1)), one_pane_in(Some(2)));
+        assert!(a.is_some() && b.is_some(), "both frames describe a pane");
+        assert_ne!(
+            a, b,
+            "window 2's pane must not be reconciled onto window 1's element"
+        );
+    }
+
+    /// The control, and the reason the assertion above is not vacuous: with no
+    /// window named, the two frames *do* land on one element. This is what the
+    /// tree did before the scope, spelled out so a future change that quietly
+    /// stops keying the window fails the test above instead of passing it for
+    /// the wrong reason.
+    #[test]
+    fn with_no_window_named_the_two_frames_share_the_element() {
+        let (a, b) = pane_across(one_pane_in(None), one_pane_in(None));
+        assert!(a.is_some());
+        assert_eq!(a, b, "nothing distinguishes the two frames");
+    }
+
+    /// Rebuilding the *same* window is not a switch: the pane keeps its
+    /// element, so nothing a component owns is thrown away on an ordinary
+    /// frame. A scope that discarded every frame would be worse than none.
+    #[test]
+    fn the_same_window_keeps_its_pane_across_frames() {
+        let (a, b) = pane_across(one_pane_in(Some(1)), one_pane_in(Some(1)));
+        assert!(a.is_some());
+        assert_eq!(a, b, "same window, same element");
+    }
+
+    /// The tree's scope name and the editor's `forget_window_ui_state` have to
+    /// agree, and neither can check the other — so the shared spelling is
+    /// pinned here. If this changes, every closed window's values leak and
+    /// nothing else fails.
+    #[test]
+    fn a_windows_scope_is_named_after_its_id() {
+        assert_eq!(window_scope(7), "window:7");
+        assert_ne!(window_scope(1), window_scope(10));
+    }
 }
