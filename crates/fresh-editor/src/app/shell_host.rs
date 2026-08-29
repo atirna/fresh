@@ -1076,11 +1076,12 @@ impl Editor {
                 }
             }
             UiFact::SeparatorHover(at) => {
-                let target =
+                // The tree's field, not the walk's. The walk runs after this on
+                // the same event and finds nothing under a divider cell — it
+                // would store `None` straight over the answer. See
+                // `Editor::hovered`.
+                self.shell_hover =
                     at.map(|(id, dir)| crate::app::types::HoverTarget::SplitSeparator(id, dir));
-                if self.active_window().mouse_state.hover_target != target {
-                    self.active_window_mut().mouse_state.hover_target = target;
-                }
             }
             // A full-screen modal has the pointer. Which one is the tree's
             // answer — `Modality::Exclusive`, where a capture band offered
@@ -1141,10 +1142,7 @@ impl Editor {
                 }
             }
             UiFact::BrowserHover { x, y } => {
-                let target = self.compute_file_browser_hover(x, y);
-                if self.active_window().mouse_state.hover_target != target {
-                    self.active_window_mut().mouse_state.hover_target = target;
-                }
+                self.shell_hover = self.compute_file_browser_hover(x, y);
             }
             UiFact::BrowserScroll(delta) => {
                 self.handle_file_open_scroll(delta);
@@ -1167,8 +1165,7 @@ impl Editor {
                 }
             }
             UiFact::ThemeInfoButtonHover(on) => {
-                let target = on.then_some(crate::app::types::HoverTarget::ThemeInfoButton);
-                self.active_window_mut().mouse_state.hover_target = target;
+                self.shell_hover = on.then_some(crate::app::types::HoverTarget::ThemeInfoButton);
             }
             UiFact::ExplorerScroll { delta, x, y } => {
                 // The surface's wheel, with the surface. Unchanged from the

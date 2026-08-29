@@ -709,20 +709,21 @@ impl Editor {
             || self.dormant_remote.contains_key(&self.active_window);
 
         // Convert HoverTarget to tab hover info for rendering
-        let hovered_tab = match &self.active_window_mut().mouse_state.hover_target {
+        let hovered = self.hovered();
+        let hovered_tab = match &hovered {
             Some(HoverTarget::TabName(target, split_id)) => Some((*target, *split_id, false)),
             Some(HoverTarget::TabCloseButton(target, split_id)) => Some((*target, *split_id, true)),
             _ => None,
         };
 
         // Get hovered close split button
-        let hovered_close_split = match &self.active_window_mut().mouse_state.hover_target {
+        let hovered_close_split = match &hovered {
             Some(HoverTarget::CloseSplitButton(split_id)) => Some(*split_id),
             _ => None,
         };
 
         // Get hovered maximize split button
-        let hovered_maximize_split = match &self.active_window_mut().mouse_state.hover_target {
+        let hovered_maximize_split = match &hovered {
             Some(HoverTarget::MaximizeSplitButton(split_id)) => Some(*split_id),
             _ => None,
         };
@@ -2439,7 +2440,7 @@ impl Editor {
 
         // Which clickable status-bar segment (if any) the mouse is over —
         // drives hover styling generically (one variant for the whole bar).
-        let status_bar_hovered = match &self.active_window().mouse_state.hover_target {
+        let status_bar_hovered = match &self.hovered() {
             Some(HoverTarget::StatusBarClickable(id)) => Some(*id),
             _ => None,
         };
@@ -3661,7 +3662,7 @@ impl Editor {
             prompt.prompt_type,
             PromptType::OpenFile | PromptType::SwitchProject | PromptType::SaveFileAs
         ) {
-            let hover_target = self.active_window().mouse_state.hover_target.clone();
+            let hover_target = self.hovered();
             let theme = self.theme.read().unwrap().clone();
             let keybindings = self.keybindings.read().unwrap();
             let kb_clone = keybindings.clone();
@@ -4940,7 +4941,7 @@ impl Editor {
         use ratatui::text::Span;
         use ratatui::widgets::Paragraph;
 
-        match &self.active_window().mouse_state.hover_target {
+        match &self.hovered() {
             Some(HoverTarget::SplitSeparator(split_id, direction)) => {
                 // Highlight the separator with hover color
                 for (sid, dir, x, y, length) in &self.active_layout().separator_areas {
