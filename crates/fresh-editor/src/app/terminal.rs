@@ -2239,12 +2239,12 @@ impl Window {
     /// one cell tall whenever a search prompt is up, so every pane was a row
     /// too tall again with the search bar showing.
     ///
-    /// It cannot be a read of `WindowLayoutCache::editor_content_area`, which
-    /// is the same rectangle recorded from the tree: `apply_layout` calls this
-    /// *after* setting a new size and *before* the frame that would record it,
-    /// and getting the previous frame's answer there is the bug this whole
-    /// migration is about. So it stays a function of state — of the same state,
-    /// through the same rule.
+    /// It cannot be a read of `WindowLayoutCache::last_editor_content_area`:
+    /// `apply_layout` calls this *after* setting a new size and *before* the
+    /// frame that would record it, and getting the previous frame's answer
+    /// there is the bug this whole migration is about. So it stays a function
+    /// of state — of the same state, through the same rule. The field's name
+    /// says which of the two it is.
     pub(crate) fn editor_content_area(&self) -> ratatui::layout::Rect {
         let vertical_rows = crate::view::shell::frame::fixed_rows(
             self.menu_bar_visible,

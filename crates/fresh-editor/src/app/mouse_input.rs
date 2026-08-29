@@ -843,13 +843,18 @@ impl Editor {
         let context_menu_open = self.active_window().context_menu_core().is_some();
         if !chrome_drag_active && !context_menu_open {
             let forwarding = self.config.terminal.mouse_forwarding;
-            if let Some(result) = self.active_window_mut().try_forward_mouse_to_terminal(
-                col,
-                row,
-                mouse_event,
-                forwarding,
-            ) {
-                return Some(result);
+            // Which terminal, and where its grid is: a question about the
+            // shell's tree, so it is asked on this side and handed down.
+            if let Some(at) = self.terminal_pane_at(col, row) {
+                if let Some(result) = self.active_window_mut().try_forward_mouse_to_terminal(
+                    col,
+                    row,
+                    at,
+                    mouse_event,
+                    forwarding,
+                ) {
+                    return Some(result);
+                }
             }
         }
         self.try_open_terminal_link(col, row, mouse_event)

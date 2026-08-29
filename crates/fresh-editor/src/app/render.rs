@@ -1068,7 +1068,7 @@ impl Editor {
         // drew them at) — merge so clicks on those rendered columns register.
         separator_areas.extend(grouped_separator_areas.iter().copied());
         self.active_layout_mut().separator_areas = separator_areas;
-        self.active_layout_mut().editor_content_area = Some(editor_content_area);
+        self.active_layout_mut().last_editor_content_area = Some(editor_content_area);
 
         // Render hover highlights for separators and scrollbars
         self.render_hover_highlights(frame);

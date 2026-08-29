@@ -538,7 +538,7 @@ impl Editor {
     }
 
     /// Where the shell laid this pane's content out.
-    fn pane_content_rect(&self, pane: LeafId) -> Option<ratatui::layout::Rect> {
+    pub(crate) fn pane_content_rect(&self, pane: LeafId) -> Option<ratatui::layout::Rect> {
         crate::view::shell::rect_of(
             self.shell_ui.as_ref()?,
             &crate::view::shell::splits::content_key(pane),
@@ -581,6 +581,56 @@ impl Editor {
             let r = self.pane_content_rect(pane)?;
             crate::app::chrome::in_rect(col, row, r).then_some((pane, r))
         })
+    }
+
+    /// The pane a screen cell belongs to, counting its scrollbar column.
+    ///
+    /// The wider question than [`Self::pane_content_at`], and the one
+    /// `Window::split_at_position` answered by scanning `split_areas` for
+    /// either of the two rectangles it recorded per pane. Both are nodes.
+    pub(crate) fn pane_at(&self, col: u16, row: u16) -> Option<LeafId> {
+        if let Some((pane, _)) = self.pane_content_at(col, row) {
+            return Some(pane);
+        }
+        let ui = self.shell_ui.as_ref()?;
+        let frame = ratatui::layout::Rect::new(
+            0,
+            0,
+            self.active_chrome().last_frame.width,
+            self.active_chrome().last_frame.height,
+        );
+        let leaves = self
+            .windows
+            .get(&self.active_window)?
+            .buffers
+            .splits()
+            .map(|(mgr, _)| mgr.visible_leaves())?;
+        leaves.into_iter().find_map(|(pane, _)| {
+            let bar = crate::view::shell::rect_of(
+                ui,
+                &crate::view::shell::splits::vscroll_key(pane),
+                frame,
+            )?;
+            crate::app::chrome::in_rect(col, row, bar).then_some(pane)
+        })
+    }
+
+    /// The terminal a screen cell is over, and the rectangle its grid occupies.
+    ///
+    /// The terminal's own mouse handling lives on `impl Window`, which cannot
+    /// see the tree, so this is asked here and the answer travels down. It was
+    /// `Window::get_terminal_content_area_at_position`, a third scan of
+    /// `split_areas`.
+    pub(crate) fn terminal_pane_at(
+        &self,
+        col: u16,
+        row: u16,
+    ) -> Option<(crate::app::BufferId, ratatui::layout::Rect)> {
+        let (pane, rect) = self.pane_content_at(col, row)?;
+        let win = self.windows.get(&self.active_window)?;
+        let buffer_id = win.pane_buffer(pane)?;
+        win.is_terminal_buffer(buffer_id)
+            .then_some((buffer_id, rect))
     }
 
     /// Whether the pointer is on a pane's scrollbar thumb or its track.
@@ -1291,7 +1341,7 @@ impl Editor {
         let Some(start_ratio) = self.active_window_mut().mouse_state.drag_start_ratio else {
             return Ok(());
         };
-        let Some(editor_area) = self.active_layout().editor_content_area else {
+        let Some(editor_area) = self.active_layout().last_editor_content_area else {
             return Ok(());
         };
 

@@ -220,8 +220,15 @@ impl ChromeLayout {
 pub(crate) struct WindowLayoutCache {
     /// File explorer area (if visible)
     pub file_explorer_area: Option<Rect>,
-    /// Editor content area (excluding file explorer)
-    pub editor_content_area: Option<Rect>,
+    /// Where the body was **last painted**, excluding the file explorer.
+    ///
+    /// Distinct from `Window::editor_content_area()`, which computes the same
+    /// rectangle from state. Both are correct and they are not
+    /// interchangeable: `apply_layout` asks *after* setting a new size and
+    /// *before* the frame that would record this, so a caller that needs the
+    /// answer for the size the editor has now must compute it, and a caller
+    /// that needs the cells something was actually drawn into must read this.
+    pub last_editor_content_area: Option<Rect>,
     /// Individual split areas with their scrollbar areas and thumb positions
     /// (split_id, buffer_id, content_rect, scrollbar_rect, thumb_start, thumb_end)
     pub split_areas: Vec<(LeafId, BufferId, Rect, Rect, usize, usize)>,
