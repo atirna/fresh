@@ -2,7 +2,7 @@
 //! close/maximize buttons, tab bars, v/h scrollbars, and the editor
 //! content rects.
 
-use crate::app::types::HoverTarget;
+use crate::app::types::{HoverTarget, TabContextMenu};
 use crate::app::BufferId;
 use crate::input::keybindings::Action;
 use crate::model::event::{CursorId, LeafId, SplitDirection};
@@ -47,31 +47,11 @@ impl ChromeComponent for Splits {
             b.z = 80;
             t.push(b);
         }
-        for (_, btn_row, start, end) in &ed.active_layout().close_split_areas {
-            let mut b = LayoutBox::plain(
-                "chrome:split_buttons",
-                *btn_row as u32,
-                *start as u32,
-                end.saturating_sub(*start) as u32,
-                1,
-            );
-            b.z = 70;
-            t.push(b);
-        }
-        for (_, btn_row, start, end) in &ed.active_layout().maximize_split_areas {
-            let mut b = LayoutBox::plain(
-                "chrome:split_buttons",
-                *btn_row as u32,
-                *start as u32,
-                end.saturating_sub(*start) as u32,
-                1,
-            );
-            b.z = 70;
-            t.push(b);
-        }
-        for (_, tl) in &ed.active_layout().tab_layouts {
-            t.rect("chrome:tabs", 60, tl.bar_area);
-        }
+        // The tab strip is a node in the shell's tree — one per pane, keyed by
+        // the leaf it belongs to (`shell::splits::tab_strip`). It answers for
+        // the split controls too: they are drawn *on top of* the tab row, and
+        // the two boxes here said so with z 70 over z 60, an ordering a node
+        // has to state itself because the tree runs before this walk.
         for (_, _, _, scrollbar_rect, _, _) in &ed.active_layout().split_areas {
             t.rect("chrome:scrollbars", 50, *scrollbar_rect);
         }
@@ -99,41 +79,6 @@ impl ChromeComponent for Splits {
                     };
                     if on_it {
                         return Some(HoverTarget::SplitSeparator(*split_id, *direction));
-                    }
-                }
-                None
-            }
-            "chrome:split_buttons" => {
-                // Split control buttons sit on top of the tab row.
-                for (split_id, btn_row, start_col, end_col) in &ed.active_layout().close_split_areas
-                {
-                    if row == *btn_row && col >= *start_col && col < *end_col {
-                        return Some(HoverTarget::CloseSplitButton(*split_id));
-                    }
-                }
-                for (split_id, btn_row, start_col, end_col) in
-                    &ed.active_layout().maximize_split_areas
-                {
-                    if row == *btn_row && col >= *start_col && col < *end_col {
-                        return Some(HoverTarget::MaximizeSplitButton(*split_id));
-                    }
-                }
-                None
-            }
-            "chrome:tabs" => {
-                for (split_id, tab_layout) in &ed.active_layout().tab_layouts {
-                    match tab_layout.hit_test(col, row) {
-                        Some(TabHit::CloseButton(target)) => {
-                            return Some(HoverTarget::TabCloseButton(target, *split_id));
-                        }
-                        Some(TabHit::TabName(target)) => {
-                            return Some(HoverTarget::TabName(target, *split_id));
-                        }
-                        Some(TabHit::ScrollLeft)
-                        | Some(TabHit::ScrollRight)
-                        | Some(TabHit::BarBackground)
-                        | Some(TabHit::NewTabButton)
-                        | None => {}
                     }
                 }
                 None
@@ -237,8 +182,6 @@ impl ChromeComponent for Splits {
             "chrome:scrollbars" => ed.handle_click_scrollbar(ev.col, ev.row),
             "chrome:h_scrollbar" => ed.handle_click_horizontal_scrollbar(ev.col, ev.row),
             "chrome:group_separators" => ed.handle_click_group_separator(ev.col, ev.row),
-            "chrome:split_buttons" => ed.handle_click_split_controls(ev.col, ev.row),
-            "chrome:tabs" => ed.handle_click_tab_bar(ev.col, ev.row),
             "chrome:editor" => {
                 let areas: Vec<_> = ed
                     .active_layout()
@@ -289,17 +232,6 @@ impl ChromeComponent for Splits {
                     Ok(Disposition::Pass)
                 }
             }
-            // A vertical wheel over a horizontal tab strip pans it: up
-            // walks toward the first tab, down toward the last.
-            "chrome:tabs" => {
-                let Some(split_id) = ed.active_window().tab_bar_split_at(col, row) else {
-                    return Ok(Disposition::Pass);
-                };
-                ed.dismiss_transient_popups();
-                ed.active_window().wheel_plugin_hook(col, row, delta);
-                ed.active_window_mut().scroll_tab_strip(split_id, delta);
-                Ok(Disposition::Consumed)
-            }
             // A split pane, hit in its content rect or scrollbar
             // gutter (moved from the old central `wheel_surface_at`
             // fork — the surface's wheel lives with the surface).
@@ -337,15 +269,6 @@ impl ChromeComponent for Splits {
     ) -> anyhow::Result<super::Disposition> {
         use super::Disposition;
         match bx.kind {
-            // A horizontal wheel over the tab strip pans it the same
-            // way the vertical wheel does.
-            "chrome:tabs" => {
-                let Some(split_id) = ed.active_window().tab_bar_split_at(col, row) else {
-                    return Ok(Disposition::Pass);
-                };
-                ed.active_window_mut().scroll_tab_strip(split_id, delta);
-                Ok(Disposition::Consumed)
-            }
             "chrome:editor" | "chrome:scrollbars" | "chrome:h_scrollbar" => {
                 let Some((split_id, buffer_id)) = ed.active_window().split_at_position(col, row)
                 else {
@@ -839,7 +762,62 @@ impl Editor {
         None
     }
 
-    pub(super) fn handle_click_split_controls(
+    /// What the pointer is on within a pane's tab strip.
+    ///
+    /// The strip is a node; its interior is the tab renderer's layout, so this
+    /// is the hit test the two boxes ran, in the order their `z` gave them:
+    /// the split controls are drawn over the tab row, so they answer first.
+    /// A cell that is only the strip's ground — the bar behind the tabs, the
+    /// scroll arrows, the "+" — names nothing, exactly as `chrome:tabs`
+    /// declined those and let the point fall through.
+    pub(crate) fn tab_strip_hover(&self, col: u16, row: u16) -> Option<HoverTarget> {
+        for (split_id, btn_row, start_col, end_col) in &self.active_layout().close_split_areas {
+            if row == *btn_row && col >= *start_col && col < *end_col {
+                return Some(HoverTarget::CloseSplitButton(*split_id));
+            }
+        }
+        for (split_id, btn_row, start_col, end_col) in &self.active_layout().maximize_split_areas {
+            if row == *btn_row && col >= *start_col && col < *end_col {
+                return Some(HoverTarget::MaximizeSplitButton(*split_id));
+            }
+        }
+        self.active_layout()
+            .tab_layouts
+            .iter()
+            .find_map(
+                |(split_id, tab_layout)| match tab_layout.hit_test(col, row) {
+                    Some(TabHit::CloseButton(target)) => {
+                        Some(HoverTarget::TabCloseButton(target, *split_id))
+                    }
+                    Some(TabHit::TabName(target)) => Some(HoverTarget::TabName(target, *split_id)),
+                    _ => None,
+                },
+            )
+    }
+
+    /// A right press on a tab raises its context menu; on the strip's ground
+    /// it raises none and leaves any open one to the base surface's clear.
+    ///
+    /// Context menus only make sense for buffer tabs — groups are
+    /// plugin-managed — which is what `as_buffer` is asking.
+    pub(crate) fn open_tab_context_menu(&mut self, col: u16, row: u16) {
+        let hit = self
+            .active_layout()
+            .tab_layouts
+            .iter()
+            .find_map(
+                |(split_id, tab_layout)| match tab_layout.hit_test(col, row) {
+                    Some(TabHit::TabName(target) | TabHit::CloseButton(target)) => {
+                        target.as_buffer().map(|bid| (*split_id, bid))
+                    }
+                    _ => None,
+                },
+            );
+        self.active_window_mut().tab_context_menu =
+            hit.map(|(split_id, buffer_id)| TabContextMenu::new(buffer_id, split_id, col, row + 1));
+    }
+
+    pub(crate) fn handle_click_split_controls(
         &mut self,
         col: u16,
         row: u16,
@@ -926,7 +904,7 @@ impl Editor {
         None
     }
 
-    pub(super) fn handle_click_tab_bar(&mut self, col: u16, row: u16) -> Option<AnyhowResult<()>> {
+    pub(crate) fn handle_click_tab_bar(&mut self, col: u16, row: u16) -> Option<AnyhowResult<()>> {
         let tab_hit = self
             .active_layout()
             .tab_layouts

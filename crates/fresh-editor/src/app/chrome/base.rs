@@ -1,10 +1,8 @@
-//! The base surface: the tab-strip right-click fallback and the
-//! wheel's drop floor (scroll surfaces each own their boxes in the
-//! Splits / FileExplorer components; what falls to the base has
-//! nothing scrollable under the pointer).
+//! The base surface: the tab context menu's dismissal and the wheel's
+//! drop floor (scroll surfaces each own their boxes in the Splits /
+//! FileExplorer components, or their nodes in the shell's tree; what
+//! falls to the base has nothing scrollable under the pointer).
 
-use crate::app::types::TabContextMenu;
-use crate::view::ui::tabs::TabHit;
 use crate::widgets::LayoutBox;
 use anyhow::Result as AnyhowResult;
 
@@ -26,24 +24,12 @@ impl ChromeComponent for Base {
         if ev.press != PointerPress::Right {
             return Ok(Disposition::Pass);
         }
-        // Right-click on a tab raises its context menu; anywhere else
-        // on the base surface clears it. Context menus only make sense
-        // for buffer tabs; groups are plugin-managed.
-        let tab_hit =
-            ed.active_layout().tab_layouts.iter().find_map(
-                |(split_id, tab_layout)| match tab_layout.hit_test(ev.col, ev.row) {
-                    Some(TabHit::TabName(target) | TabHit::CloseButton(target)) => {
-                        target.as_buffer().map(|bid| (*split_id, bid))
-                    }
-                    _ => None,
-                },
-            );
-        if let Some((split_id, buffer_id)) = tab_hit {
-            ed.active_window_mut().tab_context_menu =
-                Some(TabContextMenu::new(buffer_id, split_id, ev.col, ev.row + 1));
-        } else {
-            ed.active_window_mut().tab_context_menu = None;
-        }
+        // A right-click that got this far was not on a tab strip — the strip
+        // is a node in the shell's tree and claims its own, raising the tab's
+        // context menu (`Editor::open_tab_context_menu`). What is left here is
+        // the other half of that statement: a right-click anywhere else
+        // dismisses the menu.
+        ed.active_window_mut().tab_context_menu = None;
         Ok(Disposition::Consumed)
     }
 

@@ -299,6 +299,115 @@ mod tests {
         }
     }
 
+    /// **A press on a pane's strip names that pane, because it is that pane's.**
+    ///
+    /// Two `LayoutBox`es covered the tab row — the strip at z 60 and the split
+    /// controls at 70 — and both recovered the pane by comparing the cell
+    /// against every recorded `bar_area` in turn (`tab_bar_split_at`). A node
+    /// knows which pane it belongs to; what is left to hit-test is the strip's
+    /// *interior*, which is the tab renderer's layout and stays there.
+    #[test]
+    fn a_press_on_a_strip_names_the_pane_it_belongs_to() {
+        use fresh_ui::{Input, Mods, Point};
+        let root = split(SplitDirection::Vertical, leaf(0), leaf(1), 0.5, 10);
+        let with_tabs = PaneChrome {
+            tabs: true,
+            vscroll: false,
+            hscroll: false,
+        };
+        let s = Splits {
+            root: root.clone(),
+            maximized: None,
+            chrome: [
+                (LeafId(SplitId(0)), with_tabs),
+                (LeafId(SplitId(1)), with_tabs),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(overlay(&s), Size::new(80, 24));
+
+        // Each pane's strip is its own top row, where the interior puts it.
+        // The right pane starts at 41: the divider takes the column at 40.
+        for (leaf_id, want_x) in [(LeafId(SplitId(0)), 0u16), (LeafId(SplitId(1)), 41)] {
+            let r = ui.rect_of(ui.find_by_key(&tabs_key(leaf_id)).expect("a strip"));
+            assert_eq!(
+                (r.x, r.y, r.h),
+                (want_x as i32, 0, 1),
+                "{leaf_id:?}'s strip is its top row"
+            );
+        }
+
+        let press = |ui: &mut Ui<UiMsg>, x: u16| -> Vec<UiFact> {
+            ui.dispatch(Input::press(
+                Point::new(x as i32, 0),
+                MouseButton::Left,
+                Mods::NONE,
+            ))
+            .msgs
+            .into_iter()
+            .filter_map(|m| match m {
+                UiMsg::Ui(f) if f != UiFact::ClearTabMenus => Some(f),
+                _ => None,
+            })
+            .collect()
+        };
+        assert_eq!(
+            press(&mut ui, 5),
+            vec![UiFact::PaneTabsPress {
+                pane: LeafId(SplitId(0)),
+                x: 5,
+                y: 0
+            }],
+            "the left strip"
+        );
+        assert_eq!(
+            press(&mut ui, 60),
+            vec![UiFact::PaneTabsPress {
+                pane: LeafId(SplitId(1)),
+                x: 60,
+                y: 0
+            }],
+            "and the right one"
+        );
+    }
+
+    /// A pane with no strip has no row for one, so nothing on that pane's top
+    /// row is the strip's — the flag decides it, not a recorded rectangle.
+    #[test]
+    fn a_pane_with_no_strip_answers_no_press() {
+        use fresh_ui::{Input, Mods, Point};
+        let s = Splits {
+            root: leaf(0),
+            maximized: None,
+            chrome: [(LeafId(SplitId(0)), PaneChrome::default())]
+                .into_iter()
+                .collect(),
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(overlay(&s), Size::new(80, 24));
+        let r = ui.rect_of(
+            ui.find_by_key(&tabs_key(LeafId(SplitId(0))))
+                .expect("a strip"),
+        );
+        assert_eq!(r.h, 0, "no row for it");
+        let said: Vec<UiFact> = ui
+            .dispatch(Input::press(
+                Point::new(5, 0),
+                MouseButton::Left,
+                Mods::NONE,
+            ))
+            .msgs
+            .into_iter()
+            .filter_map(|m| match m {
+                UiMsg::Ui(f) if f != UiFact::ClearTabMenus => Some(f),
+                _ => None,
+            })
+            .collect();
+        assert!(said.is_empty(), "got {said:?}");
+    }
+
     /// **The right-click clear fires even when the click is consumed.**
     ///
     /// That is the whole point of it, and the thing the `LayoutBox` at z 200
@@ -479,12 +588,13 @@ pub struct Splits {
 /// The grid mounted over the body's `Host` leaf: geometry and the dividers'
 /// gestures, painting nothing.
 ///
-/// The panes are `Ignore` — not there at all, as far as the pointer is
-/// concerned — because the body's clicks are still the legacy walk's: placing
-/// a caret, selecting a word, hitting a tab strip. What the tree takes is the
-/// divider, and it takes it *because the node knows which container it is*.
-/// `handle_click_split_separator` searched a recorded list of separator
-/// rectangles to answer that, comparing a click against each in turn.
+/// The panes are `Transparent`: what the tree claims inside one, it claims, and
+/// everything else carries on to the legacy walk — placing a caret, selecting
+/// a word, the scrollbars. What the tree takes so far is the divider and the
+/// tab strip, and it takes each *because the node knows which pane or
+/// container it is*. `handle_click_split_separator` and `tab_bar_split_at`
+/// both answered that by comparing a cell against a recorded list of
+/// rectangles, one at a time.
 pub fn overlay(s: &Splits) -> Node<UiMsg> {
     dress(
         grid::<UiMsg>(&s.root, s.maximized),
@@ -511,7 +621,7 @@ fn dress(
     let _ = n;
     if let Some(id) = maximized {
         if let Some(SplitNode::Leaf { split_id, .. }) = root.find(id.into()) {
-            return pane_inert::<UiMsg>().children([pane_interior::<UiMsg>(
+            return pane_inert::<UiMsg>().children([live_interior(
                 *split_id,
                 chrome.get(split_id).copied().unwrap_or_default(),
             )]);
@@ -521,18 +631,23 @@ fn dress(
     dressed(root, chrome)
 }
 
+/// A pane, as far as the pointer is concerned: `Transparent`, so its interior
+/// is reachable and everything it does not claim carries on to the legacy walk
+/// behind it.
+///
+/// It was `Ignore` — not there at all — while the pane held nothing but the
+/// painter's cells. Now the strip is a node inside it, and `Ignore` would hide
+/// that node along with the pane.
 fn pane_inert<M: 'static>() -> Node<M> {
-    row().pointer_mode(PointerMode::Ignore)
+    row().pointer_mode(PointerMode::Transparent)
 }
 
 fn dressed(n: &SplitNode, chrome: &HashMap<LeafId, PaneChrome>) -> Node<UiMsg> {
     match n {
-        SplitNode::Leaf { split_id, .. } => {
-            pane_inert::<UiMsg>().children([pane_interior::<UiMsg>(
-                *split_id,
-                chrome.get(split_id).copied().unwrap_or_default(),
-            )])
-        }
+        SplitNode::Leaf { split_id, .. } => pane_inert::<UiMsg>().children([live_interior(
+            *split_id,
+            chrome.get(split_id).copied().unwrap_or_default(),
+        )]),
         SplitNode::Grouped { layout, .. } => dressed(layout, chrome),
         SplitNode::Split {
             direction,
@@ -607,6 +722,82 @@ fn divider(id: ContainerId, dir: SplitDirection) -> Node<UiMsg> {
         .on_leave(Rc::new(move |_: &Event| {
             Some(UiMsg::Ui(UiFact::SeparatorHover(None)))
         }))
+}
+
+/// A pane's interior with the parts that answer for themselves wired up.
+///
+/// The shape is `pane_interior`'s — one statement of it, which the model also
+/// lays out with `M = ()` to derive rectangles. What the shell adds is the
+/// strip's gestures.
+fn live_interior(id: LeafId, c: PaneChrome) -> Node<UiMsg> {
+    pane_interior::<UiMsg>(id, c, tab_strip(id))
+}
+
+/// The tab strip, as one node per pane.
+///
+/// **The strip is the node; its interior is still the painter's.** The tabs,
+/// the close buttons, the "+" and the scroll arrows are laid out by the tab
+/// renderer and hit-tested against what it recorded, so what moves here is
+/// *which pane's strip the pointer is on* — which the node knows because it is
+/// that pane's — and the ordering that two `LayoutBox`es used to express by
+/// their `z`: the split controls are drawn on top of the tab row, so they are
+/// asked first.
+fn tab_strip(id: LeafId) -> Node<UiMsg> {
+    let at = |e: &Event| (e.pos.x.max(0) as u16, e.pos.y.max(0) as u16);
+    gesture(row())
+        .on(
+            GestureKind::Press,
+            Rc::new(move |e: &Event| {
+                let (x, y) = at(e);
+                e.stop();
+                Some(UiMsg::Ui(match e.button {
+                    MouseButton::Left => UiFact::PaneTabsPress { pane: id, x, y },
+                    // Right-click on a tab raises its context menu. The clear
+                    // half — a right-click anywhere else dismisses it — stays
+                    // on the legacy walk's base surface, which this claim
+                    // keeps out of the way of.
+                    MouseButton::Right => UiFact::PaneTabsSecondary { pane: id, x, y },
+                    _ => return None,
+                }))
+            }),
+        )
+        .on(
+            GestureKind::Move,
+            Rc::new(move |e: &Event| {
+                let (x, y) = at(e);
+                Some(UiMsg::Ui(UiFact::PaneTabsHover(Some((id, x, y)))))
+            }),
+        )
+        .on_enter(Rc::new(move |e: &Event| {
+            let (x, y) = at(e);
+            Some(UiMsg::Ui(UiFact::PaneTabsHover(Some((id, x, y)))))
+        }))
+        .on_leave(Rc::new(move |_: &Event| {
+            Some(UiMsg::Ui(UiFact::PaneTabsHover(None)))
+        }))
+        .on(
+            GestureKind::Wheel,
+            Rc::new(move |e: &Event| {
+                let (x, y) = at(e);
+                e.stop();
+                // A wheel over a horizontal strip pans it, on either axis: up
+                // and left walk toward the first tab, down and right toward
+                // the last. The vertical one also dismisses the transient
+                // popups and fires the plugin hook, as it did on the box.
+                Some(UiMsg::Ui(match e.axis {
+                    fresh_ui::Axis::Vertical => UiFact::PaneTabsWheel {
+                        pane: id,
+                        x,
+                        y,
+                        delta: e.delta,
+                    },
+                    fresh_ui::Axis::Horizontal => UiFact::PaneTabsPan {
+                        pane: id,
+                        delta: e.delta,
+                    },
+                }))
+            }),
+        )
 }
 
 /// **A right-click anywhere clears the two left-click-only menus**, then lets
@@ -716,10 +907,13 @@ impl PaneChrome {
 /// The horizontal bar stops short of the vertical one's column rather than
 /// running under it. That is the painter's arithmetic and it is the one thing
 /// here a reader would get wrong from the picture alone.
-pub fn pane_interior<M: 'static>(id: LeafId, c: PaneChrome) -> Node<M> {
+/// `tabs` is the strip's own node: `row()` where only its rectangle is wanted
+/// (the model's layout query), the gesture node where the pointer has to reach
+/// it. The key is applied here either way, so a caller cannot forget it.
+pub fn pane_interior<M: 'static>(id: LeafId, c: PaneChrome, tabs: Node<M>) -> Node<M> {
     let cells = |on: bool| Sizing::Cells(on as u16);
     col().children([
-        row().key(tabs_key(id)).h(cells(c.tabs)),
+        tabs.key(tabs_key(id)).h(cells(c.tabs)),
         row().flex(1).children([
             row().key(content_key(id)).flex(1),
             row().key(vscroll_key(id)).w(cells(c.vscroll)),

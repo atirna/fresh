@@ -845,6 +845,35 @@ impl Editor {
                 }
             }
             UiFact::StatusBarTokenClicked(key) => self.fire_status_bar_token_click(&key),
+            // The tab strip. The strip is a node per pane; what is *inside* it
+            // is the tab renderer's layout, hit-tested against what it
+            // recorded — so these arms are the box handlers, minus the box.
+            UiFact::PaneTabsPress { pane, x, y } => {
+                let _ = pane;
+                // Split controls first: they are drawn on top of the tab row,
+                // which two `LayoutBox`es said by sitting at z 70 and 60.
+                let r = self
+                    .handle_click_split_controls(x, y)
+                    .or_else(|| self.handle_click_tab_bar(x, y));
+                if let Some(Err(e)) = r {
+                    tracing::warn!("tab strip click failed: {e}");
+                }
+            }
+            UiFact::PaneTabsSecondary { pane, x, y } => {
+                let _ = pane;
+                self.open_tab_context_menu(x, y);
+            }
+            UiFact::PaneTabsHover(at) => {
+                self.shell_hover = at.and_then(|(_, x, y)| self.tab_strip_hover(x, y));
+            }
+            UiFact::PaneTabsWheel { pane, x, y, delta } => {
+                self.dismiss_transient_popups();
+                self.active_window().wheel_plugin_hook(x, y, delta);
+                self.active_window_mut().scroll_tab_strip(pane, delta);
+            }
+            UiFact::PaneTabsPan { pane, delta } => {
+                self.active_window_mut().scroll_tab_strip(pane, delta);
+            }
             UiFact::ClearTabMenus => {
                 self.active_window_mut().new_tab_menu = None;
                 self.active_window_mut().close_split_menu = None;

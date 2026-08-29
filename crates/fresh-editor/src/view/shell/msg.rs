@@ -14,6 +14,7 @@
 //! The library's own demo makes the same split for the same reason.
 
 use crate::input::keybindings::Action;
+use crate::model::event::LeafId;
 
 /// A message from the shell's widget tree.
 #[derive(Clone, Debug)]
@@ -56,6 +57,37 @@ pub enum UiFact {
     /// at a time — the tree's answer, kept apart from the legacy walk's in
     /// `Editor::shell_hover`.
     Hover(Option<crate::app::types::HoverTarget>),
+    // -- a pane's tab strip ---------------------------------------------------
+    /// A left press on a pane's tab strip, at a cell.
+    ///
+    /// The strip is one node per pane; its *interior* — the tabs, their close
+    /// buttons, the "+", the scroll arrows and the split controls drawn over
+    /// them — is laid out by the tab renderer and hit-tested against what it
+    /// recorded. So the fact says which strip and where, and the two handlers
+    /// behind it are the ones the boxes dispatched to, in the order their `z`
+    /// used to express: the split controls sit on top of the tab row.
+    PaneTabsPress { pane: LeafId, x: u16, y: u16 },
+    /// A right press on a pane's tab strip: the tab's context menu, on the tab
+    /// under the pointer. Dismissing it from elsewhere is still the base
+    /// surface's, which this claim simply keeps out of the way of.
+    PaneTabsSecondary { pane: LeafId, x: u16, y: u16 },
+    /// The pointer is on a pane's tab strip at a cell, or has left one.
+    ///
+    /// Which tab, which close button, which split control is the tab
+    /// renderer's hit test — resolved where that layout lives, not here.
+    PaneTabsHover(Option<(LeafId, u16, u16)>),
+    /// A vertical wheel over a pane's tab strip pans it: up walks toward the
+    /// first tab, down toward the last.
+    PaneTabsWheel {
+        pane: LeafId,
+        x: u16,
+        y: u16,
+        delta: i32,
+    },
+    /// A sideways wheel over the strip pans it the same way, without the
+    /// popup dismissal and plugin hook the vertical one carries.
+    PaneTabsPan { pane: LeafId, delta: i32 },
+
     /// A right-click landed somewhere — anywhere — so the two left-click-only
     /// menus (the "+" new-tab menu, the close-split confirmation) close.
     ///
