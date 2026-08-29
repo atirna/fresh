@@ -1016,22 +1016,18 @@ impl Editor {
             // is the tab renderer's layout, hit-tested against what it
             // recorded — so these arms are the box handlers, minus the box.
             UiFact::PaneTabsPress { pane, x, y } => {
-                let _ = pane;
                 // Split controls first: they are drawn on top of the tab row,
                 // which two `LayoutBox`es said by sitting at z 70 and 60.
                 let r = self
-                    .handle_click_split_controls(x, y)
-                    .or_else(|| self.handle_click_tab_bar(x, y));
+                    .handle_click_split_controls(pane, x, y)
+                    .or_else(|| self.handle_click_tab_bar(pane, x, y));
                 if let Some(Err(e)) = r {
                     tracing::warn!("tab strip click failed: {e}");
                 }
             }
-            UiFact::PaneTabsSecondary { pane, x, y } => {
-                let _ = pane;
-                self.open_tab_context_menu(x, y);
-            }
+            UiFact::PaneTabsSecondary { pane, x, y } => self.open_tab_context_menu(pane, x, y),
             UiFact::PaneTabsHover(at) => {
-                self.shell_hover = at.and_then(|(_, x, y)| self.tab_strip_hover(x, y));
+                self.shell_hover = at.and_then(|(pane, x, y)| self.tab_strip_hover(pane, x, y));
             }
             UiFact::PaneTabsWheel { pane, x, y, delta } => {
                 self.dismiss_transient_popups();

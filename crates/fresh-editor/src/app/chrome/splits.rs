@@ -27,6 +27,18 @@ use super::Editor;
 
 /// Behavior owned by this component (moved from mouse_input.rs —
 /// the handlers its arms dispatch to).
+/// Which of a pane's two strip buttons a cell belongs to.
+///
+/// Both are recorded as `(pane, row, start_col, end_col)` by the tab-bar
+/// painter and both are read the same way; naming the answer is what lets the
+/// hover and the click share one lookup instead of writing the comparison out
+/// four times.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SplitControl {
+    Close,
+    Maximize,
+}
+
 impl Editor {
     /// Double-click on a split's content rect: the Splits component's
     /// `chrome:editor` arm (moved from the old post-walk scan).
@@ -557,6 +569,26 @@ impl Editor {
         })
     }
 
+    /// Whether one of a pane's split controls is under `(col, row)`.
+    ///
+    /// The controls are drawn *over* the tab row — two `LayoutBox`es said so
+    /// with z 70 over z 60 — so every reader of the strip asks this first.
+    fn split_control_at(&self, pane: LeafId, col: u16, row: u16) -> Option<SplitControl> {
+        let hit = |areas: &[(LeafId, u16, u16, u16)]| {
+            areas
+                .iter()
+                .any(|(split_id, btn_row, start_col, end_col)| {
+                    *split_id == pane && row == *btn_row && col >= *start_col && col < *end_col
+                })
+                .then_some(())
+        };
+        let layout = self.active_layout();
+        if hit(&layout.close_split_areas).is_some() {
+            return Some(SplitControl::Close);
+        }
+        hit(&layout.maximize_split_areas).map(|()| SplitControl::Maximize)
+    }
+
     /// What the pointer is on within a pane's tab strip.
     ///
     /// The strip is a node; its interior is the tab renderer's layout, so this
@@ -565,29 +597,22 @@ impl Editor {
     /// A cell that is only the strip's ground — the bar behind the tabs, the
     /// scroll arrows, the "+" — names nothing, exactly as `chrome:tabs`
     /// declined those and let the point fall through.
-    pub(crate) fn tab_strip_hover(&self, col: u16, row: u16) -> Option<HoverTarget> {
-        for (split_id, btn_row, start_col, end_col) in &self.active_layout().close_split_areas {
-            if row == *btn_row && col >= *start_col && col < *end_col {
-                return Some(HoverTarget::CloseSplitButton(*split_id));
-            }
+    pub(crate) fn tab_strip_hover(&self, pane: LeafId, col: u16, row: u16) -> Option<HoverTarget> {
+        match self.split_control_at(pane, col, row) {
+            Some(SplitControl::Close) => return Some(HoverTarget::CloseSplitButton(pane)),
+            Some(SplitControl::Maximize) => return Some(HoverTarget::MaximizeSplitButton(pane)),
+            None => {}
         }
-        for (split_id, btn_row, start_col, end_col) in &self.active_layout().maximize_split_areas {
-            if row == *btn_row && col >= *start_col && col < *end_col {
-                return Some(HoverTarget::MaximizeSplitButton(*split_id));
-            }
-        }
-        self.active_layout()
+        match self
+            .active_layout()
             .tab_layouts
-            .iter()
-            .find_map(
-                |(split_id, tab_layout)| match tab_layout.hit_test(col, row) {
-                    Some(TabHit::CloseButton(target)) => {
-                        Some(HoverTarget::TabCloseButton(target, *split_id))
-                    }
-                    Some(TabHit::TabName(target)) => Some(HoverTarget::TabName(target, *split_id)),
-                    _ => None,
-                },
-            )
+            .get(&pane)?
+            .hit_test(col, row)
+        {
+            Some(TabHit::CloseButton(target)) => Some(HoverTarget::TabCloseButton(target, pane)),
+            Some(TabHit::TabName(target)) => Some(HoverTarget::TabName(target, pane)),
+            _ => None,
+        }
     }
 
     /// A right press on a tab raises its context menu; on the strip's ground
@@ -595,25 +620,24 @@ impl Editor {
     ///
     /// Context menus only make sense for buffer tabs — groups are
     /// plugin-managed — which is what `as_buffer` is asking.
-    pub(crate) fn open_tab_context_menu(&mut self, col: u16, row: u16) {
-        let hit = self
-            .active_layout()
-            .tab_layouts
-            .iter()
-            .find_map(
-                |(split_id, tab_layout)| match tab_layout.hit_test(col, row) {
+    pub(crate) fn open_tab_context_menu(&mut self, pane: LeafId, col: u16, row: u16) {
+        let hit =
+            self.active_layout()
+                .tab_layouts
+                .get(&pane)
+                .and_then(|tab_layout| match tab_layout.hit_test(col, row) {
                     Some(TabHit::TabName(target) | TabHit::CloseButton(target)) => {
-                        target.as_buffer().map(|bid| (*split_id, bid))
+                        target.as_buffer()
                     }
                     _ => None,
-                },
-            );
+                });
         self.active_window_mut().tab_context_menu =
-            hit.map(|(split_id, buffer_id)| TabContextMenu::new(buffer_id, split_id, col, row + 1));
+            hit.map(|buffer_id| TabContextMenu::new(buffer_id, pane, col, row + 1));
     }
 
     pub(crate) fn handle_click_split_controls(
         &mut self,
+        pane: LeafId,
         col: u16,
         row: u16,
     ) -> Option<AnyhowResult<()>> {
@@ -621,8 +645,8 @@ impl Editor {
             .active_layout()
             .close_split_areas
             .iter()
-            .find(|(_, btn_row, start_col, end_col)| {
-                row == *btn_row && col >= *start_col && col < *end_col
+            .find(|(split_id, btn_row, start_col, end_col)| {
+                *split_id == pane && row == *btn_row && col >= *start_col && col < *end_col
             })
             .map(|(split_id, btn_row, start_col, _)| (*split_id, *btn_row, *start_col));
         if let Some((split_id, btn_row, start_col)) = close_split_hit {
@@ -641,8 +665,8 @@ impl Editor {
             .active_layout()
             .maximize_split_areas
             .iter()
-            .find(|(_, btn_row, start_col, end_col)| {
-                row == *btn_row && col >= *start_col && col < *end_col
+            .find(|(split_id, btn_row, start_col, end_col)| {
+                *split_id == pane && row == *btn_row && col >= *start_col && col < *end_col
             })
             .map(|(split_id, _, _, _)| *split_id);
         if let Some(target) = maximize_target {
@@ -699,15 +723,18 @@ impl Editor {
         None
     }
 
-    pub(crate) fn handle_click_tab_bar(&mut self, col: u16, row: u16) -> Option<AnyhowResult<()>> {
-        let tab_hit = self
+    pub(crate) fn handle_click_tab_bar(
+        &mut self,
+        pane: LeafId,
+        col: u16,
+        row: u16,
+    ) -> Option<AnyhowResult<()>> {
+        let hit = self
             .active_layout()
             .tab_layouts
-            .iter()
-            .find_map(|(split_id, tab_layout)| {
-                tab_layout.hit_test(col, row).map(|h| (*split_id, h))
-            });
-        let (split_id, hit) = tab_hit?;
+            .get(&pane)
+            .and_then(|tab_layout| tab_layout.hit_test(col, row))?;
+        let split_id = pane;
         tracing::trace!(?split_id, ?hit, col, row, "handle_click_tab_bar: hit");
         match hit {
             TabHit::CloseButton(target) => {
