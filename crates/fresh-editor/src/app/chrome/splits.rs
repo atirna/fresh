@@ -583,6 +583,35 @@ impl Editor {
         })
     }
 
+    /// The pane whose tab strip covers a screen cell.
+    ///
+    /// A pane with no strip has none — which is the whole point: the caller
+    /// that guessed this row as "the content's, minus one" named the row above
+    /// the pane for every such pane.
+    pub(crate) fn pane_strip_at(&self, col: u16, row: u16) -> Option<LeafId> {
+        let ui = self.shell_ui.as_ref()?;
+        let frame = ratatui::layout::Rect::new(
+            0,
+            0,
+            self.active_chrome().last_frame.width,
+            self.active_chrome().last_frame.height,
+        );
+        let leaves = self
+            .windows
+            .get(&self.active_window)?
+            .buffers
+            .splits()
+            .map(|(mgr, _)| mgr.visible_leaves())?;
+        leaves.into_iter().find_map(|(pane, _)| {
+            let strip = crate::view::shell::rect_of(
+                ui,
+                &crate::view::shell::splits::tabs_key(pane),
+                frame,
+            )?;
+            crate::app::chrome::in_rect(col, row, strip).then_some(pane)
+        })
+    }
+
     /// The pane a screen cell belongs to, counting its scrollbar column.
     ///
     /// The wider question than [`Self::pane_content_at`], and the one
