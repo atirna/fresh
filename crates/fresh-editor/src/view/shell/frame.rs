@@ -279,11 +279,11 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     let sidebar = |e: &super::file_explorer::Explorer| {
         named(HostRegion::Explorer, super::file_explorer::explorer(e)).w(Sizing::Cells(e.cols))
     };
-    // The body: the painter's `Host` leaf, with the grid's geometry over it.
-    // The grid paints nothing — the split renderer still draws the panes and
-    // their separators — so what the layer contributes is the dividers'
-    // gestures and a rectangle per pane that is *the* answer rather than a
-    // second one: `get_leaves_with_rects` reads this same description.
+    // The body: the grid, with a `Host` under it for what belongs to no pane.
+    // Each pane carries its own `Host` (see `splits::live_pane`), so the
+    // rectangle a pane is painted at is the rectangle layout gave it. What
+    // this one is left is the panes' shared preamble and the separators
+    // between them — the gaps, which belong to neither side.
     let body_region = |f: &Frame| -> Node<UiMsg> {
         match &f.splits {
             Some(s) => named(

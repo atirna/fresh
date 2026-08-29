@@ -24,11 +24,11 @@ mod orchestration;
 // three for a caller that hands it a whole rectangle; the shell folds a
 // display list and calls them one `Host` at a time instead, so that a pane's
 // rectangle is the one layout gave it.
+pub(crate) use orchestration::render_buffer::wrap_index_geometry_for;
 pub(crate) use orchestration::{
     paint_leaf, paint_separators, prepare_content, record_scrollbar_theme_runs, ContentPass,
-    FrameFacts, PaneAreas, Stores, VisibleBuffer,
+    FrameFacts, PaneAreas, Stores,
 };
-pub(crate) use orchestration::render_buffer::wrap_index_geometry_for;
 mod post_pass;
 pub(crate) mod scrollbar;
 #[cfg(test)]
