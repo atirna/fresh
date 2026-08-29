@@ -79,7 +79,7 @@ pass review, ship, and reproduce the thing the migration is removing.
 | 0.2 | Six `shell_*` / `pending_*` fields carry values around the tree. | `provide` them as `Ambient`s: the theme, the pane-chrome map, the hover target. Dependents are dirtied, not the root. | Adding a seventh. Each one is a value the tree could have carried, parked on the editor because carrying it needed a primitive we had not adopted. |
 | 0.3 | No surface owns its own state. | Surfaces whose state is *theirs* — a list's scroll, a tree's expansion, a field's cursor — become `Component`s that own it. | Moving editor-model state into components. The rule is §4.3's: state the editor acts on stays on the editor; state that exists only because something is on screen belongs to the element. |
 | 0.4 | §4.7's practice rules were never written. | Write them, from the benchmark that already exists (a whole frame: 122µs retained, 163µs cold). | Skipping them again. They are the difference between a retained tree and an immediate-mode one with extra steps. |
-| 0.5 | **One retained tree, N windows.** `shell_ui` is on the `Editor`, not on `Window`, and nothing in `view/shell/` mentions `WindowId`. See below — this is the item that turns 0.3 from a refactor into a correctness change. | `Window.shell_ui`: one `Ui` per window, encapsulated by construction. | Keying subtrees by `WindowId` instead. It works and it relies on remembering, everywhere, forever. |
+| 0.5 | **One retained tree, N windows, and no window ever named in it.** Turns 0.3 from a refactor into a correctness change; see below. | One tree, two scopes: the window's half under a single `Key::Pair("window", id)`, the editor-global surfaces (dock, modals, trust, inspector) outside it. | A `Ui` per window. It looks like the encapsulated answer and it breaks the dock, which is editor-global by design. |
 
 #### 0.5 in full: the tree is shared across windows, and the windows are not
 
@@ -108,28 +108,53 @@ system prevents one workspace's authority/trust/env from leaking into another
 (issue #2280)."* The shell tree is precisely the shared mutable state that
 sentence is about — it is simply newer than the sentence.
 
-**Three ways to fix it, and only one that both encapsulates and preserves.**
+**The obvious fix is wrong, and the orchestrator dock is what proves it.**
 
-- **One `Ui` per window** (`Window.shell_ui`). Cross-window matching becomes
-  impossible rather than avoidable; each window keeps its element state, focus
-  and dirty set while it is inactive. The cost is memory for N retained trees,
-  not time — only the active one is `frame()`d. And it is already coherent:
-  the frame description is a function of the active window today
-  (`menu_bar_visible`, `status_bar_visible` and the rest are per-window
-  fields). **This is the one to take.**
-- **One `Ui`, the whole per-window subtree under a single
-  `Key::Pair("window", id)`.** Cheap, and one rule in one place. But a changed
-  key at that position *discards* the subtree, so switching windows throws away
-  the state you wanted preserved. Right encapsulation, wrong semantics.
-- **Key every window-owned subtree by `WindowId`.** Explicit, per goal 4, and
-  it relies on every author remembering it in every new surface. One unkeyed
-  subtree is a silent leak between workspaces.
+A `Ui` per window (`Window.shell_ui`) looks right — cross-window matching
+becomes impossible rather than avoidable, and each window keeps its element
+state while inactive. It is the wrong shape, because **the frame is not wholly
+per-window.** The dock is carved out of the frame *before* the window's chrome
+column, its state is `Editor.dock` — the field's own doc says "the
+**editor-global** left dock panel" — it lists and switches between *all*
+windows, and it deliberately persists while the active window changes. Give
+each window its own tree and the dock is described into every one of them, its
+element state follows whichever window is active, and the sessions list loses
+its scroll on every workspace switch. That is the same bug this item exists to
+prevent, arrived at from the other side.
 
-**The six editor-global shell fields move with it.** `shell_hover`,
-`shell_hover_at`, `shell_menu_open_before`, `shell_frame_status_bar`,
-`pending_pane_chrome` and `shell_pointer_event` are all per-window facts
-parked on the `Editor`; 0.2 turns most of them into ambients, and this decides
-whose tree those ambients live in.
+So the scoping has to be **inside one tree**, and the frame is two scopes side
+by side:
+
+```text
+row([ dock            // editor-scoped: outside the window key
+    , window_area     // window-scoped: under Key::Pair("window", active)
+    ])
+```
+
+Editor-scoped, with the dock: the four modals, the workspace-trust prompt and
+the theme inspector — everything whose state is on the `Editor` and whose
+lifetime is not a window's.
+
+**And the objection to that shape has a principled answer.** A changed key at
+the window position *discards* the subtree, so switching windows throws away
+its element state. That is correct, and it is §4.3's state-home rule read
+backwards: **anything that must survive a window switch is model state, not
+view state** — it survives being off-screen, so it was never ephemeral. The
+things that must survive already live on the `Window` (the explorer's state,
+the split view states, the buffer set). The dock demonstrates the rule from the
+other side: its scroll survives switches precisely because the dock is *not* in
+the window subtree.
+
+What this costs is discipline in one place instead of everywhere: one key, at
+one node, rather than `WindowId` threaded through every window-owned subtree
+where a single omission is a silent leak between workspaces.
+
+**The six editor-global shell fields sort themselves by the same question.**
+`shell_hover`, `shell_hover_at`, `shell_menu_open_before`,
+`shell_frame_status_bar` and `pending_pane_chrome` are per-window facts parked
+on the `Editor` and move to `Window`; `shell_pointer_event` is frame-scoped and
+dies with B.4. 0.2 turns most of them into ambients, and the scope they are
+provided at is the scope they belong to.
 
 ### A. The keyboard engine
 
@@ -161,6 +186,7 @@ whose tree those ambients live in.
 | C.3 | `HitArea` (byte ranges) and `LayoutBox` (a parent-linked, z-ordered arena). | Both deleted. `LayoutBox` is a second layout tree; goal 5 allows one. | Keeping `LayoutBox` as the web bridge's hit list. The web is a consumer of the display list (D.3), which already carries keyed rectangles. |
 | C.4 | `WidgetMutation`'s fast path — a channel that patches retained state in place. | An ordinary rebuild. Goal 3: a rebuild costs one allocation per node, so the incentive the fast path answers does not exist. | Keeping it as an optimisation without measuring it against 0.4's benchmark. |
 | C.5 | Buffer-mounted panels (`mountWidgetPanel`). | A subtree in the pane's content slot; the virtual buffer stays as a text mirror for search, copy and the `lines_changed` hooks. Removes the documented limitation that mounted panels drop overlays and popups. | Deciding it by which is less work. It is the only open *design* question left in the whole migration: it was deferred deliberately, to be taken with C.1's experience in hand, not settled by default. |
+| C.5b | **The dock is editor-global UI built from `Editor.windows`, not from the active window.** Its content is the orchestrator's `WidgetSpec`; its column, grip and blur observer are already nodes. | Its content lands like any other panel (C.1), mounted *outside* the window key per 0.5. Its own two remainders go with it: `chrome::Dock::on_layer_key` (A.2) and the scrollbar-reveal hover, which reads zones the plugin publishes from inside the panel. | Building its description from `active_window()`. `shell_frame` does that for nearly everything else, and the dock is the one surface for which it is wrong. |
 | C.6 | The floating panel's frame — scrim, border, title, `[×]`, placement. | An ordinary bordered node with a `Host` content leaf, like every other migrated frame. **Free today**, ahead of the rest of C. | — |
 
 ### D. Paint arrangements still mixed
