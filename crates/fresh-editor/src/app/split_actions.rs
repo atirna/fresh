@@ -9,7 +9,7 @@
 
 use fresh_i18n::t;
 
-use crate::model::event::{BufferId, ContainerId, LeafId, SplitDirection, SplitId};
+use crate::model::event::{BufferId, LeafId, SplitId};
 use crate::view::folding::CollapsedFoldLineRange;
 use crate::view::split::{SplitViewState, TabTarget};
 
@@ -408,12 +408,6 @@ impl Editor {
             }
             Err(e) => self.set_status_message(e),
         }
-    }
-
-    /// Get cached separator areas for testing
-    /// Returns (split_id, direction, x, y, length) tuples
-    pub fn get_separator_areas(&self) -> &[(ContainerId, SplitDirection, u16, u16, u16)] {
-        &self.active_layout().separator_areas
     }
 
     /// Get cached tab layouts for testing

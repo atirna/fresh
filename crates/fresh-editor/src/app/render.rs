@@ -806,7 +806,6 @@ impl Editor {
             tab_layouts,
             view_line_mappings,
             horizontal_scrollbar_areas,
-            grouped_separator_areas,
         } = body.finish();
         self.shell_ui = Some(ui);
 
@@ -1063,14 +1062,18 @@ impl Editor {
         // apply_all runs at the end of render) so the first frame of the
         // effect lands on the same paint that made the buffer visible.
         self.drain_pending_vb_animations();
-        let mut separator_areas = self
-            .split_manager_mut()
-            .get_separators_with_ids(editor_content_area);
-        // Grouped subtrees live in a side-map outside the main split tree, so
-        // their inner separators are not visited by `get_separators_with_ids`
-        // above. The renderer collected them (using the same content rect it
-        // drew them at) — merge so clicks on those rendered columns register.
-        separator_areas.extend(grouped_separator_areas.iter().copied());
+        // Where the dividers are, read off the tree that placed them. Two
+        // derivations met here: a second layout walk over the split tree
+        // (`get_separators_with_ids`, running `split_rect_ext` again against a
+        // rectangle the caller supplied) for the main grid, and the painter's
+        // own recording for the grouped subtrees, which the first one could not
+        // see. One list now, from the nodes.
+        let separator_areas = match (self.shell_ui.as_ref(), shell.splits.as_ref()) {
+            (Some(ui), Some(splits)) => {
+                crate::view::shell::splits::separator_rects(ui, splits, size)
+            }
+            _ => Vec::new(),
+        };
         self.active_layout_mut().separator_areas = separator_areas;
         self.active_layout_mut().last_editor_content_area = Some(editor_content_area);
 

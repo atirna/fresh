@@ -215,7 +215,6 @@ impl<'a> BodyPainter<'a> {
     fn body(&mut self, area: Rect, buf: &mut Buffer) {
         let state = self.state;
         self.screen_width = buf.area.width;
-        let out = &mut self.out;
         self.pass = with_grid(
             self.editor,
             state,
@@ -232,7 +231,7 @@ impl<'a> BodyPainter<'a> {
                     facts.pane_chrome,
                     window_chrome,
                 );
-                paint_separators(buf, area, mgr, &base_visible, facts, stores, out);
+                paint_separators(buf, area, mgr, &base_visible, facts, stores);
                 pass
             },
         );
