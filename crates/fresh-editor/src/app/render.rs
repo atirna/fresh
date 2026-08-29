@@ -741,11 +741,12 @@ impl Editor {
         // passed `BodyState::default()`, so it would have painted a grid with
         // no hovered tab.
         //
-        // There is one assembly now, in `shell_host::paint_body`, and the
-        // display list is what reaches it — with the rectangle *layout* gave
-        // the body rather than one computed beside it. The state it needs and
-        // the rectangles it produces travel on the editor, because
-        // `paint_host` carries a region and a rectangle and nothing else.
+        // There is one assembly now, in `shell_host::with_grid`, and the
+        // display list is what reaches it — one pane at a time, each at the
+        // rectangle *layout* gave it rather than one computed beside it. What
+        // a pane needs beyond that rectangle rides on the painter below,
+        // because `paint_host` carries a target and a rectangle and nothing
+        // else.
         let body_state = crate::app::shell_host::BodyState {
             lsp_waiting,
             hide_cursor,
