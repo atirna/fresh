@@ -71,7 +71,21 @@ enum RenderKind {
 
 /// One visible split to render: `(tab_bar_owner_split, effective_leaf_id,
 /// buffer_id, split_area, kind)`.
-type VisibleBuffer = (LeafId, LeafId, BufferId, Rect, RenderKind);
+pub(crate) type VisibleBuffer = (LeafId, LeafId, BufferId, Rect, RenderKind);
+
+/// What every pane in a frame shares, resolved once before any of them paints.
+///
+/// The preamble half of `render_content`. It has to happen before the first
+/// pane and exactly once — `expand_visible_buffers` resizes an inner panel's
+/// viewport as it expands a group — so it cannot live inside a per-pane call.
+pub(crate) struct ContentPass {
+    /// Every pane to paint, in paint order, groups already expanded.
+    pub visible: Vec<VisibleBuffer>,
+    /// What the frame offers every pane before each narrows it.
+    pub window_chrome: PaneChrome,
+    pub active_split_id: LeafId,
+    pub has_multiple_splits: bool,
+}
 
 /// # Returns
 /// * Vec of (split_id, buffer_id, content_rect, scrollbar_rect, thumb_start, thumb_end) for mouse handling
@@ -166,16 +180,20 @@ pub(crate) fn render_content(
     };
 
     let base_visible = split_manager.get_visible_buffers(area);
-    let active_split_id = split_manager.active_split();
-    let has_multiple_splits = base_visible.len() > 1;
-
-    // Expand any active buffer-group tabs into their inner panels.
-    let visible_buffers = expand_visible_buffers(
+    let pass = prepare_content(
         &base_visible,
+        split_manager,
         split_view_states.as_deref_mut(),
         grouped_subtrees,
         pane_chrome,
+        window_chrome,
     );
+    let ContentPass {
+        visible: visible_buffers,
+        active_split_id,
+        has_multiple_splits,
+        ..
+    } = pass;
 
     // Collect areas for mouse handling
     let mut split_areas = Vec::new();
@@ -236,17 +254,10 @@ pub(crate) fn render_content(
         );
     }
 
-    // Render split separators — for both the main tree and any
-    // active Grouped subtrees dispatched at render time.
-    let separators = split_manager.get_separators(area);
-    for (direction, x, y, length) in separators {
-        render_separator(buf, direction, x, y, length, theme);
-    }
-    // Walk the visible splits again to render internal separators of any
-    // active buffer groups (their Split nodes live in the side-map, not the
-    // main split tree, so `split_manager` doesn't know about them).
-    let grouped_separator_areas = render_grouped_separators(
+    let grouped_separator_areas = paint_separators(
         buf,
+        area,
+        split_manager,
         &base_visible,
         split_view_states.as_deref(),
         grouped_subtrees,
@@ -267,6 +278,70 @@ pub(crate) fn render_content(
         horizontal_scrollbar_areas,
         grouped_separator_areas,
     )
+}
+
+/// Paint every separator in the frame — the main tree's and, inside each pane
+/// showing an active buffer group, that group's own — and return the grouped
+/// ones' hit areas.
+///
+/// **Not a pane's**, which is why it is here rather than in `paint_leaf`: a
+/// separator is the gap *between* two panes and belongs to neither. It paints
+/// before any of them, and cannot overlap one.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn paint_separators(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    split_manager: &SplitManager,
+    base_visible: &[(LeafId, BufferId, Rect)],
+    split_view_states: Option<&HashMap<LeafId, crate::view::split::SplitViewState>>,
+    grouped_subtrees: &HashMap<LeafId, crate::view::split::SplitNode>,
+    theme: &crate::view::theme::Theme,
+    pane_chrome: &HashMap<LeafId, PaneChrome>,
+) -> Vec<(
+    crate::model::event::ContainerId,
+    SplitDirection,
+    u16,
+    u16,
+    u16,
+)> {
+    for (direction, x, y, length) in split_manager.get_separators(area) {
+        render_separator(buf, direction, x, y, length, theme);
+    }
+    // Walk the visible splits again to render internal separators of any
+    // active buffer groups (their Split nodes live in the side-map, not the
+    // main split tree, so `split_manager` doesn't know about them).
+    render_grouped_separators(
+        buf,
+        base_visible,
+        split_view_states,
+        grouped_subtrees,
+        theme,
+        pane_chrome,
+    )
+}
+
+/// Resolve what every pane in this frame shares. See [`ContentPass`].
+pub(crate) fn prepare_content(
+    base_visible: &[(LeafId, BufferId, Rect)],
+    split_manager: &SplitManager,
+    split_view_states: Option<&mut HashMap<LeafId, crate::view::split::SplitViewState>>,
+    grouped_subtrees: &HashMap<LeafId, crate::view::split::SplitNode>,
+    pane_chrome: &HashMap<LeafId, PaneChrome>,
+    window_chrome: PaneChrome,
+) -> ContentPass {
+    ContentPass {
+        // Expand any active buffer-group tabs into their inner panels.
+        visible: expand_visible_buffers(
+            base_visible,
+            split_view_states,
+            grouped_subtrees,
+            pane_chrome,
+        ),
+        window_chrome,
+        active_split_id: split_manager.active_split(),
+        has_multiple_splits: base_visible.len() > 1,
+    }
 }
 
 /// Paint one pane: its tab strip, its buffer (or composite, or placeholder),
