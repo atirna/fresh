@@ -1470,6 +1470,82 @@ between them. M6's own first step is the floating panel's *frame* — scrim,
 border, title, `[×]`, placement — which is a G2-shaped change (a surface whose
 cells bypass the fold) and can land with the sweeps.
 
+#### Everything that is left, in one place
+
+The G-table above is the *duplicate mechanisms*. This is the whole remainder,
+including the pieces tracked elsewhere in this document, so there is one list
+to read rather than five. One line each; the cross-references say where the
+reasoning lives.
+
+**The keyboard engine (G1).**
+
+1. `base`, `menu`, `popups`, `prompt`, `context_menu` — five `on_layer_key` /
+   `layers` impls whose interiors are already the tree's. **Free today.**
+2. `dock` + `floating_modal` `on_layer_key` — hand the key to the widget
+   dispatcher, so they ride with M6.
+3. The four `modals` `on_layer_key` — hand it to painter interiors, so they
+   ride with G7.
+4. `layer_rank` and `overlay_stack()` — the precedence table, deleted once
+   nothing declares a layer.
+5. `KeyContext` — the mode enum the walk keyed on, and the single largest
+   remnant by reference count. Last, and named in the S5 row above.
+
+**The modal interiors (G7).**
+
+6. Settings (~20k lines) — hit-tests rectangles its own painter recorded.
+7. The keybinding editor (~3.7k) — the same, plus its own scrollbar and
+   double-click semantics.
+8. The calibration wizard — the same, smaller.
+9. `Editor::shell_pointer_event` — the "routed, not transported" side channel;
+   retires with 6–8.
+10. `cursor_suppressed_by_late_overlay` — exists only because those modals
+    paint after the caret commits.
+11. `ChromeComponent` and `app/chrome/` — deleted outright once 1–3 and 6–8
+    land.
+
+**The plugin wave (M6, §4.6).**
+
+12. `WidgetSpec → Node` for dock / floating / anchored / the prompt's toolbar.
+13. `HostRegion::Dock`'s content leaf — becomes native with 12.
+14. `WidgetInstanceState` → element state; `widget_runtime.rs`,
+    `widgets/kinds/*`, `HitArea` and `LayoutBox` go with it.
+15. Buffer-mounted panels (`mountWidgetPanel`) — the open fork: a node subtree
+    in the pane's content slot, or the row renderer kept for them alone.
+16. The floating panel's frame — G2-shaped, and can land ahead of the rest of
+    M6.
+
+**Paint arrangements still mixed.**
+
+17. The status bar's *prompt* states — the last cells `Editor::render` paints
+    outside the fold, now that G2 has taken the prompt row.
+18. `render_panels_and_modals` painting after the caret commits — the ordering
+    gap item 10 papers over.
+19. `suppress_chrome_cells` / `Paints::HostsOnly` — the web's parallel path,
+    which collapses when nothing but the panes is a `Host`.
+
+**Residual recorded geometry.**
+
+20. `WindowLayoutCache` — the genuine paint products stay (`view_line_mappings`,
+    the tab strip's measured columns, the scrollbar thumb extents); the rest is
+    auditable only after 6–8 and 12.
+21. `separator_areas` — derivable from the divider nodes now, kept for the
+    hover-highlight paint and the drag.
+22. `PointerGrab` — the drag state machine, retiring when the library's pointer
+    capture replaces it. Named in the S5 row above.
+
+**Library-side (§6.2).**
+
+23. `Draw::Scrollbar` carries no marker channel (item 8) — the plugin
+    overview-ruler API keeps scrollbars behind a `Host` until it does.
+24. `Paint::Lit` — plugin colours with no theme name; goes when plugins
+    register named keys.
+
+**Not a gap.**
+
+25. `HostRegion::Body`'s per-pane `Host` leaves. Buffer and terminal cells stay
+    cells: that leaf never migrates, and S5 subdivided it rather than removing
+    it.
+
 ### 5.2 Waves (increasing risk)
 
 | Wave | Surface | New mechanism exercised | Deletes (survey-grounded) |
