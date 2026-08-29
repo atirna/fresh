@@ -472,11 +472,6 @@ impl Editor {
         Some(Ok(()))
     }
 
-    /// A press on a **grouped subtree's** divider.
-    ///
-    /// The main tree's dividers are nodes and carry their own identity; a
-    /// grouped subtree is laid out inside a pane's interior, which is still a
-    /// painter's, so this is the hit test that remains — over the rectangles
     /// A left press on a pane's content: place the caret, select the word, or
     /// select the line — or toggle a fold, when the cell is a folded line's
     /// gutter indicator, which is checked first and was checked first when it

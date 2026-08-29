@@ -3852,11 +3852,6 @@ impl Window {
 
     // ---- File-explorer leaf delegators ----
 
-    /// Whether this window's file-explorer panel is visible.
-    pub fn file_explorer_is_visible(&self) -> bool {
-        self.file_explorer_visible && self.file_explorer.is_some()
-    }
-
     /// Extend the file-explorer selection upward.
     pub fn file_explorer_extend_selection_up(&mut self) {
         if let Some(explorer) = self.file_explorer.as_mut() {

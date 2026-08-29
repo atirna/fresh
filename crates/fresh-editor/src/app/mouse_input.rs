@@ -341,7 +341,6 @@ impl Editor {
             }
         }
 
-        self.active_window_mut().mouse_state.last_position = Some((col, row));
         Ok(needs_render)
     }
 

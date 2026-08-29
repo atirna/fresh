@@ -1068,7 +1068,6 @@ impl Editor {
         // drew them at) — merge so clicks on those rendered columns register.
         separator_areas.extend(grouped_separator_areas.iter().copied());
         self.active_layout_mut().separator_areas = separator_areas;
-        self.active_layout_mut().grouped_separator_areas = grouped_separator_areas;
         self.active_layout_mut().editor_content_area = Some(editor_content_area);
 
         // Render hover highlights for separators and scrollbars
@@ -3559,7 +3558,7 @@ impl Editor {
         }
     }
 
-    /// Returns true if `(x, y)` falls inside any popup-style overlay that    /// Returns true if `(x, y)` falls inside any popup-style overlay that
+    /// Returns true if `(x, y)` falls inside any popup-style overlay that
     /// was rendered this frame. Used to decide whether the hardware cursor
     /// should be shown or hidden so it does not bleed through a popup.
     fn cursor_obscured_by_overlay(&self, x: u16, y: u16) -> bool {

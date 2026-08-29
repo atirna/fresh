@@ -938,12 +938,6 @@ impl FileBrowserLayout {
             && y < self.scrollbar_area.y + self.scrollbar_area.height
     }
 
-    /// Check if a position is in the scrollbar thumb
-    pub fn is_in_thumb(&self, y: u16) -> bool {
-        let rel_y = y.saturating_sub(self.scrollbar_area.y) as usize;
-        rel_y >= self.thumb_start && rel_y < self.thumb_end
-    }
-
     /// Which checkbox toggle is at `(x, y)`, from the spans the renderer
     /// recorded on the checkbox row.
     pub fn toggle_at(&self, x: u16, y: u16) -> Option<FileBrowserToggle> {

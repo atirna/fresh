@@ -252,7 +252,6 @@ pub(crate) fn components() -> &'static [&'static dyn ChromeComponent] {
         &dock::Dock,
         &menu::Menu,
         &file_explorer::FileExplorer,
-        &status_bar::StatusBar,
         &base::Base,
     ]
 }
