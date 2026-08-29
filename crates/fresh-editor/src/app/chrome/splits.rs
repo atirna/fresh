@@ -81,12 +81,6 @@ impl ChromeComponent for Splits {
         for (_, _, content_rect, ..) in &ed.active_layout().split_areas {
             t.rect("chrome:editor", 10, *content_rect);
         }
-        // Right-click-only act-then-continue guard at the very top
-        // band: a right-click ANYWHERE clears the "+" new-tab menu and
-        // the close-split confirmation before routing — even when a
-        // higher surface then consumes the click (the old pre-walk
-        // clear's semantics, kept exactly).
-        t.full("chrome:tab_menu_clear_guard", 200);
     }
 
     fn hover(&self, ed: &mut Editor, bx: &LayoutBox, col: u16, row: u16) -> Option<HoverTarget> {
@@ -176,18 +170,13 @@ impl ChromeComponent for Splits {
         use super::{Disposition, PointerPress};
         match ev.press {
             PointerPress::Left => {}
-            // A right-click anywhere dismisses the left-click-only
-            // popups (the "+" new-tab menu and the close-split
-            // confirmation) and keeps routing — the pre-walk clear
-            // expressed as a top-band act-then-continue guard.
-            PointerPress::Right => {
-                if bx.kind == "chrome:tab_menu_clear_guard" {
-                    ed.active_window_mut().new_tab_menu = None;
-                    ed.active_window_mut().close_split_menu = None;
-                    return Ok(Disposition::PassAfter);
-                }
-                return Ok(Disposition::Pass);
-            }
+            // The right-click clear is a capture-phase observer on the
+            // shell's frame now (`shell::splits::tab_menu_guard`), which
+            // is where "anywhere, then continue" can actually mean it:
+            // this walk runs only when the tree declines the event, so a
+            // box could not fire for a right-click a migrated surface
+            // took. Nothing here answers a right-click.
+            PointerPress::Right => return Ok(Disposition::Pass),
             // Double = word select, triple = line select, on the split
             // under the pointer (moved from the old post-walk scan /
             // hand-ordered ladder — a popup's opaque box above this

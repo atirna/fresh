@@ -56,6 +56,12 @@ pub enum UiFact {
     /// at a time — the tree's answer, kept apart from the legacy walk's in
     /// `Editor::shell_hover`.
     Hover(Option<crate::app::types::HoverTarget>),
+    /// A right-click landed somewhere — anywhere — so the two left-click-only
+    /// menus (the "+" new-tab menu, the close-split confirmation) close.
+    ///
+    /// An observation, not a claim: the click goes on to whatever it was aimed
+    /// at. See `shell::splits::tab_menu_guard`.
+    ClearTabMenus,
     /// A click on a status-bar element that answers one.
     ///
     /// The id, not an `Action`: the dispatch behind it is not a pure mapping —

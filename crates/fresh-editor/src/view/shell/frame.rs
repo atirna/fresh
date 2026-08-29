@@ -377,6 +377,10 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // and it is the one that stops the flow — Ctrl+Right-Click *is* the
     // gesture, where the blur is a side effect of one aimed elsewhere.
     let frame = super::theme_info::inspect_trigger(frame);
+    // Outermost observer of the right-click channel: it clears the two
+    // left-click-only menus and lets the click continue, so it must see the
+    // click before the surface it is aimed at claims it.
+    let frame = super::splits::tab_menu_guard(frame);
     match f.dock {
         Some(w) => super::dock::blur_observer(w, frame),
         None => frame,

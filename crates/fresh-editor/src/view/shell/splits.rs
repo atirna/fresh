@@ -298,6 +298,60 @@ mod tests {
         }
     }
 
+    /// **The right-click clear fires even when the click is consumed.**
+    ///
+    /// That is the whole point of it, and the thing the `LayoutBox` at z 200
+    /// could not do: the legacy walk runs only when the tree declines the
+    /// event, so a right-click any migrated surface took skipped the guard.
+    /// The theme inspector's own capture listener `stop()`s the click, which
+    /// makes it the sharpest case available in a bare frame.
+    #[test]
+    fn a_right_click_clears_the_tab_menus_even_when_something_eats_it() {
+        use crate::view::shell::frame::{frame_tree, Frame};
+        use fresh_ui::{Input, Mods, Point, Size, Ui};
+        let facts = |mods: Mods| -> Vec<UiFact> {
+            let mut ui: Ui<UiMsg> = Ui::new();
+            ui.frame(frame_tree(Frame::default()), Size::new(80, 24));
+            ui.dispatch(Input::press(Point::new(40, 12), MouseButton::Right, mods))
+                .msgs
+                .into_iter()
+                .filter_map(|m| match m {
+                    UiMsg::Ui(f) => Some(f),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            facts(Mods::NONE),
+            vec![UiFact::ClearTabMenus],
+            "a plain right-click clears them and goes on"
+        );
+        assert_eq!(
+            facts(Mods::CTRL),
+            vec![UiFact::ClearTabMenus, UiFact::ThemeInspect { x: 40, y: 12 },],
+            "and so does one the inspector stops"
+        );
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(frame_tree(Frame::default()), Size::new(80, 24));
+        let left: Vec<UiFact> = ui
+            .dispatch(Input::press(
+                Point::new(40, 12),
+                MouseButton::Left,
+                Mods::NONE,
+            ))
+            .msgs
+            .into_iter()
+            .filter_map(|m| match m {
+                UiMsg::Ui(f) => Some(f),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !left.contains(&UiFact::ClearTabMenus),
+            "a left click is how they open, not how they close"
+        );
+    }
+
     /// **An inner panel is a pane with two of its three parts off.**
     ///
     /// A buffer group's panel is laid out inside its outer pane's interior, so
@@ -525,6 +579,29 @@ fn divider(id: ContainerId, dir: SplitDirection) -> Node<UiMsg> {
         .on_leave(Rc::new(move |_: &Event| {
             Some(UiMsg::Ui(UiFact::SeparatorHover(None)))
         }))
+}
+
+/// **A right-click anywhere clears the two left-click-only menus**, then lets
+/// the click go on to whatever it was aimed at.
+///
+/// The "+" new-tab menu and the close-split confirmation open on a left click
+/// and have no right-click behaviour of their own, so a right-click aimed
+/// past them should dismiss them the way clicking elsewhere does — including
+/// the right-click that *opens* a tab's context menu, which is aimed at a tab
+/// with the "+" menu still hanging over it.
+///
+/// A capture-phase listener that does not `stop()`: it runs before anything
+/// under the pointer sees the click, and the click continues. It was a
+/// full-screen box in the legacy walk at the top of the z band — but that walk
+/// runs only when the tree declines the event, so the guard silently did not
+/// fire for a right-click any migrated surface took. Here it always does.
+pub fn tab_menu_guard(frame: Node<UiMsg>) -> Node<UiMsg> {
+    gesture(frame).on_capture(
+        GestureKind::Press,
+        Rc::new(|e: &Event| {
+            (e.button == MouseButton::Right).then_some(UiMsg::Ui(UiFact::ClearTabMenus))
+        }),
+    )
 }
 
 // ── the pane's interior ─────────────────────────────────────────────────────
