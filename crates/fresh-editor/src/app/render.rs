@@ -2712,6 +2712,11 @@ impl Editor {
             height: self.active_chrome().last_frame.height,
         });
         crate::view::shell::frame::Frame {
+            // Which workspace the window-owned half of the frame belongs to.
+            // One retained tree, N windows: without this the two match each
+            // other and window B's first pane inherits window A's element
+            // state. See `Frame::window`.
+            window: Some(self.active_window.0),
             theme_info,
             browser,
             trust,
