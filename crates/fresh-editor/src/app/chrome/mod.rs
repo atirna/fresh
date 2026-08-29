@@ -227,24 +227,20 @@ pub(crate) trait ChromeComponent: Sync {
     }
 }
 
-/// The ONE chrome registry — every routable surface, once.
+/// The ONE chrome registry — every surface with keyboard behaviour, once.
 ///
-/// Ordering: every gesture scans the tree with
-/// [`crate::widgets::layout_box::hit_stack`] — effective-z bands,
-/// children above parents, and document order within a band. z bands
-/// ride a x10 scale (180 context menu … 10 editor, 0 base) so
-/// per-gesture guard/capture surfaces occupy their own slots
-/// (transient dismiss at 175 above the z170 prompt/popup targets, the
-/// overlay prompt's wheel modal at 160 above its position-blind
-/// suggestion capture at 155, its click scrim down at 15 just above
-/// the editor band). Within a band, registry order IS precedence:
-/// components push specific targets before guards.
+/// **Precedence is the layer walk's**, not this list's: `overlay_layers`
+/// ranks the layers and `on_layer_key` is offered down that ranking. Order
+/// here decides nothing any more. It used to: every gesture scanned a
+/// z-ordered list of rectangles, and within a band the registry order *was*
+/// precedence, so components pushed specific targets before guards. That walk
+/// is gone — the pointer is the shell tree's, and a `ChromeComponent` is what
+/// is left of a surface once its pointer half has migrated.
+///
+/// The order below is the one the pointer walk left behind, kept because it
+/// still reads as "outermost first" and nothing gains by shuffling it.
 pub(crate) fn components() -> &'static [&'static dyn ChromeComponent] {
     &[
-        // The modal band: whole-channel mouse capture, first-active
-        // wins, ranked as `overlay_layers()` ranks their layers.
-        // (FloatingModal captures too — it sits lower, after the
-        // surfaces that render above it.)
         &modals::Settings,
         &modals::KeybindingEditor,
         &modals::CalibrationWizard,
