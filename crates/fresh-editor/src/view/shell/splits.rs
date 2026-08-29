@@ -432,10 +432,10 @@ mod tests {
         );
     }
 
-    /// A pane with no strip has no row for one, so nothing on that pane's top
-    /// row is the strip's — the flag decides it, not a recorded rectangle.
+    /// A pane with no strip has no row for one, so its top row is content —
+    /// the flag decides that, not a recorded rectangle.
     #[test]
-    fn a_pane_with_no_strip_answers_no_press() {
+    fn a_pane_with_no_strip_gives_its_top_row_to_the_content() {
         use fresh_ui::{Input, Mods, Point};
         let s = Splits {
             root: leaf(0),
@@ -465,7 +465,16 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(said.is_empty(), "got {said:?}");
+        assert_eq!(
+            said,
+            vec![UiFact::PaneContentPress {
+                pane: LeafId(SplitId(0)),
+                x: 5,
+                y: 0,
+                clicks: 1
+            }],
+            "the content's, not the strip's"
+        );
     }
 
     /// **The right-click clear fires even when the click is consumed.**
@@ -799,7 +808,7 @@ fn live_interior(id: LeafId, c: PaneChrome, s: &Rc<Splits>) -> Node<UiMsg> {
     // main tree's became nodes. Nested here, they are the same nodes.
     let content = match s.groups.get(&id) {
         Some(g) => dressed(g, s),
-        None => row(),
+        None => content_surface(id),
     };
     pane_interior(
         id,
@@ -811,6 +820,46 @@ fn live_interior(id: LeafId, c: PaneChrome, s: &Rc<Splits>) -> Node<UiMsg> {
             hscroll: scrollbar(id, Axis::Horizontal),
         },
     )
+}
+
+/// A pane's content: where the text is, and where a click places the caret.
+///
+/// **The cells stay the painter's.** What the node supplies is which pane was
+/// clicked and where, so the handlers behind it stop scanning every recorded
+/// content rectangle to answer that. What they still take is the rectangle
+/// itself, because click-to-byte is a projection through the view pipeline —
+/// and that rectangle is this node's own, read back from the tree.
+///
+/// A **right** press is deliberately not claimed: it belongs to the base
+/// surface's dismissal of the tab context menu, which is the only thing left
+/// on the legacy walk that a right-click over a pane should reach.
+fn content_surface(id: LeafId) -> Node<UiMsg> {
+    let at = |e: &Event| (e.pos.x.max(0) as u16, e.pos.y.max(0) as u16);
+    gesture(row())
+        .on(
+            GestureKind::Press,
+            Rc::new(move |e: &Event| {
+                if e.button != MouseButton::Left {
+                    return None;
+                }
+                let (x, y) = at(e);
+                e.stop();
+                Some(UiMsg::Ui(UiFact::PaneContentPress {
+                    pane: id,
+                    x,
+                    y,
+                    clicks: e.clicks,
+                }))
+            }),
+        )
+        .on(
+            GestureKind::Wheel,
+            Rc::new(move |e: &Event| {
+                let (x, y) = at(e);
+                e.stop();
+                Some(UiMsg::Ui(pane_wheel(id, x, y, e.delta, e.axis)))
+            }),
+        )
 }
 
 /// One of a pane's scrollbars.

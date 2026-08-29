@@ -1336,7 +1336,7 @@ display-list-is-not-a-diff rule, pinned at the cell.
 
 *The rank entries* cannot go until the rest of S3 does. `blocks_terminal_input` is contributed by six components — popups, dock, floating modal, base, menu, context menu — and `presents_blocking_overlay` is the single source of truth for "is anything modal up?". Removing the two migrated entries would mean an open context menu or menu stops blocking PTY routing. They retire with the last unmigrated overlay, not before. |
 | **S4** | Dock column, file explorer, plugin panels. | **File explorer: done** — the panel is a native region, rows and slots are measured by the tree, `trailing_slot_screen_bounds` and the old renderer's paint half are deleted, and the grip paints its own hover column via `layout_reader`. **Dock column: done** — its press, right-press, wheel and width grip are nodes, and the blur observer moved to a capture-phase listener on the frame, which fixed it: as the surfaces beside the dock became nodes, each one that claimed a press stopped blurring a focused dock, because the shell runs ahead of the walk the full-frame guard box lived in. The column's *content* is still a `Host` leaf. **Plugin panels remain**, and they are the M6 wave rather than a remainder: `WidgetSpec` → `Node` translation, element state replacing `WidgetInstanceState`, and a plugin API change. It no longer waits on anything: S3's ordering went with the two-pass fold, and §6.2's "colour that is not a theme name" is decided and shipped — `Paint::Lit` carries a plugin's `OverlayColorSpec::Rgb` as a `#rrggbb` literal the grammar reads back. The plugin API change (keyed `List`/`Tree` items) is deprecated ahead of it, so its release cycle runs in parallel rather than in series. |
-| **S5** | Splits, tabs, scrollbars decompose; the buffer becomes the only `Host` leaf. | The per-leaf decision is settled (§6.2 item 7): split the orchestration, with the leaf `Host` at the *content* rect and `split_grid` mutually recursive with the pane. Still last, because it is the only stage that touches the KEEP side — and now the only stage with any pointer surfaces left in `chrome/`: `splits.rs` and the `base.rs` floor beneath it are the whole of what remains there. |
+| **S5** | Splits, tabs, scrollbars decompose; the buffer becomes the only `Host` leaf. | **The pointer side is done, and `chrome/splits.rs` no longer has a component in it.** The grid is a description (`view::shell::splits`) that the model itself lays out — `get_leaves_with_rects` and `split_layout` are reads of it — and every surface a pane has is a node keyed by the pane it belongs to: its dividers, its tab strip (which took the split controls with it, since those are drawn *over* the tab row and a box said so with `z`), both scrollbars, and its content. **Which chrome a pane has is one rule** (`PaneChrome::resolve`) resolved once per frame by `Window::pane_chrome`, so the description and the painter cannot disagree about whether a pane has a strip; it had been four copies of the boolean algebra, two of which were quietly wrong about `Fixed` panels and live terminal grids. **A buffer group's panels are panes now too** — that layout lives in a side map and used to be dispatched into a pane's interior only at paint time, which is why its separators stayed recorded rectangles long after the main tree's became nodes; mounted in the pane's content node, which *is* the rectangle the painter uses, they are ordinary dividers. Each handler behind these nodes used to open by asking every recorded rectangle in turn whether it contained the point; they take a pane now. What they still read back is geometry that genuinely records the last paint — a scrollbar thumb's extent, the tab renderer's per-tab columns — and the pane's own content rectangle, read from the node that defines it. What remains of S5 is the **paint**: the leaf becomes a per-pane `Host` and `render_content` paints per leaf. |
 
 ### 5.1 M0 — the seam (a genuine prototype, not just plumbing)
 
@@ -1785,14 +1785,51 @@ list.
 
    **And the pane boundary showed itself exactly where this entry predicted.**
    A `Grouped` subtree is laid out inside a pane's *interior* — past the tab
-   bar and the scrollbars the painter reserves — so its dividers are not in
+   bar and the scrollbars the painter reserves — so its dividers were not in
    the main tree's description at all, and moving the main ones broke the
-   grouped drag until they were separated. They stay recorded rectangles, now
-   under their own `chrome:group_separators` box and
-   `WindowLayoutCache::grouped_separator_areas`, and they become nodes when
-   the pane's interior does. That is the "grid **and** the pane" this entry
-   warns about, met in practice: the grid alone is landable, and it stops at
-   the pane's edge.
+   grouped drag until they were separated out under their own box. That is the
+   "grid **and** the pane" this entry warns about, met in practice: the grid
+   alone was landable, and it stopped at the pane's edge.
+
+   **The pane's interior has since landed too, and the pointer half of S5 with
+   it.** In order, each step landing on its own:
+
+   - **The rule for which chrome a pane has.** Four places decided whether a
+     pane gets a tab strip and which scrollbars, each writing the boolean
+     algebra out again — and the paint's copy narrowed it by two refinements
+     the others did not know about (a `Fixed` panel earns no bar; a terminal
+     streaming its live grid gives up the scrollbar column), so the outer pane
+     of a buffer group and `flush_layout` were laying panes out a column wider
+     than the paint recorded. It is `PaneChrome::resolve` now, gathered once by
+     `Window::pane_chrome` and read by both the description and the painter.
+     The three callers that cannot see a buffer map say so in one place rather
+     than in three copies of `&& !`.
+   - **The tab strip**, which took the split controls with it: those are drawn
+     over the tab row, which two boxes said with z 70 over z 60 — an ordering a
+     node has to state itself, because the tree runs *before* the legacy walk.
+     `tab_bar_split_at` is gone with it.
+   - **The buffer group's grid**, mounted in the pane's content node — which
+     *is* the rectangle the painter lays that group out in. Its panels are
+     panes with their own keys and their own `PaneChrome`; its dividers are
+     ordinary dividers. `chrome:group_separators` and
+     `handle_click_group_separator` are gone.
+   - **Both scrollbars**, then **the content**. With those, `chrome/splits.rs`
+     has no `ChromeComponent` in it at all: the file is the handlers the nodes
+     dispatch to. Each of them used to open by asking every recorded rectangle
+     in turn whether it contained the point; they take a pane. What they still
+     read back is geometry that genuinely records the last paint — a thumb's
+     extent, the tab renderer's columns — and the pane's own content rectangle,
+     read from the node that defines it.
+
+   Two things had to move with the content, and both are the same lesson: **the
+   tree runs first, so anything that used to sit between the old capture band
+   and the legacy walk now sits behind whatever the tree claims.** A live
+   terminal's own mouse and the Ctrl+Click that opens a path it printed both
+   ran in that gap; they are `Editor::pane_content_takes_pointer`, asked at the
+   head of the content's own handlers, which is where they belonged. And
+   clicking a scrollbar *track* jumps the thumb under the pointer and says so
+   by writing the hover target — to the legacy walk's field, which the tree's
+   answer now shadows.
 
    **The order, therefore:**
    1. A leaf host id space (`HostRegion` is a small fixed enum; a leaf's id is

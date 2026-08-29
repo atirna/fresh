@@ -170,46 +170,6 @@ impl Editor {
             row
         );
 
-        // Check if we should forward mouse events to the terminal
-        // Forward if: in terminal mode, mouse is over terminal buffer, and terminal is in alternate screen mode
-        //
-        // ...unless a chrome drag is in progress (dock-border resize, split
-        // separator, or file-explorer width). That drag owns the mouse until
-        // release, so don't let an alternate-screen terminal swallow the
-        // motion once the pointer crosses over it — *growing* the dock drags
-        // the cursor rightward across a full-screen `btop`, and forwarding
-        // there both stalls the resize and eats the mouse-up that ends it,
-        // leaving the drag stuck. Shrinking happened to work only because the
-        // pointer stays left of the terminal the whole time.
-        let chrome_drag_active = super::chrome::pointer_grab(self).is_some();
-        // An open native context menu (tab / "+" new-tab / file-explorer)
-        // takes mouse precedence over terminal forwarding. These menus render
-        // on top of — and frequently overlap — an alternate-screen terminal
-        // that has captured the mouse (e.g. right-clicking a terminal's tab
-        // opens the tab menu directly over the terminal's content). Without
-        // this gate the terminal-forward path below would swallow clicks/moves
-        // aimed at the menu, so menu items couldn't be selected (they'd inject
-        // mouse escape codes into the PTY instead). Skipping forwarding lets
-        // the event fall through, where the shell's context-menu `Layer`
-        // handles it: its rows take the click and the hover, and its
-        // `Modality::Inert` plus `OUTSIDE_POINTER` dismissal cover everything
-        // outside. That layer is offered the pointer before this walk, so its
-        // precedence is tree position rather than a band — this fork only
-        // keeps the PTY from swallowing the events before either sees them.
-        let context_menu_open = self.active_window().context_menu_core().is_some();
-        // The opacity suppression is gone with the surfaces it derived from.
-        // It said: a pointer-opaque chrome box over the cell — an info popup,
-        // the suggestions dropdown, the theme-info popup — must take the event
-        // in the walk, because forwarding it would inject mouse codes into the
-        // PTY *through* the popup. Every one of those is a node now, and the
-        // shell is offered the pointer above, before this gate: a surface that
-        // claims stops the event there. No chrome box sets `pointer_opaque`
-        // any more, so the test could only ever answer false.
-        //
-        // The context-menu check stays NAMED by ruling, for the reason it
-        // always was: the menu is `Modality::Inert`, so it does not claim a
-        // press aimed past it, and this fork is what keeps the PTY from
-        // swallowing one before the menu's own dismissal sees it.
         // ONE tree per event, built AFTER the pre-band observers above
         // (the LSP-rename cancel can close a prompt, which changes the
         // geometry) and shared by the forward gate and every dispatch
@@ -257,22 +217,14 @@ impl Editor {
                 return Ok(true);
             }
         }
-        if !chrome_drag_active && !context_menu_open {
-            let forwarding = self.config.terminal.mouse_forwarding;
-            if let Some(result) = self.active_window_mut().try_forward_mouse_to_terminal(
-                col,
-                row,
-                mouse_event,
-                forwarding,
-            ) {
-                return result;
-            }
-        }
-
-        // Ctrl+Click on a file path printed in the live terminal opens it in
-        // Fresh (jumping to any :line:col it encodes). Handled before normal
-        // click routing so it doesn't disturb cursor/selection state.
-        if let Some(result) = self.try_open_terminal_link(col, row, mouse_event) {
+        // A live terminal's own mouse, and the Ctrl+Click that opens a path it
+        // printed. Both belong to a pane's *content*, and the pane's content
+        // is a node — so its handlers ask this first, before placing a caret
+        // (`Editor::pane_content_takes_pointer`). This call is for the event
+        // kinds that node does not claim: a motion or a release mid-drag, and
+        // anything landing outside a pane. One rule, asked wherever the
+        // pointer can reach the content.
+        if let Some(result) = self.pane_content_takes_pointer(col, row, mouse_event) {
             return result;
         }
 
@@ -1050,6 +1002,64 @@ impl Editor {
             .prompt
             .as_ref()
             .is_some_and(|p| p.overlay)
+    }
+
+    /// Whether the pane's content under the pointer takes this event before
+    /// anything the editor would do with it.
+    ///
+    /// Two things do. A **live terminal** that has asked for the mouse gets
+    /// it; and a **Ctrl+Click on a path** the terminal printed opens it in
+    /// Fresh, before normal click routing, so it does not disturb the cursor
+    /// or the selection.
+    ///
+    /// Forwarding is suppressed in two cases, both of which would otherwise
+    /// have their events swallowed by the PTY:
+    ///
+    /// * **A chrome drag is in progress** — a dock-border resize, a split
+    ///   separator, the file-explorer width. That drag owns the mouse until
+    ///   release, and an alternate-screen terminal must not take the motion
+    ///   once the pointer crosses it. *Growing* the dock drags the cursor
+    ///   rightward across a full-screen `btop`; forwarding there both stalls
+    ///   the resize and eats the mouse-up that ends it, leaving the drag
+    ///   stuck. Shrinking only ever worked because the pointer stays left of
+    ///   the terminal.
+    /// * **A native context menu is open** — the tab menu, the "+" menu, the
+    ///   explorer's. They render over, and often overlap, an alternate-screen
+    ///   terminal that has captured the mouse: right-clicking a terminal's tab
+    ///   opens its menu directly over that terminal's content. The menu is a
+    ///   `Modality::Inert` layer, so it does not claim a press aimed past it,
+    ///   and this fork is what keeps the PTY from swallowing one before the
+    ///   menu's own dismissal sees it.
+    ///
+    /// The opacity suppression that used to sit beside these is gone with the
+    /// surfaces it derived from. It said a pointer-opaque chrome box over the
+    /// cell — an info popup, the suggestions dropdown, the theme inspector —
+    /// had to take the event, because forwarding it would inject mouse codes
+    /// into the PTY *through* the popup. Every one of those is a node now, and
+    /// the tree is offered the pointer first: a surface that claims stops the
+    /// event there.
+    ///
+    /// `Some` means handled — nothing else should see the event.
+    pub(super) fn pane_content_takes_pointer(
+        &mut self,
+        col: u16,
+        row: u16,
+        mouse_event: crossterm::event::MouseEvent,
+    ) -> Option<AnyhowResult<bool>> {
+        let chrome_drag_active = super::chrome::pointer_grab(self).is_some();
+        let context_menu_open = self.active_window().context_menu_core().is_some();
+        if !chrome_drag_active && !context_menu_open {
+            let forwarding = self.config.terminal.mouse_forwarding;
+            if let Some(result) = self.active_window_mut().try_forward_mouse_to_terminal(
+                col,
+                row,
+                mouse_event,
+                forwarding,
+            ) {
+                return Some(result);
+            }
+        }
+        self.try_open_terminal_link(col, row, mouse_event)
     }
 
     /// THE pointer dispatch engine — ONE walk for every press kind

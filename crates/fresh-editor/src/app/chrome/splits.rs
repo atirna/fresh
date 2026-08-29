@@ -1,208 +1,29 @@
-//! The split grid: widget-panel content surfaces, separators,
-//! close/maximize buttons, tab bars, v/h scrollbars, and the editor
-//! content rects.
+//! The split grid's behaviour.
+//!
+//! **There is no chrome component here any more.** Every surface a pane has —
+//! its dividers, its tab strip with the split controls on it, both scrollbars,
+//! its content, and the buffer-group grid a pane can hold inside that content
+//! — is a node in the shell's tree (`view::shell::splits`), keyed by the pane
+//! it belongs to. What is left in this file is what those nodes dispatch to:
+//! the handlers themselves, which take a pane and a cell and do the work.
+//!
+//! Each of them used to open by asking every recorded rectangle in turn
+//! whether it contained the point, because a `LayoutBox` is a rectangle and
+//! the pane's identity had to be recovered from it. A node has that identity.
+//! What the handlers still read back is geometry that is genuinely a record of
+//! the last paint — where a scrollbar's thumb ended up, where the tab renderer
+//! put each tab — and the pane's own content rectangle, which is read from the
+//! node that defines it.
 
 use crate::app::types::{HoverTarget, TabContextMenu};
 use crate::app::BufferId;
 use crate::input::keybindings::Action;
 use crate::model::event::{CursorId, LeafId, SplitDirection};
 use crate::view::ui::tabs::TabHit;
-use crate::widgets::LayoutBox;
 use anyhow::Result as AnyhowResult;
 use fresh_i18n::t;
 
-use super::{in_rect, ChromeComponent, ChromeTreeBuilder, Editor};
-
-pub(crate) struct Splits;
-
-impl ChromeComponent for Splits {
-    fn collect(&self, ed: &Editor, t: &mut ChromeTreeBuilder) {
-        for (_, buffer_id, content_rect, ..) in &ed.active_layout().split_areas {
-            if !ed.widget_registry.panels_for_buffer(*buffer_id).is_empty() {
-                t.rect("chrome:split_widget_panel", 120, *content_rect);
-            }
-        }
-        // **Every divider and every tab strip is a node now**, so neither is
-        // here. The dividers went first for the main tree; a buffer group's
-        // held out longer, because a group's layout lives in a side map rather
-        // than in the split tree and used to be dispatched into a pane's
-        // interior only at *paint* time — leaving its separators as recorded
-        // rectangles. The description mounts that layout inside the pane's
-        // content, which is where the painter puts it, so they are the same
-        // nodes as the rest. The strips took the split controls with them:
-        // those are drawn over the tab row, which two boxes said with z 70
-        // over z 60 and a node has to say itself.
-        for (_, _, content_rect, ..) in &ed.active_layout().split_areas {
-            t.rect("chrome:editor", 10, *content_rect);
-        }
-    }
-
-    fn on_pointer(
-        &self,
-        ed: &mut Editor,
-        bx: &LayoutBox,
-        ev: &super::ChromePointer,
-    ) -> anyhow::Result<super::Disposition> {
-        use super::{Disposition, PointerPress};
-        match ev.press {
-            PointerPress::Left => {}
-            // The right-click clear is a capture-phase observer on the
-            // shell's frame now (`shell::splits::tab_menu_guard`), which
-            // is where "anywhere, then continue" can actually mean it:
-            // this walk runs only when the tree declines the event, so a
-            // box could not fire for a right-click a migrated surface
-            // took. Nothing here answers a right-click.
-            PointerPress::Right => return Ok(Disposition::Pass),
-            // Double = word select, triple = line select, on the split
-            // under the pointer (moved from the old post-walk scan /
-            // hand-ordered ladder — a popup's opaque box above this
-            // band now blocks them by construction).
-            PointerPress::Double | PointerPress::Triple => {
-                if bx.kind != "chrome:editor" {
-                    return Ok(Disposition::Pass);
-                }
-                // A double/triple press on a folded line's gutter
-                // indicator toggles the fold instead of selecting.
-                // Checked before word/line select (its historical
-                // pre-walk position), and INSIDE the walk since the
-                // move from `handle_mouse`'s pre-band: a popup's
-                // opaque box or the overlay prompt's double-click
-                // swallow above this band now blocks it by
-                // construction, like its select siblings.
-                if let Some((buffer_id, byte_pos)) =
-                    ed.fold_toggle_line_at_screen_position(ev.col, ev.row)
-                {
-                    ed.active_window_mut()
-                        .toggle_fold_at_byte(buffer_id, byte_pos);
-                    return Ok(Disposition::Consumed);
-                }
-                let areas: Vec<_> = ed
-                    .active_layout()
-                    .split_areas
-                    .iter()
-                    .map(|(split_id, buffer_id, content_rect, _, _, _)| {
-                        (*split_id, *buffer_id, *content_rect)
-                    })
-                    .collect();
-                for (split_id, buffer_id, content_rect) in areas {
-                    if in_rect(ev.col, ev.row, content_rect) {
-                        if ev.press == PointerPress::Double {
-                            ed.handle_split_double_click(
-                                split_id,
-                                buffer_id,
-                                content_rect,
-                                ev.col,
-                                ev.row,
-                            )?;
-                        } else {
-                            ed.handle_split_triple_click(
-                                split_id,
-                                buffer_id,
-                                content_rect,
-                                ev.col,
-                                ev.row,
-                            )?;
-                        }
-                        return Ok(Disposition::Consumed);
-                    }
-                }
-                return Ok(Disposition::Pass);
-            }
-        }
-        if bx.kind != "chrome:editor" {
-            return Ok(Disposition::Pass);
-        }
-        let areas: Vec<_> = ed
-            .active_layout()
-            .split_areas
-            .iter()
-            .map(|(split_id, buffer_id, content_rect, _, _, _)| {
-                (*split_id, *buffer_id, *content_rect)
-            })
-            .collect();
-        for (split_id, buffer_id, content_rect) in areas {
-            if in_rect(ev.col, ev.row, content_rect) {
-                ed.handle_editor_click(
-                    ev.col,
-                    ev.row,
-                    split_id,
-                    buffer_id,
-                    content_rect,
-                    ev.modifiers,
-                )?;
-                return Ok(Disposition::Consumed);
-            }
-        }
-        Ok(Disposition::Pass)
-    }
-
-    fn on_wheel(
-        &self,
-        ed: &mut Editor,
-        bx: &LayoutBox,
-        col: u16,
-        row: u16,
-        delta: i32,
-    ) -> anyhow::Result<super::Disposition> {
-        use super::Disposition;
-        match bx.kind {
-            "chrome:split_widget_panel" => {
-                if ed.handle_split_widget_panel_wheel(col, row, delta) {
-                    Ok(Disposition::Consumed)
-                } else {
-                    Ok(Disposition::Pass)
-                }
-            }
-            // A split pane, hit in its content rect or scrollbar
-            // gutter (moved from the old central `wheel_surface_at`
-            // fork — the surface's wheel lives with the surface).
-            "chrome:editor" => {
-                let Some((split_id, buffer_id)) = ed.active_window().split_at_position(col, row)
-                else {
-                    return Ok(Disposition::Pass);
-                };
-                // Only a wheel over a pane changes that terminal's
-                // live/scrollback state; panning the tab strip or the
-                // explorer leaves a live terminal streaming.
-                if ed.active_window().focused_terminal_live() {
-                    ed.enter_terminal_scrollback();
-                } else {
-                    ed.active_window_mut()
-                        .set_split_terminal_drag_scrollback(split_id, buffer_id, false);
-                }
-                ed.dismiss_transient_popups();
-                ed.active_window().wheel_plugin_hook(col, row, delta);
-                ed.active_window_mut()
-                    .scroll_split_surface(split_id, buffer_id, delta);
-                Ok(Disposition::Consumed)
-            }
-            _ => Ok(Disposition::Pass),
-        }
-    }
-
-    fn on_hwheel(
-        &self,
-        ed: &mut Editor,
-        bx: &LayoutBox,
-        col: u16,
-        row: u16,
-        delta: i32,
-    ) -> anyhow::Result<super::Disposition> {
-        use super::Disposition;
-        match bx.kind {
-            "chrome:editor" => {
-                let Some((split_id, buffer_id)) = ed.active_window().split_at_position(col, row)
-                else {
-                    return Ok(Disposition::Pass);
-                };
-                ed.active_window_mut()
-                    .pan_split_horizontal(split_id, buffer_id, delta)?;
-                Ok(Disposition::Consumed)
-            }
-            _ => Ok(Disposition::Pass),
-        }
-    }
-}
+use super::Editor;
 
 /// Behavior owned by this component (moved from mouse_input.rs —
 /// the handlers its arms dispatch to).
@@ -656,6 +477,73 @@ impl Editor {
     /// The main tree's dividers are nodes and carry their own identity; a
     /// grouped subtree is laid out inside a pane's interior, which is still a
     /// painter's, so this is the hit test that remains — over the rectangles
+    /// A left press on a pane's content: place the caret, select the word, or
+    /// select the line — or toggle a fold, when the cell is a folded line's
+    /// gutter indicator, which is checked first and was checked first when it
+    /// lived pre-walk.
+    ///
+    /// The pane comes from the node. The content rectangle comes from that
+    /// same node, read back from the laid-out tree: click-to-byte projects
+    /// through the view pipeline and needs the extent. It used to come from
+    /// whichever recorded rectangle happened to contain the point.
+    pub(crate) fn press_pane_content(
+        &mut self,
+        pane: LeafId,
+        col: u16,
+        row: u16,
+        clicks: u8,
+    ) -> AnyhowResult<()> {
+        // The pane's content is a live terminal that wants the mouse, or a
+        // Ctrl+Click on a path it printed. Both are the content's, and both
+        // come before placing a caret — the same order they had when they sat
+        // between the tree and the legacy walk, back when a box did this.
+        if let Some(ev) = self.shell_pointer_event.map(|(ev, _)| ev) {
+            if let Some(r) = self.pane_content_takes_pointer(col, row, ev) {
+                r?;
+                return Ok(());
+            }
+        }
+        if clicks >= 2 {
+            if let Some((buffer_id, byte_pos)) = self.fold_toggle_line_at_screen_position(col, row)
+            {
+                self.active_window_mut()
+                    .toggle_fold_at_byte(buffer_id, byte_pos);
+                return Ok(());
+            }
+        }
+        let (Some(buffer_id), Some(content_rect)) = (
+            self.active_window().pane_buffer(pane),
+            self.pane_content_rect(pane),
+        ) else {
+            return Ok(());
+        };
+        match clicks {
+            1 => {
+                let modifiers = self
+                    .shell_pointer_event
+                    .map(|(ev, _)| ev.modifiers)
+                    .unwrap_or_else(crossterm::event::KeyModifiers::empty);
+                self.handle_editor_click(col, row, pane, buffer_id, content_rect, modifiers)
+            }
+            2 => self.handle_split_double_click(pane, buffer_id, content_rect, col, row),
+            _ => self.handle_split_triple_click(pane, buffer_id, content_rect, col, row),
+        }
+    }
+
+    /// Where the shell laid this pane's content out.
+    fn pane_content_rect(&self, pane: LeafId) -> Option<ratatui::layout::Rect> {
+        crate::view::shell::rect_of(
+            self.shell_ui.as_ref()?,
+            &crate::view::shell::splits::content_key(pane),
+            ratatui::layout::Rect::new(
+                0,
+                0,
+                self.active_chrome().last_frame.width,
+                self.active_chrome().last_frame.height,
+            ),
+        )
+    }
+
     /// Whether the pointer is on a pane's scrollbar thumb or its track.
     ///
     /// The pane comes from the node; the thumb's extent is the recorded read

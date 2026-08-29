@@ -170,19 +170,6 @@ impl ChromeTreeBuilder {
         b.z = z;
         self.push(b);
     }
-
-    /// A surface at its painted rectangle.
-    pub(crate) fn rect(&mut self, kind: &'static str, z: u8, r: ratatui::layout::Rect) {
-        let mut b = LayoutBox::plain(
-            kind,
-            r.y as u32,
-            r.x as u32,
-            r.width as u32,
-            r.height as u32,
-        );
-        b.z = z;
-        self.push(b);
-    }
 }
 
 /// What one press-walk step does to the walk, given the component's
@@ -452,7 +439,6 @@ pub(crate) fn components() -> &'static [&'static dyn ChromeComponent] {
         &popups::Popups,
         &floating_modal::FloatingModal,
         &dock::Dock,
-        &splits::Splits,
         &menu::Menu,
         &file_explorer::FileExplorer,
         &status_bar::StatusBar,

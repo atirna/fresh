@@ -88,6 +88,20 @@ pub enum UiFact {
     /// popup dismissal and plugin hook the vertical one carries.
     PaneTabsPan { pane: LeafId, delta: i32 },
 
+    /// A left press on a pane's content, and which press of a run it is: one
+    /// places the caret, two selects the word, three the line — or toggles a
+    /// fold, when the cell is a folded line's gutter indicator.
+    ///
+    /// The pane is the node's. The content *rectangle* the handlers take is
+    /// read back from the same node, because click-to-byte is a projection
+    /// through the view pipeline and needs the extent, not just the cell.
+    PaneContentPress {
+        pane: LeafId,
+        x: u16,
+        y: u16,
+        clicks: u8,
+    },
+
     // -- a pane's scrollbars, and its wheel -----------------------------------
     /// A left press on one of a pane's scrollbars.
     ///

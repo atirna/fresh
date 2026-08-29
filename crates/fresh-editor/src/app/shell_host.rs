@@ -831,6 +831,26 @@ impl Editor {
         claimed
     }
 
+    /// Whether a wheel notch over a pane's content was taken by a live
+    /// terminal there rather than scrolling the pane.
+    ///
+    /// The same gate the content's press asks (`pane_content_takes_pointer`),
+    /// which is where the ruling lives; a notch simply has nowhere else to go
+    /// once the PTY has it.
+    fn pane_content_took_wheel(&mut self, x: u16, y: u16) -> bool {
+        let Some((ev, _)) = self.shell_pointer_event else {
+            return false;
+        };
+        match self.pane_content_takes_pointer(x, y, ev) {
+            Some(Err(e)) => {
+                tracing::warn!("terminal wheel forward failed: {e}");
+                true
+            }
+            Some(Ok(_)) => true,
+            None => false,
+        }
+    }
+
     /// Apply a positional fact — the half of a message that never becomes a
     /// keybinding.
     fn apply_ui_fact(&mut self, fact: crate::view::shell::msg::UiFact) {
@@ -874,6 +894,11 @@ impl Editor {
             UiFact::PaneTabsPan { pane, delta } => {
                 self.active_window_mut().scroll_tab_strip(pane, delta);
             }
+            UiFact::PaneContentPress { pane, x, y, clicks } => {
+                if let Err(e) = self.press_pane_content(pane, x, y, clicks) {
+                    tracing::warn!("pane content click failed: {e}");
+                }
+            }
             // A pane's scrollbars, and its wheel. Every one of these took a
             // `(col, row)` and asked each pane's recorded rectangle in turn
             // whether it contained the point; the node says which pane, and
@@ -894,6 +919,17 @@ impl Editor {
                 self.shell_hover = at.and_then(|(pane, row)| self.scrollbar_hover(pane, row));
             }
             UiFact::PaneWheel { pane, x, y, delta } => {
+                // A live terminal that asked for the mouse gets the notch —
+                // the same gate the content's press asks, for the same reason.
+                if self.pane_content_took_wheel(x, y) {
+                    return;
+                }
+                // A plugin's panel inside the pane's content scrolls itself
+                // first — it was a box at z 120 over the pane's content rect,
+                // and a nested surface's wheel is genuinely the nested one's.
+                if self.handle_split_widget_panel_wheel(x, y, delta) {
+                    return;
+                }
                 let Some(buffer_id) = self.active_window().pane_buffer(pane) else {
                     return;
                 };
@@ -912,6 +948,10 @@ impl Editor {
                     .scroll_split_surface(pane, buffer_id, delta);
             }
             UiFact::PanePan { pane, delta } => {
+                let (x, y) = self.shell_hover_at;
+                if self.pane_content_took_wheel(x, y) {
+                    return;
+                }
                 let Some(buffer_id) = self.active_window().pane_buffer(pane) else {
                     return;
                 };
