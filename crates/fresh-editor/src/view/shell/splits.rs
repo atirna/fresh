@@ -18,10 +18,17 @@
 //! the shell. The dividers' drags and the panes' content are the editor's, and
 //! are added where the grid is mounted.
 
-use fresh_ui::{col, layout_reader, row, Key, LayoutInfo, Node, Sizing};
+use std::rc::Rc;
+
+use fresh_ui::{
+    col, gesture, layout_reader, row, Event, GestureKind, Key, LayoutInfo, MouseButton, Node,
+    PointerMode, Sizing,
+};
 
 use crate::model::event::{ContainerId, LeafId, SplitDirection};
 use crate::view::split::{split_rect_ext, SplitNode};
+
+use super::msg::{UiFact, UiMsg};
 
 /// A pane's key, by the leaf it shows.
 pub fn leaf_key(id: LeafId) -> Key {
@@ -270,4 +277,122 @@ mod tests {
             }
         }
     }
+}
+
+/// What the shell needs to state about the grid.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Splits {
+    pub root: SplitNode,
+    pub maximized: Option<LeafId>,
+}
+
+/// The grid mounted over the body's `Host` leaf: geometry and the dividers'
+/// gestures, painting nothing.
+///
+/// The panes are `Ignore` — not there at all, as far as the pointer is
+/// concerned — because the body's clicks are still the legacy walk's: placing
+/// a caret, selecting a word, hitting a tab strip. What the tree takes is the
+/// divider, and it takes it *because the node knows which container it is*.
+/// `handle_click_split_separator` searched a recorded list of separator
+/// rectangles to answer that, comparing a click against each in turn.
+pub fn overlay(s: &Splits) -> Node<UiMsg> {
+    dress(grid::<UiMsg>(&s.root, s.maximized), &s.root, s.maximized)
+}
+
+/// Walk the built grid and give each node its pointer role.
+///
+/// Done as a second pass rather than inside `grid` so the description stays
+/// message-agnostic: the model lays the same grid out with `M = ()`, and a
+/// gesture would make that impossible.
+fn dress(n: Node<UiMsg>, root: &SplitNode, maximized: Option<LeafId>) -> Node<UiMsg> {
+    // The grid is built by `layout_reader`s, so its structure is not walkable
+    // before layout. Instead the dressing is applied by rebuilding: the same
+    // recursion, with roles.
+    let _ = n;
+    if maximized.is_some() {
+        return pane_inert::<UiMsg>();
+    }
+    dressed(root)
+}
+
+fn pane_inert<M: 'static>() -> Node<M> {
+    row().pointer_mode(PointerMode::Ignore)
+}
+
+fn dressed(n: &SplitNode) -> Node<UiMsg> {
+    match n {
+        SplitNode::Leaf { .. } => pane_inert::<UiMsg>(),
+        SplitNode::Grouped { layout, .. } => dressed(layout),
+        SplitNode::Split {
+            direction,
+            first,
+            second,
+            ratio,
+            split_id,
+            fixed_first,
+            fixed_second,
+        } => {
+            let (dir, ratio) = (*direction, *ratio);
+            let (ff, fs, id) = (*fixed_first, *fixed_second, *split_id);
+            let (a, b) = (first.clone(), second.clone());
+            layout_reader(move |info: LayoutInfo| {
+                let whole = ratatui::layout::Rect::new(
+                    0,
+                    0,
+                    info.constraints.max_w,
+                    info.constraints.max_h,
+                );
+                let (ra, rb) = split_rect_ext(whole, dir, ratio, ff, fs);
+                let (first, second) = (dressed(&a), dressed(&b));
+                let div = divider(id, dir);
+                match dir {
+                    SplitDirection::Vertical => {
+                        row().pointer_mode(PointerMode::Transparent).children([
+                            first.w(Sizing::Cells(ra.width)),
+                            div.w(Sizing::Cells(1)),
+                            second.w(Sizing::Cells(rb.width)),
+                        ])
+                    }
+                    SplitDirection::Horizontal => {
+                        col().pointer_mode(PointerMode::Transparent).children([
+                            first.h(Sizing::Cells(ra.height)),
+                            div.h(Sizing::Cells(1)),
+                            second.h(Sizing::Cells(rb.height)),
+                        ])
+                    }
+                }
+            })
+        }
+    }
+}
+
+/// One divider: it starts the width drag, and it says when it is hovered.
+///
+/// It paints nothing — the split renderer still draws the separator glyph and
+/// its hover highlight, from `separator_areas`, which is itself a read of this
+/// same layout.
+fn divider(id: ContainerId, dir: SplitDirection) -> Node<UiMsg> {
+    gesture(row())
+        .key(divider_key(id))
+        .on(
+            GestureKind::Press,
+            Rc::new(move |e: &Event| {
+                if e.button != MouseButton::Left {
+                    return None;
+                }
+                e.stop();
+                Some(UiMsg::Ui(UiFact::SeparatorPress {
+                    container: id,
+                    direction: dir,
+                    x: e.pos.x.max(0) as u16,
+                    y: e.pos.y.max(0) as u16,
+                }))
+            }),
+        )
+        .on_enter(Rc::new(move |_: &Event| {
+            Some(UiMsg::Ui(UiFact::SeparatorHover(Some((id, dir)))))
+        }))
+        .on_leave(Rc::new(move |_: &Event| {
+            Some(UiMsg::Ui(UiFact::SeparatorHover(None)))
+        }))
 }

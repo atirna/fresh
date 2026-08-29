@@ -1040,6 +1040,35 @@ impl Editor {
                     self.blur_floating_panel(crate::app::PanelSlot::Dock);
                 }
             }
+            // A split divider. The node is the container, so there is no hit
+            // test: `handle_click_split_separator` walked a recorded list of
+            // separator rectangles comparing the click against each in turn,
+            // to arrive at the identity the node already had. The drag it arms
+            // is still the legacy grab.
+            UiFact::SeparatorPress {
+                container,
+                direction,
+                x,
+                y,
+            } => {
+                let ratio = self
+                    .split_manager_mut()
+                    .get_ratio(container.into())
+                    .or_else(|| self.grouped_split_ratio(container));
+                let st = &mut self.active_window_mut().mouse_state;
+                st.dragging_separator = Some((container, direction));
+                st.drag_start_position = Some((x, y));
+                if let Some(ratio) = ratio {
+                    self.active_window_mut().mouse_state.drag_start_ratio = Some(ratio);
+                }
+            }
+            UiFact::SeparatorHover(at) => {
+                let target =
+                    at.map(|(id, dir)| crate::app::types::HoverTarget::SplitSeparator(id, dir));
+                if self.active_window().mouse_state.hover_target != target {
+                    self.active_window_mut().mouse_state.hover_target = target;
+                }
+            }
             // A full-screen modal has the pointer. Which one is the tree's
             // answer — `Modality::Exclusive`, where a capture band offered
             // itself in rank order and stopped at the first taker — and what

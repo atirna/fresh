@@ -1059,8 +1059,9 @@ impl Editor {
         // their inner separators are not visited by `get_separators_with_ids`
         // above. The renderer collected them (using the same content rect it
         // drew them at) — merge so clicks on those rendered columns register.
-        separator_areas.extend(grouped_separator_areas);
+        separator_areas.extend(grouped_separator_areas.iter().copied());
         self.active_layout_mut().separator_areas = separator_areas;
+        self.active_layout_mut().grouped_separator_areas = grouped_separator_areas;
         self.active_layout_mut().editor_content_area = Some(editor_content_area);
 
         // Render hover highlights for separators and scrollbars
@@ -2675,6 +2676,15 @@ impl Editor {
         let popups = self.popup_descriptions(chrome_area);
         let theme_info = self.theme_info_description();
         let modal = self.modal_slot();
+        // The grid's shape, for the tree to lay out. Cloned rather than
+        // borrowed: a description is a value, and this one is a handful of
+        // nodes.
+        let splits = self.active_window().buffers.splits().map(|(mgr, _)| {
+            crate::view::shell::splits::Splits {
+                root: mgr.root().clone(),
+                maximized: mgr.maximized_split().map(crate::model::event::LeafId),
+            }
+        });
         let trust = self.trust_description(ratatui::layout::Rect {
             x: 0,
             y: 0,
@@ -2686,6 +2696,7 @@ impl Editor {
             browser,
             trust,
             modal,
+            splits,
             menu_bar: menu_bar_visible,
             status_bar: status_row,
             search_options,

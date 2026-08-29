@@ -1775,9 +1775,24 @@ list.
    A three-pane grid costs ~38µs cold in a debug build, against callers that
    run once a frame or on resize.
 
-   What this buys is the next step rather than a deletion: the panes and the
-   dividers are *nodes* now, with keys, so a divider can take a gesture and a
-   pane can become a `Host` — which is the rest of S5.
+   What this buys is the next step, and the first of it has landed: **the
+   dividers are gestures.** A divider node knows which container it is, so
+   `handle_click_split_separator` — which walked a recorded list of separator
+   rectangles comparing a click against each in turn to recover that identity
+   — is gone, along with the `chrome:split_separators` box and its hover rail.
+   The drag it arms is still `PointerGrab::SplitSeparator`, which retires with
+   the pointer-capture wave.
+
+   **And the pane boundary showed itself exactly where this entry predicted.**
+   A `Grouped` subtree is laid out inside a pane's *interior* — past the tab
+   bar and the scrollbars the painter reserves — so its dividers are not in
+   the main tree's description at all, and moving the main ones broke the
+   grouped drag until they were separated. They stay recorded rectangles, now
+   under their own `chrome:group_separators` box and
+   `WindowLayoutCache::grouped_separator_areas`, and they become nodes when
+   the pane's interior does. That is the "grid **and** the pane" this entry
+   warns about, met in practice: the grid alone is landable, and it stops at
+   the pane's edge.
 
    **The order, therefore:**
    1. A leaf host id space (`HostRegion` is a small fixed enum; a leaf's id is
