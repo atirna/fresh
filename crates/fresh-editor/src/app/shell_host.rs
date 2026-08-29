@@ -71,6 +71,22 @@ pub struct BodyState {
 /// rectangles.
 pub(crate) use crate::view::ui::split_rendering::PaneAreas as BodyOutput;
 
+/// What one dispatch into the shell's tree did.
+///
+/// Two answers, because the walk behind this one needs both. **Claimed** is
+/// whether the tree took the event, and it is reported by the library rather
+/// than inferred: a modal swallows a key without producing a message, and a
+/// dismissal closes a menu while leaving the right-click available to open
+/// the next one. **Changed** is whether anything moved as a result, which is
+/// what asks for the repaint — and the two differ exactly where hover lives.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Dispatched {
+    /// The tree took the event: nothing behind it should act on it.
+    pub claimed: bool,
+    /// The tree changed something, so the frame is stale.
+    pub changed: bool,
+}
+
 /// The split grid's painter, for the length of one fold.
 ///
 /// **Frame-scoped, and that is the point.** `paint_host` carries a target and
@@ -911,9 +927,9 @@ impl Editor {
     /// leaf standing in for a painter that has not moved — so anything the
     /// tree declines reaches the legacy path exactly as before. A surface
     /// starts taking its own input the moment it stops being a `Host`.
-    pub(crate) fn shell_dispatch(&mut self, input: fresh_ui::Input) -> bool {
+    pub(crate) fn shell_dispatch(&mut self, input: fresh_ui::Input) -> Dispatched {
         let Some(mut ui) = self.shell_ui.take() else {
-            return false;
+            return Dispatched::default();
         };
         // What the menu was showing when this event arrived. Snapshotted
         // before a single message is applied, because the first of them may be
@@ -933,6 +949,20 @@ impl Editor {
         // claiming the pointer, and a dismissal closes a menu while leaving a
         // right-click to go on and open the next one.
         let claimed = result.claimed;
+        // **Claiming and changing are different things**, and both answers are
+        // needed. A hover moves a highlight without claiming — the event goes
+        // on to the plugin `mouse_move` hook, the terminal-link tracker and
+        // the LSP hover probe — and the frame it changed still has to be
+        // drawn. That second half went missing with the pointer walk:
+        // `update_hover_target` used to return "the target moved, redraw" and
+        // nothing replaced it, so every hover the tree owns — the menu bar's
+        // labels, the explorer's rows, the status bar's segments, a
+        // separator, a tab — restyled a frame nobody asked for.
+        //
+        // A message *is* the change: a `UiFact` exists to be reacted to, and
+        // a pointer that crosses no element boundary produces none, which is
+        // what keeps an idle motion from drawing a frame.
+        let changed = !result.msgs.is_empty();
         for msg in result.msgs {
             match msg {
                 crate::view::shell::msg::UiMsg::Action(action) => {
@@ -945,7 +975,7 @@ impl Editor {
                 crate::view::shell::msg::UiMsg::Ui(fact) => self.apply_ui_fact(fact),
             }
         }
-        claimed
+        Dispatched { claimed, changed }
     }
 
     /// Whether a wheel notch over a pane's content was taken by a live

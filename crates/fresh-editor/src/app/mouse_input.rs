@@ -199,9 +199,15 @@ impl Editor {
         if let Some(input) =
             crate::view::shell::input::mouse(mouse_event, clicks, wheel_lines, WHEEL_COLUMNS)
         {
-            if self.shell_dispatch(input) {
+            let d = self.shell_dispatch(input);
+            if d.claimed {
                 return Ok(true);
             }
+            // Declined, but not necessarily inert: a hover restyles the
+            // surface under the pointer and lets the event go on to the
+            // trackers below, so the frame is stale even though the walk
+            // continues. See `Dispatched`.
+            needs_render = needs_render || d.changed;
         }
         // A live terminal's own mouse, and the Ctrl+Click that opens a path it
         // printed. Both belong to a pane's *content*, and the pane's content
