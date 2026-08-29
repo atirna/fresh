@@ -655,12 +655,16 @@ wire (design §13). The migration keeps the wire type `WidgetSpec` where it is
 (`fresh-core`, unchanged for compatibility) and adds a **host-side translation**
 `WidgetSpec → Node<Action>` in `fresh-editor` (the M6 wave). The reconciler moves
 host-side, so `WidgetInstanceState` (list scroll, tree expansion, selection)
-becomes element state — a plugin re-sending its spec no longer loses scroll. Two
-externally visible changes, both needing a release cycle:
+becomes element state — a plugin re-sending its spec no longer loses scroll.
 
-- **Keyed builders require a key function.** This breaks `widgets.ts` `List`/
-  `Tree` calls without keys. Ship the new builders one release ahead, deprecate
-  the old ones with a load-time warning.
+**And that is the only externally visible change.** An earlier draft listed a
+second one — *keyed builders require a key function*, breaking every
+`widgets.ts` `List`/`Tree` call without keys, shipped a release ahead behind a
+load-time deprecation warning. That was wrong, and §5's M6 row records why:
+per-row state is held by *index*, not by row key, so unkeyed rows have nothing
+to lose. `WidgetSpec` is frozen. Every plugin that works today goes on working,
+unchanged, and the audit that warned about unkeyed widgets is deleted.
+
 - **State survival changes.** A plugin that compensated for state loss on re-send
   now sees state persist. Changelog item.
 
@@ -1407,7 +1411,7 @@ plus the §4.7 rebuild benchmark. No wave is scheduled until this exit holds.
 | **M3** | Menu bar, dropdowns, submenus | nested layers, hover auto-switch, mnemonics | `chrome/menu.rs`, the `view/ui/menu.rs` dispatch half, the menu close-guard box, the hover auto-switch machine |
 | **M4** | Info/hover/signature popups, theme inspector | transient dismissal via observers, scroll, text selection | `chrome/popups.rs`, `chrome/theme_info.rs`, `view/popup_mouse.rs` remnants, the transient-dismiss pre-band stage (the LSP hover *state machine* stays behind the leaf) |
 | **M5** | File browser, prompt / command palette | `FocusScope`, text input, results list, preview | `chrome/prompt.rs`, `chrome/file_browser.rs`, `view/prompt_input.rs`, the overlay toolbar ring, the click scrim, the position-blind wheel box, the manual-scroll latch |
-| **M6** | Plugin panels: dock + floating | `WidgetSpec` → `Node` translation, element state replacing `WidgetInstanceState`, **plugin API change** | `widgets/kinds/*` dispatch, `widget_runtime.rs`, `WidgetInstanceState`, `WidgetMutation` fast path |
+| **M6** | Plugin panels: dock + floating | `WidgetSpec` → `Node` translation, element state replacing `WidgetInstanceState`. **No plugin API change** — `WidgetSpec` is frozen, and the wave is entirely a backend swap. | `widgets/kinds/*` dispatch, `widget_runtime.rs`, `WidgetInstanceState`, `WidgetMutation` fast path |
 | **M7** | Modals: workspace trust, keybinding editor, calibration wizard | `Modality::Exclusive` | `chrome/modals.rs`, `capture_mouse`, `blocks_terminal_input`, the cursor/hover suppression lists, the bespoke `handle_*_mouse` |
 | **M8** | Settings (+ keybinding editor form) | the largest interior; rendering already on `WidgetSpec` | `view/settings/*` control layer, `view/controls/*`, `widget_map.rs`, the dual state store, the bespoke settings `input.rs` |
 | **M9** | Frame: splits, tabs, scrollbars, dock column, explorer pane | the frame itself; all else nests inside | `chrome/splits.rs`, `chrome/base.rs`, `chrome/mod.rs` (registry, `layer_rank`, `chrome_tree`), `mouse_input.rs` dispatch engines, `PointerGrab`, the chrome half of `render.rs`, `KeyContext` |
@@ -1485,8 +1489,10 @@ The e2e suite (~315 files) is the primary mechanism, used as-is:
    them rather than discovering them mid-wave.
 2. **Cell-identical output is a hard constraint**, and the biggest single cost
    per wave.
-3. **M6 changes plugin-visible behavior** (state survival) and breaks the API
-   (required keys). It needs a release cycle of its own.
+3. **M6 changes plugin-visible behavior** (state survival) but does *not*
+   break the API. The "required keys" half of this risk was checked and
+   withdrawn — see §4.6 — so `WidgetSpec` is frozen and the wave needs no
+   release cycle of its own.
 4. **M8 (Settings) is optional as a stopping point.** It is the largest interior
    and the least coupled to dispatch; stopping after M7 with Settings still on
    the current (already-half-unified) path is a supported end state.
