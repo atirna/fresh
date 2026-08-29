@@ -1763,10 +1763,21 @@ list.
    caller and the grid subtree is a fraction of what that figure covers. The
    pure function can become a layout without a budget argument.
 
-   So the order stands and nothing blocks it: one description, asked at
-   whatever size the caller has. A description that recurses beside the
-   model's own walk instead is the second derivation this entry exists to
-   forbid.
+   **Landed.** `SplitNode::get_leaves_with_rects` is a read of
+   `shell::splits::grid`, laid out at whatever box the caller has. The rule
+   inside it — `split_rect_ext`, the ratio pinned to `MIN_PANE_*` — is
+   unchanged and still the model's; what moved is the recursion around it. The
+   original walk stays as `reference_leaves_with_rects`, compiled only under
+   `cfg(test)`, because a replacement is only as trustworthy as what it was
+   checked against: seven shapes across five sizes, plus the dividers against
+   `get_separators_with_ids` and the maximized case.
+
+   A three-pane grid costs ~38µs cold in a debug build, against callers that
+   run once a frame or on resize.
+
+   What this buys is the next step rather than a deletion: the panes and the
+   dividers are *nodes* now, with keys, so a divider can take a gesture and a
+   pane can become a `Host` — which is the rest of S5.
 
    **The order, therefore:**
    1. A leaf host id space (`HostRegion` is a small fixed enum; a leaf's id is
