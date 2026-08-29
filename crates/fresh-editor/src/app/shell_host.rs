@@ -356,10 +356,13 @@ impl crate::view::shell::fold::HostPainter for BodyPainter<'_> {
             // `Draw::Host`. Listed so that un-migrating one is a compile
             // error rather than a blank row.
             HostRegion::MenuBar | HostRegion::SearchOptions | HostRegion::Explorer => {}
+            // The prompt's input row: cells the fold writes, at the rectangle
+            // layout gave the region.
+            HostRegion::PromptLine => self.editor.render_prompt_line(buf, rect, caret),
             // The dock's column is native around a `Host` content leaf that
-            // the panel painter still owns, and the two one-row regions are
-            // the prompt's. All three are painted by `Editor::render`.
-            HostRegion::Dock | HostRegion::StatusBar | HostRegion::PromptLine => {}
+            // the panel painter still owns, and the status bar's prompt states
+            // are the one row `Editor::render` still paints outside the fold.
+            HostRegion::Dock | HostRegion::StatusBar => {}
         }
     }
 }
