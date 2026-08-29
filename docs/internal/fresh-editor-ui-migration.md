@@ -1432,11 +1432,11 @@ pair needs a rename, not a merge.
 | # | Gap | Why it is a duplicate | What closing it needs |
 |---|---|---|---|
 | **G1** | **The keyboard is a second routing engine.** `ChromeComponent::{layers, on_layer_key}` over a ranked `overlay_stack()`. | The tree routes the pointer and the walk routes keys, so precedence is stated twice, in two vocabularies, and a surface that migrates its pointer keeps a rank entry. | The library already has all of it — `focusable`, `focus_scope`, `focus_within`, `GestureKind::Key`, `FocusGained`/`FocusLost` — and the shell uses none of it. Take the components whose interiors are already the tree's: `base`, `menu`, `popups`, `prompt`, `context_menu`. `dock` and `floating_modal` hand the key to the widget dispatcher and ride with M6; the four `modals` ride with G7. |
-| **G2** | **The prompt line takes its rectangle from the tree and paints outside the fold.** `region(HostRegion::PromptLine)` gives the rect; `render_prompt_line` writes the cells; `paint_host` no-ops the region. | A third paint arrangement beside "native" and "`Host`". Paint order stops being the display list's, and `Paints::HostsOnly` — the web path — cannot reach those cells at all. | Either paint it from the fold's `Host` arm, like the body, or describe it natively. The same question applies to the status bar's *prompt* states (`StatusBarRenderer::render_prompt`), whose element row is already native. |
-| **G3** | **A pane's split controls are recorded rectangles.** `close_split_areas` and `maximize_split_areas`. | The strip is a node and the tabs are measured inside it, but the two buttons drawn over that row are still a list of rects compared against a cell. | Make them nodes in `pane_interior`, over the strip — the z the two `LayoutBox`es carried. Both lists and `SplitControl` go with them. |
-| **G4** | **Two `impl Window` methods still scan `split_areas` for the pane under a cell.** `split_at_position` (which also takes the scrollbar column) and `get_terminal_content_area_at_position` (which also filters for a terminal). | `Editor::pane_content_at` is the one answer; these are two more, kept because `impl Window` cannot see `shell_ui`. | Move them to `impl Editor` beside `pane_content_at`, adding the scrollbar column via `vscroll_key(pane)`. Their callers are already on the editor. |
-| **G5** | **`tab_drag::compute_tab_drop_zone` guesses where a strip is.** `let tab_row = content_rect.y.saturating_sub(1);` — "assuming 1 row for tabs". | `PaneChrome::resolve` made "does this pane have a strip" explicit; the guess is wrong for a pane that has none, and re-derives a rectangle `tabs_key(pane)` already holds. | Read `tabs_key(pane)` and `pane_content_at`; the function becomes "which strip, else which content, else which edge". |
-| **G6** | **Two different things named `editor_content_area`.** | Not a duplicate — a name collision, documented by a hand-written note explaining the divergence. | Rename the cached one to say it is the last frame's, and delete the note. |
+| ~~**G2**~~ **Done.** | **The prompt line takes its rectangle from the tree and paints outside the fold.** `region(HostRegion::PromptLine)` gives the rect; `render_prompt_line` writes the cells; `paint_host` no-ops the region. | A third paint arrangement beside "native" and "`Host`". Paint order stops being the display list's, and `Paints::HostsOnly` — the web path — cannot reach those cells at all. | Either paint it from the fold's `Host` arm, like the body, or describe it natively. The same question applies to the status bar's *prompt* states (`StatusBarRenderer::render_prompt`), whose element row is already native. |
+| ~~**G3**~~ **Done.** | **A pane's split controls are recorded rectangles.** `close_split_areas` and `maximize_split_areas`. | The strip is a node and the tabs are measured inside it, but the two buttons drawn over that row are still a list of rects compared against a cell. | Make them nodes in `pane_interior`, over the strip — the z the two `LayoutBox`es carried. Both lists and `SplitControl` go with them. |
+| ~~**G4**~~ **Done.** | **Two `impl Window` methods still scan `split_areas` for the pane under a cell.** `split_at_position` (which also takes the scrollbar column) and `get_terminal_content_area_at_position` (which also filters for a terminal). | `Editor::pane_content_at` is the one answer; these are two more, kept because `impl Window` cannot see `shell_ui`. | Move them to `impl Editor` beside `pane_content_at`, adding the scrollbar column via `vscroll_key(pane)`. Their callers are already on the editor. |
+| ~~**G5**~~ **Done.** | **`tab_drag::compute_tab_drop_zone` guesses where a strip is.** `let tab_row = content_rect.y.saturating_sub(1);` — "assuming 1 row for tabs". | `PaneChrome::resolve` made "does this pane have a strip" explicit; the guess is wrong for a pane that has none, and re-derives a rectangle `tabs_key(pane)` already holds. | Read `tabs_key(pane)` and `pane_content_at`; the function becomes "which strip, else which content, else which edge". |
+| ~~**G6**~~ **Done.** | **Two different things named `editor_content_area`.** | Not a duplicate — a name collision, documented by a hand-written note explaining the divergence. | Rename the cached one to say it is the last frame's, and delete the note. |
 | **G7** | **The modal interiors hit-test rectangles their own painters recorded.** Settings (~20k lines) and the keybinding editor (~3.7k). | The tree answers *which* surface an event belongs to and the event travels on the editor instead of in the message — "routed, not transported" (`Editor::shell_pointer_event`). Deliberate, documented, and still a second hit-testing mechanism. | The interiors themselves. Retires the side channel, the four `modals` rows of G1, and `ChromeComponent` outright. |
 
 **The order is by what each unblocks, not by size.** G2 through G6 are sweeps:
@@ -1444,6 +1444,24 @@ mechanical, no design decision left in any of them, and each deletes a
 mechanism rather than adding one. G1 is a wave, and half of it is free today.
 G7 is the largest single body of work in the migration and the last thing
 holding `app/chrome/` open.
+
+**G2–G6 are done.** Three things they turned up that the list did not predict:
+
+- **The prompt's caret was riding a second channel too.** It placed its own
+  with `frame.set_cursor_position`, and the deferred commit skipped whenever
+  any prompt was up so the buffer's could not override it. One channel means
+  the prompt's caret wins by writing last, and the old guard becomes a
+  question of which caret the occlusion check applies to.
+- **A `gesture()` node wraps its child**, so appending the control cluster to
+  the tab strip made a *sibling of the row*, and every child landed at the
+  strip's origin. The cluster is a sibling of the tabs inside a keyed strip
+  row instead — and that is the better statement anyway: a press on the
+  cluster was never a tab-strip press.
+- **"Which pane covers this cell" is not "what would a click hit".** The first
+  is containment and the second is `Ui::hit_test`, and they differ exactly
+  where a popup covers the cell. The plugin `mouse_move` hook converts screen
+  coordinates to content coordinates with the first, so the tempting answer
+  would have been wrong.
 
 **Where the plugin wave goes.** After G1–G6, and interleaved with G7 rather
 than before it: M6 unblocks the `dock` and `floating_modal` halves of G1, and
