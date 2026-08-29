@@ -88,6 +88,33 @@ pub enum UiFact {
     /// popup dismissal and plugin hook the vertical one carries.
     PaneTabsPan { pane: LeafId, delta: i32 },
 
+    // -- a pane's scrollbars, and its wheel -----------------------------------
+    /// A left press on one of a pane's scrollbars.
+    ///
+    /// The pane is the node's; where the thumb is, and how wide the content
+    /// is, are reads of the scroll state at paint time and stay recorded.
+    PaneScrollbarPress {
+        pane: LeafId,
+        axis: fresh_ui::Axis,
+        x: u16,
+        y: u16,
+    },
+    /// The pointer is on a pane's vertical scrollbar at a row, or has left it.
+    /// Thumb or track is decided from the recorded thumb extent.
+    PaneScrollbarHover(Option<(LeafId, u16)>),
+    /// A wheel notch over a pane — its content, either of its bars, whichever
+    /// part reported it. They all mean the same thing: move this pane's
+    /// surface. Carries the pointer's cell for the plugin `mouse_wheel` hook.
+    PaneWheel {
+        pane: LeafId,
+        x: u16,
+        y: u16,
+        delta: i32,
+    },
+    /// A sideways wheel over a pane pans its surface. No popup dismissal and
+    /// no terminal live/scrollback transition — panning is not reading.
+    PanePan { pane: LeafId, delta: i32 },
+
     /// A right-click landed somewhere — anywhere — so the two left-click-only
     /// menus (the "+" new-tab menu, the close-split confirmation) close.
     ///

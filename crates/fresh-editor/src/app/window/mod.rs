@@ -2870,6 +2870,22 @@ impl Window {
         crate::app::terminal::combine_terminal_title(pty.as_deref(), osc.as_deref())
     }
 
+    /// The buffer a pane is showing — the main tree's leaves and a buffer
+    /// group's panels alike.
+    ///
+    /// A pane's identity comes from its node now, but the handlers behind it
+    /// still take a buffer. `split_at_position` answered both at once by
+    /// scanning recorded rectangles; this answers the half a node cannot.
+    pub fn pane_buffer(&self, pane: LeafId) -> Option<BufferId> {
+        let (mgr, _) = self.buffers.splits()?;
+        if let Some(b) = mgr.root().find(pane.into()).and_then(|n| n.buffer_id()) {
+            return Some(b);
+        }
+        self.grouped_subtrees
+            .values()
+            .find_map(|g| g.find(pane.into()).and_then(|n| n.buffer_id()))
+    }
+
     /// The buffer group each visible pane is showing, by the pane showing it.
     ///
     /// A group's layout lives in `grouped_subtrees` rather than in the split

@@ -32,39 +32,8 @@ impl ChromeComponent for Splits {
         // nodes as the rest. The strips took the split controls with them:
         // those are drawn over the tab row, which two boxes said with z 70
         // over z 60 and a node has to say itself.
-        for (_, _, _, scrollbar_rect, _, _) in &ed.active_layout().split_areas {
-            t.rect("chrome:scrollbars", 50, *scrollbar_rect);
-        }
-        for (_, _, r, _, _, _) in &ed.active_layout().horizontal_scrollbar_areas {
-            t.rect("chrome:h_scrollbar", 50, *r);
-        }
         for (_, _, content_rect, ..) in &ed.active_layout().split_areas {
             t.rect("chrome:editor", 10, *content_rect);
-        }
-    }
-
-    fn hover(&self, ed: &mut Editor, bx: &LayoutBox, col: u16, row: u16) -> Option<HoverTarget> {
-        match bx.kind {
-            "chrome:scrollbars" => {
-                for (split_id, _buffer_id, _content_rect, scrollbar_rect, thumb_start, thumb_end) in
-                    &ed.active_layout().split_areas
-                {
-                    if in_rect(col, row, *scrollbar_rect) {
-                        let relative_row = row.saturating_sub(scrollbar_rect.y) as usize;
-                        let is_on_thumb = relative_row >= *thumb_start && relative_row < *thumb_end;
-                        if is_on_thumb {
-                            return Some(HoverTarget::ScrollbarThumb(*split_id));
-                        } else {
-                            return Some(HoverTarget::ScrollbarTrack(
-                                *split_id,
-                                relative_row as u16,
-                            ));
-                        }
-                    }
-                }
-                None
-            }
-            _ => None,
         }
     }
 
@@ -140,38 +109,29 @@ impl ChromeComponent for Splits {
                 return Ok(Disposition::Pass);
             }
         }
-        let consumed = match bx.kind {
-            "chrome:scrollbars" => ed.handle_click_scrollbar(ev.col, ev.row),
-            "chrome:h_scrollbar" => ed.handle_click_horizontal_scrollbar(ev.col, ev.row),
-            "chrome:editor" => {
-                let areas: Vec<_> = ed
-                    .active_layout()
-                    .split_areas
-                    .iter()
-                    .map(|(split_id, buffer_id, content_rect, _, _, _)| {
-                        (*split_id, *buffer_id, *content_rect)
-                    })
-                    .collect();
-                for (split_id, buffer_id, content_rect) in areas {
-                    if in_rect(ev.col, ev.row, content_rect) {
-                        ed.handle_editor_click(
-                            ev.col,
-                            ev.row,
-                            split_id,
-                            buffer_id,
-                            content_rect,
-                            ev.modifiers,
-                        )?;
-                        return Ok(Disposition::Consumed);
-                    }
-                }
-                None
+        if bx.kind != "chrome:editor" {
+            return Ok(Disposition::Pass);
+        }
+        let areas: Vec<_> = ed
+            .active_layout()
+            .split_areas
+            .iter()
+            .map(|(split_id, buffer_id, content_rect, _, _, _)| {
+                (*split_id, *buffer_id, *content_rect)
+            })
+            .collect();
+        for (split_id, buffer_id, content_rect) in areas {
+            if in_rect(ev.col, ev.row, content_rect) {
+                ed.handle_editor_click(
+                    ev.col,
+                    ev.row,
+                    split_id,
+                    buffer_id,
+                    content_rect,
+                    ev.modifiers,
+                )?;
+                return Ok(Disposition::Consumed);
             }
-            _ => None,
-        };
-        if let Some(r) = consumed {
-            r?;
-            return Ok(Disposition::Consumed);
         }
         Ok(Disposition::Pass)
     }
@@ -196,7 +156,7 @@ impl ChromeComponent for Splits {
             // A split pane, hit in its content rect or scrollbar
             // gutter (moved from the old central `wheel_surface_at`
             // fork — the surface's wheel lives with the surface).
-            "chrome:editor" | "chrome:scrollbars" | "chrome:h_scrollbar" => {
+            "chrome:editor" => {
                 let Some((split_id, buffer_id)) = ed.active_window().split_at_position(col, row)
                 else {
                     return Ok(Disposition::Pass);
@@ -230,7 +190,7 @@ impl ChromeComponent for Splits {
     ) -> anyhow::Result<super::Disposition> {
         use super::Disposition;
         match bx.kind {
-            "chrome:editor" | "chrome:scrollbars" | "chrome:h_scrollbar" => {
+            "chrome:editor" => {
                 let Some((split_id, buffer_id)) = ed.active_window().split_at_position(col, row)
                 else {
                     return Ok(Disposition::Pass);
@@ -534,21 +494,26 @@ impl Editor {
         Ok(())
     }
 
-    pub(super) fn handle_click_scrollbar(
+    pub(crate) fn handle_click_scrollbar(
         &mut self,
+        pane: LeafId,
         col: u16,
         row: u16,
     ) -> Option<AnyhowResult<()>> {
+        // **Which pane is the node's**, so this looks its entry up by name
+        // rather than by asking every recorded rectangle whether it contains
+        // the point. What is still looked up is the bar's own geometry — the
+        // thumb's extent is a read of the scroll state at paint time, and that
+        // is genuinely recorded.
         let (split_id, buffer_id, scrollbar_rect, is_on_thumb) =
             self.active_layout().split_areas.iter().find_map(
                 |(split_id, buffer_id, _content, scrollbar_rect, thumb_start, thumb_end)| {
-                    if in_rect(col, row, *scrollbar_rect) {
-                        let relative_row = row.saturating_sub(scrollbar_rect.y) as usize;
-                        let on_thumb = relative_row >= *thumb_start && relative_row < *thumb_end;
-                        Some((*split_id, *buffer_id, *scrollbar_rect, on_thumb))
-                    } else {
-                        None
+                    if *split_id != pane || scrollbar_rect.width == 0 {
+                        return None;
                     }
+                    let relative_row = row.saturating_sub(scrollbar_rect.y) as usize;
+                    let on_thumb = relative_row >= *thumb_start && relative_row < *thumb_end;
+                    Some((*split_id, *buffer_id, *scrollbar_rect, on_thumb))
                 },
             )?;
 
@@ -597,16 +562,21 @@ impl Editor {
             ) {
                 return Some(Err(e));
             }
-            self.active_window_mut().mouse_state.hover_target =
-                Some(HoverTarget::ScrollbarThumb(split_id));
+            // The thumb jumped to the pointer, so the pointer is on the thumb
+            // now — and the tree will not say so again until the pointer
+            // moves. Written to the tree's field, since that is where this
+            // bar's hover comes from and it would otherwise still read
+            // `ScrollbarTrack` from the move that preceded the click.
+            self.shell_hover = Some(HoverTarget::ScrollbarThumb(split_id));
         }
         Some(Ok(()))
     }
 
-    pub(super) fn handle_click_horizontal_scrollbar(
+    pub(crate) fn handle_click_horizontal_scrollbar(
         &mut self,
+        pane: LeafId,
         col: u16,
-        row: u16,
+        _row: u16,
     ) -> Option<AnyhowResult<()>> {
         let (split_id, buffer_id, hscrollbar_rect, max_content_width, is_on_thumb) = self
             .active_layout()
@@ -621,11 +591,7 @@ impl Editor {
                     thumb_start,
                     thumb_end,
                 )| {
-                    if col >= hscrollbar_rect.x
-                        && col < hscrollbar_rect.x + hscrollbar_rect.width
-                        && row >= hscrollbar_rect.y
-                        && row < hscrollbar_rect.y + hscrollbar_rect.height
-                    {
+                    if *split_id == pane && hscrollbar_rect.width > 0 {
                         let relative_col = col.saturating_sub(hscrollbar_rect.x) as usize;
                         let on_thumb = relative_col >= *thumb_start && relative_col < *thumb_end;
                         Some((
@@ -690,6 +656,24 @@ impl Editor {
     /// The main tree's dividers are nodes and carry their own identity; a
     /// grouped subtree is laid out inside a pane's interior, which is still a
     /// painter's, so this is the hit test that remains — over the rectangles
+    /// Whether the pointer is on a pane's scrollbar thumb or its track.
+    ///
+    /// The pane comes from the node; the thumb's extent is the recorded read
+    /// of the scroll state, which is what makes this a lookup rather than a
+    /// calculation.
+    pub(crate) fn scrollbar_hover(&self, pane: LeafId, row: u16) -> Option<HoverTarget> {
+        let (_, _, _, bar, thumb_start, thumb_end) = self
+            .active_layout()
+            .split_areas
+            .iter()
+            .find(|(split_id, ..)| *split_id == pane)?;
+        let rel = row.saturating_sub(bar.y) as usize;
+        Some(match rel >= *thumb_start && rel < *thumb_end {
+            true => HoverTarget::ScrollbarThumb(pane),
+            false => HoverTarget::ScrollbarTrack(pane, rel as u16),
+        })
+    }
+
     /// What the pointer is on within a pane's tab strip.
     ///
     /// The strip is a node; its interior is the tab renderer's layout, so this

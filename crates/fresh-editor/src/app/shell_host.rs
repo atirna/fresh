@@ -874,6 +874,54 @@ impl Editor {
             UiFact::PaneTabsPan { pane, delta } => {
                 self.active_window_mut().scroll_tab_strip(pane, delta);
             }
+            // A pane's scrollbars, and its wheel. Every one of these took a
+            // `(col, row)` and asked each pane's recorded rectangle in turn
+            // whether it contained the point; the node says which pane, and
+            // what stays looked up is the bar's own geometry — the thumb's
+            // extent is a read of the scroll state at paint time.
+            UiFact::PaneScrollbarPress { pane, axis, x, y } => {
+                let r = match axis {
+                    fresh_ui::Axis::Vertical => self.handle_click_scrollbar(pane, x, y),
+                    fresh_ui::Axis::Horizontal => {
+                        self.handle_click_horizontal_scrollbar(pane, x, y)
+                    }
+                };
+                if let Some(Err(e)) = r {
+                    tracing::warn!("scrollbar click failed: {e}");
+                }
+            }
+            UiFact::PaneScrollbarHover(at) => {
+                self.shell_hover = at.and_then(|(pane, row)| self.scrollbar_hover(pane, row));
+            }
+            UiFact::PaneWheel { pane, x, y, delta } => {
+                let Some(buffer_id) = self.active_window().pane_buffer(pane) else {
+                    return;
+                };
+                // Only a wheel over a pane changes that terminal's
+                // live/scrollback state; panning the tab strip or the explorer
+                // leaves a live terminal streaming.
+                if self.active_window().focused_terminal_live() {
+                    self.enter_terminal_scrollback();
+                } else {
+                    self.active_window_mut()
+                        .set_split_terminal_drag_scrollback(pane, buffer_id, false);
+                }
+                self.dismiss_transient_popups();
+                self.active_window().wheel_plugin_hook(x, y, delta);
+                self.active_window_mut()
+                    .scroll_split_surface(pane, buffer_id, delta);
+            }
+            UiFact::PanePan { pane, delta } => {
+                let Some(buffer_id) = self.active_window().pane_buffer(pane) else {
+                    return;
+                };
+                if let Err(e) = self
+                    .active_window_mut()
+                    .pan_split_horizontal(pane, buffer_id, delta)
+                {
+                    tracing::warn!("pane pan failed: {e}");
+                }
+            }
             UiFact::ClearTabMenus => {
                 self.active_window_mut().new_tab_menu = None;
                 self.active_window_mut().close_split_menu = None;

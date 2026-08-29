@@ -21,7 +21,7 @@
 use std::rc::Rc;
 
 use fresh_ui::{
-    col, gesture, layout_reader, row, Event, GestureKind, Key, LayoutInfo, MouseButton, Node,
+    col, gesture, layout_reader, row, Axis, Event, GestureKind, Key, LayoutInfo, MouseButton, Node,
     PointerMode, Sizing,
 };
 
@@ -801,7 +801,91 @@ fn live_interior(id: LeafId, c: PaneChrome, s: &Rc<Splits>) -> Node<UiMsg> {
         Some(g) => dressed(g, s),
         None => row(),
     };
-    pane_interior::<UiMsg>(id, c, tab_strip(id), content)
+    pane_interior(
+        id,
+        c,
+        PaneSlots {
+            tabs: tab_strip(id),
+            content,
+            vscroll: scrollbar(id, Axis::Vertical),
+            hscroll: scrollbar(id, Axis::Horizontal),
+        },
+    )
+}
+
+/// One of a pane's scrollbars.
+///
+/// **The pane is the node's; the bar's geometry stays recorded.** Where the
+/// thumb is, and how wide the content is, are reads of the scroll state at
+/// paint time — genuinely recorded. Which pane the pointer is over was *also*
+/// recovered from a recorded rectangle, by asking every pane's bar in turn
+/// whether it contained the point, and that is what the key replaces.
+fn scrollbar(id: LeafId, axis: Axis) -> Node<UiMsg> {
+    let at = |e: &Event| (e.pos.x.max(0) as u16, e.pos.y.max(0) as u16);
+    let bar = gesture(row())
+        .on(
+            GestureKind::Press,
+            Rc::new(move |e: &Event| {
+                if e.button != MouseButton::Left {
+                    return None;
+                }
+                let (x, y) = at(e);
+                e.stop();
+                Some(UiMsg::Ui(UiFact::PaneScrollbarPress {
+                    pane: id,
+                    axis,
+                    x,
+                    y,
+                }))
+            }),
+        )
+        .on(
+            GestureKind::Wheel,
+            Rc::new(move |e: &Event| {
+                let (x, y) = at(e);
+                e.stop();
+                Some(UiMsg::Ui(pane_wheel(id, x, y, e.delta, e.axis)))
+            }),
+        );
+    // Only the vertical bar names a hover target: it has a draggable thumb and
+    // a track that pages, and the highlight follows the pointer between them.
+    match axis {
+        Axis::Horizontal => bar,
+        Axis::Vertical => bar
+            .on(
+                GestureKind::Move,
+                Rc::new(move |e: &Event| {
+                    Some(UiMsg::Ui(UiFact::PaneScrollbarHover(Some((
+                        id,
+                        e.pos.y.max(0) as u16,
+                    )))))
+                }),
+            )
+            .on_enter(Rc::new(move |e: &Event| {
+                Some(UiMsg::Ui(UiFact::PaneScrollbarHover(Some((
+                    id,
+                    e.pos.y.max(0) as u16,
+                )))))
+            }))
+            .on_leave(Rc::new(move |_: &Event| {
+                Some(UiMsg::Ui(UiFact::PaneScrollbarHover(None)))
+            })),
+    }
+}
+
+/// A wheel notch over a pane, by axis. One statement of it, because the
+/// pane's parts each report the wheel and every one of them means the same
+/// thing: move this pane's surface.
+fn pane_wheel(id: LeafId, x: u16, y: u16, delta: i32, axis: Axis) -> UiFact {
+    match axis {
+        Axis::Vertical => UiFact::PaneWheel {
+            pane: id,
+            x,
+            y,
+            delta,
+        },
+        Axis::Horizontal => UiFact::PanePan { pane: id, delta },
+    }
 }
 
 /// The tab strip, as one node per pane.
@@ -978,27 +1062,42 @@ impl PaneChrome {
 /// The horizontal bar stops short of the vertical one's column rather than
 /// running under it. That is the painter's arithmetic and it is the one thing
 /// here a reader would get wrong from the picture alone.
-/// `tabs` and `content` are those slots' own nodes: `row()` where only the
-/// rectangle is wanted (the model's layout query), something with gestures or
-/// children where the pointer has to reach into them. The keys are applied
-/// here either way, so a caller cannot forget one.
-pub fn pane_interior<M: 'static>(
-    id: LeafId,
-    c: PaneChrome,
-    tabs: Node<M>,
-    content: Node<M>,
-) -> Node<M> {
+pub fn pane_interior<M: 'static>(id: LeafId, c: PaneChrome, s: PaneSlots<M>) -> Node<M> {
     let cells = |on: bool| Sizing::Cells(on as u16);
     col().children([
-        tabs.key(tabs_key(id)).h(cells(c.tabs)),
+        s.tabs.key(tabs_key(id)).h(cells(c.tabs)),
         row().flex(1).children([
-            content.key(content_key(id)).flex(1),
-            row().key(vscroll_key(id)).w(cells(c.vscroll)),
+            s.content.key(content_key(id)).flex(1),
+            s.vscroll.key(vscroll_key(id)).w(cells(c.vscroll)),
         ]),
         row().h(cells(c.hscroll)).children([
-            row().key(hscroll_key(id)).flex(1),
+            s.hscroll.key(hscroll_key(id)).flex(1),
             // The column the vertical bar occupies, kept clear.
             row().w(cells(c.vscroll)),
         ]),
     ])
+}
+
+/// What goes in each of a pane's four slots.
+///
+/// `row()` everywhere is the bare shape: only the rectangles are wanted, which
+/// is how the model asks this description for them. The shell puts nodes with
+/// gestures and children in instead. The keys are applied by `pane_interior`
+/// either way, so a caller cannot forget one.
+pub struct PaneSlots<M> {
+    pub tabs: Node<M>,
+    pub content: Node<M>,
+    pub vscroll: Node<M>,
+    pub hscroll: Node<M>,
+}
+
+impl<M: 'static> Default for PaneSlots<M> {
+    fn default() -> Self {
+        Self {
+            tabs: row(),
+            content: row(),
+            vscroll: row(),
+            hscroll: row(),
+        }
+    }
 }
