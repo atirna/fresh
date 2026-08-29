@@ -1753,12 +1753,20 @@ list.
    `fresh-ui` can give that answer: `Ui::frame(node, size)` lays a description
    out at any size, not only the current one. So the end state is one
    implementation — the grid description — asked live by the render path and
-   speculatively by `apply_layout`. What has to be settled first is whether
-   laying out a fresh `Ui` is cheap enough for the callers that are per-frame
-   (`split_tabs_width` is), which is §6.2 item 10's unmeasured question finally
-   becoming load-bearing. Measure it, then swap; a description that recurses
-   beside the model's own walk instead is the second derivation this entry
-   exists to forbid.
+   speculatively by `apply_layout`.
+
+   **And it is affordable.** That was the last open question and it is now
+   measured (item 10): a *whole frame* — menu bar, status bar, prompt row,
+   dock, explorer and body — lays out in **122µs retained and 163µs cold**, in
+   a debug build on a loaded container. `apply_layout` runs on resize, a
+   handful of times a second at worst. `split_tabs_width` is the per-frame
+   caller and the grid subtree is a fraction of what that figure covers. The
+   pure function can become a layout without a budget argument.
+
+   So the order stands and nothing blocks it: one description, asked at
+   whatever size the caller has. A description that recurses beside the
+   model's own walk instead is the second derivation this entry exists to
+   forbid.
 
    **The order, therefore:**
    1. A leaf host id space (`HostRegion` is a small fixed enum; a leaf's id is
@@ -1779,12 +1787,21 @@ list.
 9. ~~**The message-type split**~~ — **decided and shipped** as
    `UiMsg::{Action, Ui(UiFact)}` (`view/shell/msg.rs`). Anything bindable stays
    an `Action`; positional facts are `UiFact` and are never serialized.
-10. **Frame scheduling and rebuild cost** — still open, and no longer gating.
-   It was written as an M0 exit criterion; S1, the context-menu wave and the
-   frame swap all shipped without it, so calling it a gate was wrong. The
-   measurement is still worth taking (a full chrome rebuild per frame, plus a
-   `Vec<String>` of labels per open menu), but it is a performance question to
-   answer with a profile, not a precondition.
+10. ~~**Frame scheduling and rebuild cost**~~ — **measured.** It was written
+   as an M0 exit criterion; S1, the context-menu wave and the frame swap all
+   shipped without it, so calling it a gate was wrong. It became load-bearing
+   for a different reason — item 7 needs to know whether a layout can be asked
+   for on demand — so it is taken now, by
+   `a_frame_layout_is_cheap_enough_to_ask_for_on_demand`.
+
+   A whole frame, with the menu bar, status bar, prompt row, dock, explorer
+   and body: **122µs retained, 163µs cold**, in a debug build on a loaded
+   container. Retained is the reconcile a per-frame caller pays; cold is what
+   a caller with no `Ui` of its own pays, which is the shape `apply_layout`
+   would use. Both are far below anything that would make "lay it out and ask"
+   the wrong answer, which is what item 7 needed to know. The test reports the
+   figure and asserts only a bound three orders of magnitude clear of it — a
+   wall-clock threshold is a flake waiting for a loaded runner.
 11. **Row visibility under squeeze** — still open; S1 shipped without deciding
    it, and the divergence is *recorded* by
    `squeeze_band_starves_a_different_row_than_ratatui`, not resolved by it. When the visible fixed rows
