@@ -357,6 +357,36 @@ mod tests {
         }
     }
 
+    /// **A pane's host id can never be mistaken for a region's.**
+    ///
+    /// Regions are the seven fixed slots, numbered 1..=7; `LeafId`s come from
+    /// a dense counter that starts at the same place, so the two id spaces
+    /// would overlap on the very first pane. The tag is what keeps the fold's
+    /// "this id names nothing" assertion able to mean it.
+    #[test]
+    fn a_panes_host_id_is_never_a_regions() {
+        use crate::view::shell::frame::{pane_host_id, HostRegion, HostTarget};
+        for r in HostRegion::ALL {
+            assert_eq!(
+                HostTarget::from_host_id(r.into()),
+                Some(HostTarget::Region(r)),
+                "{r:?} still resolves to itself"
+            );
+        }
+        for n in [0usize, 1, 4, 7, 63, 4096] {
+            let leaf = LeafId(SplitId(n));
+            assert_eq!(
+                HostTarget::from_host_id(pane_host_id(leaf)),
+                Some(HostTarget::Pane(leaf)),
+                "pane {n} round-trips"
+            );
+            assert!(
+                HostRegion::from_host_id(pane_host_id(leaf)).is_none(),
+                "pane {n} is not a region"
+            );
+        }
+    }
+
     /// **A press on a pane's strip names that pane, because it is that pane's.**
     ///
     /// Two `LayoutBox`es covered the tab row — the strip at z 60 and the split

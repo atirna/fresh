@@ -35,7 +35,7 @@ use crate::view::ui::split_rendering::SplitRenderer;
 use crate::view::ui::{EditorRenderConfig, RenderStyle};
 
 use crate::view::shell::fold::Caret;
-use crate::view::shell::frame::HostRegion;
+use crate::view::shell::frame::{HostRegion, HostTarget};
 
 /// Per-frame facts the split renderer needs that are not borrows.
 ///
@@ -207,7 +207,13 @@ pub fn paint_body(
 /// it is S5's decomposition, which subdivides the leaf into one per pane
 /// rather than removing it.
 impl crate::view::shell::fold::HostPainter for Editor {
-    fn paint_host(&mut self, region: HostRegion, rect: Rect, buf: &mut Buffer, caret: &mut Caret) {
+    fn paint_host(&mut self, target: HostTarget, rect: Rect, buf: &mut Buffer, caret: &mut Caret) {
+        let region = match target {
+            // One pane's content. Not reachable yet: the body is still a
+            // single `Host` that paints every pane in one pass.
+            HostTarget::Pane(_) => return,
+            HostTarget::Region(r) => r,
+        };
         match region {
             HostRegion::Body => {
                 // The state `render` left here, and the rectangles the grid
