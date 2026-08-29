@@ -79,6 +79,57 @@ pass review, ship, and reproduce the thing the migration is removing.
 | 0.2 | Six `shell_*` / `pending_*` fields carry values around the tree. | `provide` them as `Ambient`s: the theme, the pane-chrome map, the hover target. Dependents are dirtied, not the root. | Adding a seventh. Each one is a value the tree could have carried, parked on the editor because carrying it needed a primitive we had not adopted. |
 | 0.3 | No surface owns its own state. | Surfaces whose state is *theirs* — a list's scroll, a tree's expansion, a field's cursor — become `Component`s that own it. | Moving editor-model state into components. The rule is §4.3's: state the editor acts on stays on the editor; state that exists only because something is on screen belongs to the element. |
 | 0.4 | §4.7's practice rules were never written. | Write them, from the benchmark that already exists (a whole frame: 122µs retained, 163µs cold). | Skipping them again. They are the difference between a retained tree and an immediate-mode one with extra steps. |
+| 0.5 | **One retained tree, N windows.** `shell_ui` is on the `Editor`, not on `Window`, and nothing in `view/shell/` mentions `WindowId`. See below — this is the item that turns 0.3 from a refactor into a correctness change. | `Window.shell_ui`: one `Ui` per window, encapsulated by construction. | Keying subtrees by `WindowId` instead. It works and it relies on remembering, everywhere, forever. |
+
+#### 0.5 in full: the tree is shared across windows, and the windows are not
+
+The editor is N independent workspaces — `Editor.windows`, one active — each
+owning its own splits, buffers, explorer, dock, chrome layout and mouse state.
+The retained tree is **not** one of those things it owns: there is a single
+`Ui` on the `Editor`, reconciled each frame against whichever window is
+active, and no key anywhere in `view/shell/` mentions a window.
+
+**It has not bitten because nothing is retained yet.** `Component` count is
+zero, so the tree is geometry and gestures, both re-derived from the active
+window every frame. Switching windows re-derives everything, and there is no
+state to carry.
+
+**It bites the moment 0.3 lands.** A pane is keyed `Key::Pair("pane", id)`, and
+`SplitManager::next_split_id` starts at **1 in every window** — so window A's
+first pane and window B's first pane have the *same key*. Reconciliation is by
+`(type, key)` at a position; it will match them, and window B's list will
+inherit window A's scroll offset. That is not a corner case, it is the default
+layout of two windows.
+
+**And it contradicts a principle this codebase already states.** From
+`Window::authority`'s own doc: *"Owned outright by this window, never shared
+with another: it lives here (not in the `Clone` `WindowResources`) so the type
+system prevents one workspace's authority/trust/env from leaking into another
+(issue #2280)."* The shell tree is precisely the shared mutable state that
+sentence is about — it is simply newer than the sentence.
+
+**Three ways to fix it, and only one that both encapsulates and preserves.**
+
+- **One `Ui` per window** (`Window.shell_ui`). Cross-window matching becomes
+  impossible rather than avoidable; each window keeps its element state, focus
+  and dirty set while it is inactive. The cost is memory for N retained trees,
+  not time — only the active one is `frame()`d. And it is already coherent:
+  the frame description is a function of the active window today
+  (`menu_bar_visible`, `status_bar_visible` and the rest are per-window
+  fields). **This is the one to take.**
+- **One `Ui`, the whole per-window subtree under a single
+  `Key::Pair("window", id)`.** Cheap, and one rule in one place. But a changed
+  key at that position *discards* the subtree, so switching windows throws away
+  the state you wanted preserved. Right encapsulation, wrong semantics.
+- **Key every window-owned subtree by `WindowId`.** Explicit, per goal 4, and
+  it relies on every author remembering it in every new surface. One unkeyed
+  subtree is a silent leak between workspaces.
+
+**The six editor-global shell fields move with it.** `shell_hover`,
+`shell_hover_at`, `shell_menu_open_before`, `shell_frame_status_bar`,
+`pending_pane_chrome` and `shell_pointer_event` are all per-window facts
+parked on the `Editor`; 0.2 turns most of them into ambients, and this decides
+whose tree those ambients live in.
 
 ### A. The keyboard engine
 
@@ -176,8 +227,9 @@ compiles and mostly works" is what a routing change looks like from outside.
 **How we will know it is finished.** `app/chrome/` is gone. `KeyContext`,
 `PointerGrab`, `layer_rank`, `Paints` and `shell_pointer_event` are deleted.
 `WindowLayoutCache` holds only what paint alone can know. There is one display
-list with two consumers. And no file contains a list whose order is
-precedence.
+list with two consumers. No file contains a list whose order is precedence.
+And no UI state is reachable from two windows at once — the rule
+`Window::authority` already states, applied to the tree.
 
 ---
 
