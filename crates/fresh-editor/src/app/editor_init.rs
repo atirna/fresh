@@ -669,12 +669,9 @@ impl Editor {
             async_message_backlog: std::collections::VecDeque::new(),
             full_redraw_requested: false,
             suppress_chrome_cells: false,
-            shell_menu_open_before: None,
             menu_layout_frame: None,
             shell_frame_status_bar: None,
-            shell_hover_at: (0, 0),
             shell_hover: None,
-            pending_pane_chrome: Default::default(),
             shell_store: shell_store.clone(),
             shell_ui: Some({
                 let mut ui = fresh_ui::Ui::new();
