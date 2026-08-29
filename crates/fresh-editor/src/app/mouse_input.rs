@@ -284,15 +284,14 @@ impl Editor {
             MouseEventKind::Moved => {
                 // Dispatch MouseMove hook to plugins (fire-and-forget, no blocking check)
                 {
-                    // Find content rect for the split under the mouse
-                    let content_rect = self
-                        .active_layout()
-                        .split_areas
-                        .iter()
-                        .find(|(_, _, content_rect, _, _, _)| in_rect(col, row, *content_rect))
-                        .map(|(_, _, rect, _, _, _)| *rect);
-
-                    let (content_x, content_y) = content_rect.map(|r| (r.x, r.y)).unwrap_or((0, 0));
+                    // Where the pane under the pointer starts, so a plugin can
+                    // turn a screen cell into a content one. `pane_content_at`
+                    // is the one answer to that; this used to scan
+                    // `split_areas` for it.
+                    let (content_x, content_y) = self
+                        .pane_content_at(col, row)
+                        .map(|(_, r)| (r.x, r.y))
+                        .unwrap_or((0, 0));
 
                     self.plugin_manager.read().unwrap().run_hook(
                         "mouse_move",
@@ -598,15 +597,10 @@ impl Editor {
             return;
         }
 
-        // Find which split the mouse is over
+        // Which split the mouse is over, and the rectangle to project through.
         let split_info = self
-            .active_layout()
-            .split_areas
-            .iter()
-            .find(|(_, _, content_rect, _, _, _)| in_rect(col, row, *content_rect))
-            .map(|(split_id, buffer_id, content_rect, _, _, _)| {
-                (*split_id, *buffer_id, *content_rect)
-            });
+            .pane_content_at(col, row)
+            .and_then(|(pane, rect)| Some((pane, self.active_window().pane_buffer(pane)?, rect)));
 
         let Some((split_id, buffer_id, content_rect)) = split_info else {
             // Mouse is not over editor content - clear hover state and dismiss popup

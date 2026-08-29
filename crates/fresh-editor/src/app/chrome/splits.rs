@@ -551,6 +551,38 @@ impl Editor {
         )
     }
 
+    /// The pane whose **content** covers a screen cell, and that content's
+    /// rectangle.
+    ///
+    /// **One implementation, and the rectangle is the tree's.** Four places
+    /// scanned `split_areas` for a content rect containing the cell, each
+    /// writing the comparison out again and two of them wanting the rectangle
+    /// they found on the way — a recorded list standing in for a layout the
+    /// shell already owns.
+    ///
+    /// Deliberately containment and not `Ui::hit_test`: the question here is
+    /// "which pane's content covers this cell", which is not "what would a
+    /// click hit". A popup over the cell changes the second answer and must
+    /// not change the first — the plugin `mouse_move` hook converts screen
+    /// coordinates to content coordinates with it, and the LSP hover probe has
+    /// its own popup guard.
+    pub(crate) fn pane_content_at(
+        &self,
+        col: u16,
+        row: u16,
+    ) -> Option<(LeafId, ratatui::layout::Rect)> {
+        let leaves = self
+            .windows
+            .get(&self.active_window)?
+            .buffers
+            .splits()
+            .map(|(mgr, _)| mgr.visible_leaves())?;
+        leaves.into_iter().find_map(|(pane, _)| {
+            let r = self.pane_content_rect(pane)?;
+            crate::app::chrome::in_rect(col, row, r).then_some((pane, r))
+        })
+    }
+
     /// Whether the pointer is on a pane's scrollbar thumb or its track.
     ///
     /// The pane comes from the node; the thumb's extent is the recorded read
