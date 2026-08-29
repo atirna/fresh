@@ -1027,6 +1027,9 @@ impl Editor {
     fn apply_ui_fact(&mut self, fact: crate::view::shell::msg::UiFact, ev: EventFacts) {
         use crate::view::shell::msg::UiFact;
         match fact {
+            UiFact::PanelClosed => {
+                self.dismiss_floating_panel_with_cancel(crate::app::PanelSlot::Floating);
+            }
             UiFact::StatusBarClicked(id) => {
                 // The id→behaviour table is unchanged and stays where it is
                 // (`chrome::status_bar`); what the tree replaced is finding
