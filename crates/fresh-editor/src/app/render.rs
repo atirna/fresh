@@ -6626,11 +6626,14 @@ impl Editor {
                 }
             }
             Some(HoverTarget::ScrollbarThumb(split_id)) => {
-                // Highlight scrollbar thumb
-                for (sid, _buffer_id, _content_rect, scrollbar_rect, thumb_start, thumb_end) in
+                // Highlight scrollbar thumb. The bar is where the tree put
+                // it; the thumb's extent is the recorded read of the scroll
+                // state, which is what the record is for.
+                let bar = self.pane_vscroll_rect(*split_id);
+                for (sid, _buffer_id, _content_rect, _bar, thumb_start, thumb_end) in
                     &self.active_layout().split_areas
                 {
-                    if sid == split_id {
+                    if let (true, Some(scrollbar_rect)) = (sid == split_id, bar) {
                         let hover_style = Style::default().bg(self
                             .theme
                             .read()
@@ -6652,11 +6655,12 @@ impl Editor {
                 }
             }
             Some(HoverTarget::ScrollbarTrack(split_id, hovered_row)) => {
-                // Highlight only the hovered cell on the scrollbar track
-                for (sid, _buffer_id, _content_rect, scrollbar_rect, _thumb_start, _thumb_end) in
+                // Highlight only the hovered cell on the scrollbar track.
+                let bar = self.pane_vscroll_rect(*split_id);
+                for (sid, _buffer_id, _content_rect, _bar, _thumb_start, _thumb_end) in
                     &self.active_layout().split_areas
                 {
-                    if sid == split_id {
+                    if let (true, Some(scrollbar_rect)) = (sid == split_id, bar) {
                         let track_hover_style = Style::default().bg(self
                             .theme
                             .read()
@@ -6694,15 +6698,8 @@ impl Editor {
 
         let split_id = drop_zone.split_id();
 
-        // Find the content area for the target split
-        let split_area = self
-            .active_layout()
-            .split_areas
-            .iter()
-            .find(|(sid, _, _, _, _, _)| *sid == split_id)
-            .map(|(_, _, content_rect, _, _, _)| *content_rect);
-
-        let Some(content_rect) = split_area else {
+        // Where the target pane's content is.
+        let Some(content_rect) = self.pane_content_rect(split_id) else {
             return;
         };
 
@@ -7058,7 +7055,18 @@ impl Editor {
         // panels' do instead of being decoration.
         let mut jobs: Vec<(ratatui::layout::Rect, ScrollbarState)> = Vec::new();
         let mut tracks: Vec<(crate::widgets::PanelKey, super::WidgetScrollbarTrack)> = Vec::new();
-        for (split_id, buffer_id, content_rect, _, _, _) in &self.active_layout().split_areas {
+        // Every visible pane, from the split model, at the rectangle the tree
+        // placed it — rather than the painter's list of what it just drew.
+        let panes: Vec<(crate::model::event::LeafId, BufferId, ratatui::layout::Rect)> = self
+            .windows
+            .get(&self.active_window)
+            .and_then(|w| w.buffers.splits())
+            .map(|(mgr, _)| mgr.visible_leaves())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(pane, buffer)| self.pane_content_rect(pane).map(|r| (pane, buffer, r)))
+            .collect();
+        for (split_id, buffer_id, content_rect) in &panes {
             let panels = self.widget_registry.panels_for_buffer(*buffer_id);
             if panels.is_empty() {
                 continue;
