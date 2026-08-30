@@ -35,6 +35,11 @@ use super::msg::{Grip, UiFact, UiMsg};
 /// when a drag starts (a separator names the container it divides; the two
 /// width grips have only the fact that they were pressed) and none of that
 /// belongs here.
+///
+/// **Size and key the result, not `n`.** What comes back is a gesture node
+/// wrapping `n`, and the gesture node is the one that hit-tests and the one a
+/// key names. Left unconstrained it stretches to its parent's bounds with the
+/// one-cell child parked inside it, and takes every press in that parent.
 pub fn draggable(
     which: Grip,
     n: Node<UiMsg>,
@@ -89,9 +94,11 @@ mod tests {
             col().children([
                 draggable(
                     Grip::DockWidth,
-                    row().w(Sizing::Cells(1)).h(Sizing::Cells(10)),
+                    row(),
                     Rc::new(|_: &Event| Some(UiMsg::Ui(UiFact::DockResizeBegin))),
-                ),
+                )
+                .w(Sizing::Cells(1))
+                .h(Sizing::Cells(10)),
                 row().flex(1),
             ])
         };

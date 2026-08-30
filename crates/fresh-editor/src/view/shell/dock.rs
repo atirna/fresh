@@ -96,11 +96,17 @@ fn column() -> Node<UiMsg> {
 /// through every move and the release, because a resize drag leaves the grip's
 /// own cell on its first step.
 fn grip_strip() -> Node<UiMsg> {
+    // The width and the key go on the OUTSIDE, on the gesture node `draggable`
+    // returns: it is the node that hit-tests, and an unconstrained one would
+    // stretch across the whole strip and swallow presses meant for the panel
+    // beside it.
     let grip = super::grip::draggable(
         super::msg::Grip::DockWidth,
-        row().w(Sizing::Cells(1)).key(grip_key()),
+        row(),
         Rc::new(|_: &Event| Some(UiMsg::Ui(UiFact::DockResizeBegin))),
-    );
+    )
+    .w(Sizing::Cells(1))
+    .key(grip_key());
     row()
         .pointer_mode(PointerMode::Transparent)
         .children([row().flex(1).pointer_mode(PointerMode::Transparent), grip])
@@ -181,6 +187,13 @@ mod tests {
             vec![UiFact::DockResizeBegin],
             "the grip's cell is the grip's"
         );
+        // …and it *keeps* the pointer until the button comes up, which is what
+        // a resize drag needs and what the next press has to be clear of.
+        ui.dispatch(Input::release(
+            Point::new(23, 10),
+            MouseButton::Left,
+            Mods::NONE,
+        ));
         assert_eq!(
             press(&mut ui, 22, 10, MouseButton::Left),
             vec![UiFact::DockPress { x: 22, y: 10 }],

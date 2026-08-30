@@ -1045,7 +1045,7 @@ fn dressed(n: &SplitNode, s: &Rc<Splits>) -> Node<UiMsg> {
 fn divider(id: ContainerId, dir: SplitDirection) -> Node<UiMsg> {
     super::grip::draggable(
         super::msg::Grip::Separator,
-        row().key(divider_key(id)),
+        row(),
         Rc::new(move |e: &Event| {
             Some(UiMsg::Ui(UiFact::SeparatorPress {
                 container: id,
@@ -1055,6 +1055,9 @@ fn divider(id: ContainerId, dir: SplitDirection) -> Node<UiMsg> {
             }))
         }),
     )
+    // On the outside: the gesture node `draggable` returns is the one that
+    // hit-tests, and the one `separator_areas` reads back.
+    .key(divider_key(id))
     .on_enter(Rc::new(move |_: &Event| {
         Some(UiMsg::Ui(UiFact::SeparatorHover(Some((id, dir)))))
     }))
