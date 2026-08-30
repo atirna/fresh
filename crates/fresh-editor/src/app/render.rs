@@ -319,14 +319,6 @@ impl Editor {
         use crate::view::shell::frame::HostRegion;
         let status_bar_area = region(HostRegion::StatusBar);
         let editor_content_area = region(HostRegion::Body);
-        // Presence is app state, not geometry: a hidden sidebar still has a
-        // (zero-width) rectangle, and callers distinguish the two by `Option`.
-        let file_explorer_area = shell
-            .explorer
-            .as_ref()
-            .map(|_| region(HostRegion::Explorer));
-        self.active_layout_mut().file_explorer_area = file_explorer_area;
-
         // Where the sidebar wants the hardware caret (its selected row) when it
         // owns the keyboard. The panel is native now, so this is a *layout*
         // query rather than something a painter hands back: the caret sits on
@@ -334,9 +326,9 @@ impl Editor {
         // very end of this draw, with the editor's caret, so overlays painted
         // after the sidebar can suppress it instead of having it blink through
         // them.
-        let explorer_hardware_cursor = file_explorer_area.and_then(|area| {
-            let row = shell.explorer.as_ref()?.caret_row?;
-            Some((area.x + 1, area.y + 1 + row as u16))
+        let explorer_hardware_cursor = shell.explorer.as_ref().and_then(|e| {
+            let area = region(HostRegion::Explorer);
+            Some((area.x + 1, area.y + 1 + e.caret_row? as u16))
         });
 
         // Note: Tabs are now rendered within each split by SplitRenderer
