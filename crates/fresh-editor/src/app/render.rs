@@ -1045,6 +1045,23 @@ impl Editor {
         self.active_window()
             .render_terminal_splits(frame.buffer_mut(), &split_areas, true);
 
+        // **The oracle E.1 asks for, before the swap it asks for.**
+        //
+        // These rectangles are the painter's record of what it drew, and the
+        // tree has already placed the same three under `content_key`,
+        // `vscroll_key` and `hscroll_key` — `split_layout` even lays
+        // `pane_interior` out in a *throwaway* `Ui` per pane to get them,
+        // which is the same description evaluated a second time. They cannot
+        // disagree in principle; the point of asserting it is that "in
+        // principle" is what every duplicate says right up until it stops
+        // being true, and these rectangles route every click in the editor.
+        //
+        // Debug only, and deliberately: the plan's rule is derive both, prove
+        // they agree, then delete the recorded one — and the proof has to run
+        // against a live editor with real panes, which is what an integration
+        // build is. A release frame pays nothing.
+        #[cfg(debug_assertions)]
+        self.assert_pane_rects_match_layout(&split_areas, &horizontal_scrollbar_areas);
         self.active_layout_mut().split_areas = split_areas;
         self.active_layout_mut().horizontal_scrollbar_areas = horizontal_scrollbar_areas;
         self.active_layout_mut().tab_layouts = tab_layouts;
@@ -5022,6 +5039,71 @@ impl Editor {
     /// of the way up from its background, the one inside it two thirds,
     /// and the third row in is fully painted.
     const EDGE_FADE_ROWS: u16 = 2;
+
+    /// Every pane rectangle the painter recorded, against the one the tree
+    /// placed under the same key.
+    ///
+    /// **Half of E.1, and the half that has to come first.** The recorded
+    /// rects are read by mouse handlers *between* frames — they route every
+    /// click, every scrollbar drag and every click-to-byte in the editor — so
+    /// swapping their source is not a change that a unit test can cover. What
+    /// makes it safe is this: derive both for a while, assert they agree
+    /// wherever a real editor with real panes is running, and only then delete
+    /// the recorded one. It is the same shape E.2 used to retire
+    /// `separator_areas`.
+    ///
+    /// A pane the tree has no node for is skipped rather than failed: the
+    /// session preview paints another window's grid offscreen, and its panes
+    /// are legitimately absent from this window's tree.
+    #[cfg(debug_assertions)]
+    fn assert_pane_rects_match_layout(
+        &self,
+        split_areas: &[(
+            crate::model::event::LeafId,
+            BufferId,
+            ratatui::layout::Rect,
+            ratatui::layout::Rect,
+            usize,
+            usize,
+        )],
+        hscroll_areas: &[(
+            crate::model::event::LeafId,
+            BufferId,
+            ratatui::layout::Rect,
+            usize,
+            usize,
+            usize,
+        )],
+    ) {
+        use crate::view::shell::splits::{content_key, hscroll_key, vscroll_key};
+        let check = |what: &str, leaf, painted: ratatui::layout::Rect, key| {
+            let Some(placed) = self.panel_rect(&key) else {
+                return;
+            };
+            // A zero-width bar is "no bar" on the painter's side and an empty
+            // node on the tree's; both mean the same thing and neither is a
+            // rectangle worth comparing.
+            if painted.width == 0 || placed.width == 0 {
+                return;
+            }
+            debug_assert_eq!(
+                painted, placed,
+                "{what} of pane {leaf:?}: the painter recorded {painted:?}, layout placed {placed:?}"
+            );
+        };
+        for (leaf, _buffer, content, vscroll, _t0, _t1) in split_areas {
+            check("the content", leaf, *content, content_key(*leaf));
+            check("the scrollbar", leaf, *vscroll, vscroll_key(*leaf));
+        }
+        for (leaf, _buffer, hscroll, _w, _t0, _t1) in hscroll_areas {
+            check(
+                "the horizontal scrollbar",
+                leaf,
+                *hscroll,
+                hscroll_key(*leaf),
+            );
+        }
+    }
 
     /// Shade the top and bottom rows of every split's content.
     ///
