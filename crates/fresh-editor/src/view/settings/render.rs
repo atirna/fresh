@@ -167,17 +167,17 @@ pub fn render_settings(
     let has_entry = state.showing_entry_dialog();
     let has_help = state.showing_help;
 
-    // Render confirmation dialog if showing
-    if has_confirm {
-        if !has_entry && !has_help {
-            crate::view::dimming::apply_dimming(frame, modal_area);
-        }
+    // **The confirm and reset prompts are the tree's** — layers over this box,
+    // with `apply_dimming` as their scrim and their buttons answering their
+    // own presses (`view::shell::settings`). They stay painted while the entry
+    // stack is up, because that stack is still painted and a described prompt
+    // would be a layer over it rather than under.
+    if has_confirm && has_entry {
+        crate::view::dimming::apply_dimming(frame, modal_area);
         render_confirm_dialog(frame, modal_area, state, theme);
     }
-
-    // Render reset confirmation dialog if showing
-    if has_reset {
-        if !has_confirm && !has_entry && !has_help {
+    if has_reset && has_entry {
+        if !has_confirm {
             crate::view::dimming::apply_dimming(frame, modal_area);
         }
         render_reset_dialog(frame, modal_area, state, theme);
@@ -210,8 +210,9 @@ pub fn render_settings(
         render_entry_delete_confirm(frame, modal_area, state, theme);
     }
 
-    // Render help overlay if showing
-    if has_help {
+    // The help overlay is the tree's too, on the same terms: painted only
+    // while the entry stack is, because a layer would sit over it.
+    if has_help && has_entry {
         crate::view::dimming::apply_dimming(frame, modal_area);
         render_help_overlay(frame, modal_area, theme);
     }

@@ -2106,6 +2106,93 @@ impl Editor {
         })
     }
 
+    /// The settings dialog's open prompt or help overlay.
+    ///
+    /// Not the entry-dialog stack, which is its own surface and its own
+    /// migration; when one of those is up this answers `None` and the painter
+    /// draws it as before.
+    fn settings_dialog_description(&self) -> Option<crate::view::shell::settings::Dialog> {
+        use crate::view::shell::settings as st;
+        use fresh_i18n::t;
+
+        let s = self.settings_state.as_ref().filter(|s| s.visible)?;
+        // The painter's own precedence, read bottom-up: help sits over
+        // everything, then the entry stack, then reset, then confirm. The
+        // entry stack is still painted, so anything under it stays painted
+        // too — a described dialog is a layer and would land on top of it.
+        if s.showing_entry_dialog()
+            || s.showing_entry_discard_confirm
+            || s.showing_entry_delete_confirm
+        {
+            return None;
+        }
+        if s.showing_help {
+            let head = |k: &str| st::HelpLine {
+                key: k.to_string(),
+                desc: String::new(),
+                heading: true,
+            };
+            let l = |k: &str, d: &str| st::HelpLine {
+                key: k.to_string(),
+                desc: d.to_string(),
+                heading: false,
+            };
+            let gap = || st::HelpLine {
+                key: String::new(),
+                desc: String::new(),
+                heading: false,
+            };
+            return Some(st::Dialog::Help {
+                title: "Keyboard Shortcuts".into(),
+                lines: vec![
+                    head("Navigation"),
+                    l("↑ / ↓", "Move up/down"),
+                    l("Tab", "Switch between categories and settings"),
+                    l("Enter", "Activate/toggle setting"),
+                    gap(),
+                    head("Search"),
+                    l("/", "Start search"),
+                    l("Esc", "Cancel search"),
+                    l("↑ / ↓", "Navigate results"),
+                    l("Enter", "Jump to result"),
+                    gap(),
+                    head("Actions"),
+                    l("Ctrl+S", "Save settings"),
+                    l("Esc", "Close settings"),
+                    l("?", "Toggle this help"),
+                ],
+            });
+        }
+        let help = "←/→/Tab: Select   Enter: Confirm   Esc: Cancel".to_string();
+        if s.showing_reset_dialog {
+            return Some(st::Dialog::Reset(st::Choice {
+                title: "Reset All Changes".into(),
+                prompt: "Discard all pending changes?".into(),
+                changes: s.get_change_descriptions(),
+                buttons: vec!["Reset".into(), "Cancel".into()],
+                selected: s.reset_dialog_selection,
+                hovered: s.reset_dialog_hover,
+                help,
+            }));
+        }
+        if s.showing_confirm_dialog {
+            return Some(st::Dialog::Confirm(st::Choice {
+                title: t!("confirm.unsaved_changes_title").to_string(),
+                prompt: t!("confirm.unsaved_changes_prompt").to_string(),
+                changes: s.get_change_descriptions(),
+                buttons: vec![
+                    t!("confirm.save_and_exit").to_string(),
+                    t!("confirm.discard").to_string(),
+                    t!("confirm.cancel").to_string(),
+                ],
+                selected: s.confirm_dialog_selection,
+                hovered: s.confirm_dialog_hover,
+                help,
+            }));
+        }
+        None
+    }
+
     /// The keybinding editor's title, header rows and footer.
     fn keybinding_chrome_description(&self) -> Option<crate::view::shell::keybinding::Chrome> {
         use crate::app::keybinding_editor::{ContextFilter, SearchMode, SourceFilter};
@@ -3394,6 +3481,7 @@ impl Editor {
             modal,
             event_debug: self.event_debug_description(),
             settings: self.settings_state.as_ref().is_some_and(|s| s.visible),
+            settings_dialog: self.settings_dialog_description(),
             keybinding: self.keybinding_chrome_description(),
             keybinding_table: self.keybinding_table_description(),
             keybinding_dialog: self.keybinding_dialog_description(),

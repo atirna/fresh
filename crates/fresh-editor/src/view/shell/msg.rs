@@ -365,6 +365,15 @@ pub enum UiFact {
     /// A press on the keybinding editor's search row, which starts a search.
     /// The last of that modal's ten recorded rectangles.
     KeybindingSearch,
+    /// A press on one of the settings dialogs' buttons.
+    ///
+    /// **These were laid out twice**: the painter placed them, and
+    /// `get_confirm_dialog_button_at` placed them again to find which one a
+    /// cell was on — with the comment "must match `render_confirm_dialog`"
+    /// beside the copy. The button is the node now.
+    SettingsDialog(super::settings::Target),
+    /// The pointer entered or left one of them.
+    SettingsDialogHover(Option<super::settings::Target>),
 }
 
 /// What a menu-bar navigation step does to the open chain.

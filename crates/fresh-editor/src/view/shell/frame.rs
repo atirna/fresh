@@ -186,6 +186,10 @@ pub struct Frame {
     /// the box its twenty-odd recorded rectangles are measured from, and
     /// nothing else of it yet.
     pub settings: bool,
+    /// Its open dialog, when it has one. Three of them are here — the
+    /// unsaved-changes prompt, the reset prompt and the help overlay — and the
+    /// entry-dialog stack is not.
+    pub settings_dialog: Option<super::settings::Dialog>,
     /// Whether the keybinding editor is open. Its *interior* is still a
     /// painter's — a table with its own scrollbar and ten recorded
     /// rectangles — so what the tree carries is the box those rectangles are
@@ -257,6 +261,7 @@ impl Default for Frame {
             trust: None,
             modal: None,
             settings: false,
+            settings_dialog: None,
             keybinding: None,
             keybinding_table: None,
             keybinding_dialog: None,
@@ -523,6 +528,13 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     let frame = match f.settings {
         true => frame.child(super::settings::layer()),
         false => frame,
+    };
+    // Its open dialog, **after** the box for the same reason the keybinding
+    // editor's is: layers are offered the pointer in reverse declaration
+    // order, so a dialog declared first would be covered by the box.
+    let frame = match &f.settings_dialog {
+        Some(d) => frame.child(super::settings::dialog_layer(d)),
+        None => frame,
     };
     // The keybinding editor's box, over the modal slot that routes its
     // pointer — the same order and for the same reason as the floating panel

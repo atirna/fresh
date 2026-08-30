@@ -1408,6 +1408,48 @@ impl Editor {
                     }
                 }
             }
+            // **The settings dialogs' buttons.** The arm behind them recomputed
+            // the painter's layout to find which one a cell was on, with the
+            // comment "must match `render_confirm_dialog`" beside the copy.
+            // Now the button is a node and this is only what it means.
+            UiFact::SettingsDialog(t) => {
+                use crate::view::shell::settings::Target;
+                match t {
+                    Target::Confirm(0) => self.save_settings_and_close(),
+                    Target::Confirm(1) => self.discard_settings_and_close(),
+                    Target::Confirm(_) => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            s.showing_confirm_dialog = false;
+                        }
+                    }
+                    // The reset prompt's two, which the keyboard's `Enter` arm
+                    // spells the same way.
+                    Target::Reset(0) => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            s.discard_changes();
+                            s.showing_reset_dialog = false;
+                        }
+                    }
+                    Target::Reset(_) => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            s.showing_reset_dialog = false;
+                        }
+                    }
+                }
+            }
+            UiFact::SettingsDialogHover(t) => {
+                use crate::view::shell::settings::Target;
+                if let Some(s) = self.settings_state.as_mut() {
+                    s.confirm_dialog_hover = match t {
+                        Some(Target::Confirm(i)) => Some(i),
+                        _ => None,
+                    };
+                    s.reset_dialog_hover = match t {
+                        Some(Target::Reset(i)) => Some(i),
+                        _ => None,
+                    };
+                }
+            }
             UiFact::KeybindingSearch => {
                 if let Some(e) = self.keybinding_editor.as_mut() {
                     e.start_search();
