@@ -888,8 +888,9 @@ impl Editor {
                         }
                     })
                     .unwrap_or(0);
-                self.active_window_mut()
-                    .animate_tab_switch(split_id, direction);
+                if let Some(area) = self.pane_or_group_content_rect(split_id) {
+                    self.active_window_mut().animate_tab_switch(area, direction);
+                }
                 match target {
                     crate::view::split::TabTarget::Buffer(buffer_id) => {
                         self.focus_split(split_id, buffer_id);
