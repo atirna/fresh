@@ -5059,9 +5059,20 @@ impl Editor {
     /// the recorded one. It is the same shape E.2 used to retire
     /// `separator_areas`.
     ///
-    /// A pane the tree has no node for is skipped rather than failed: the
-    /// session preview paints another window's grid offscreen, and its panes
-    /// are legitimately absent from this window's tree.
+    /// **A pane the tree has no node for is a failure, not a skip.** The
+    /// weaker form was there for the session preview, which paints another
+    /// window's grid offscreen — but the preview has its own
+    /// `preview_split_areas` and never reaches this vector, a
+    /// `GroupTabBarOnly` entry returns before the push that fills it, and a
+    /// `SplitNode::Grouped` delegates to its own layout so its inner leaves
+    /// get nodes like any other. So every entry here is a pane of *this*
+    /// window, and a missing node means the tree and the painter disagree
+    /// about which panes exist — which is exactly what the oracle is for, and
+    /// the one disagreement the skip would have hidden.
+    ///
+    /// A pane with no scrollbar is not that case: `pane_interior` places all
+    /// three parts unconditionally and gives the bar the pane does not have a
+    /// width of zero, so the node is there either way.
     #[cfg(debug_assertions)]
     fn assert_pane_rects_match_layout(
         &self,
@@ -5083,13 +5094,18 @@ impl Editor {
         )],
     ) {
         use crate::view::shell::splits::{content_key, hscroll_key, vscroll_key};
-        let check = |what: &str, leaf, painted: ratatui::layout::Rect, key| {
+        let check = |what: &str, leaf, painted: ratatui::layout::Rect, key: fresh_ui::Key| {
             let Some(placed) = self.panel_rect(&key) else {
+                debug_assert!(
+                    false,
+                    "{what} of pane {leaf:?}: the painter recorded {painted:?} \
+                     and the tree placed nothing under {key:?}"
+                );
                 return;
             };
-            // A zero-width bar is "no bar" on the painter's side and an empty
-            // node on the tree's; both mean the same thing and neither is a
-            // rectangle worth comparing.
+            // A zero-width bar is "no bar" on the painter's side and a
+            // zero-width node on the tree's; both mean the same thing and
+            // neither is a rectangle worth comparing.
             if painted.width == 0 || placed.width == 0 {
                 return;
             }
