@@ -309,6 +309,16 @@ scrollbar**, which is worse than painting it whole. Wrapping already-windowed
 rows in a `viewport` does not fix it either: there would be nothing to scroll,
 so the bar would be wrong rather than missing.
 
+**`List` has already crossed, and it is the proof of the shape.**
+`widgets::List` windows its rows out of a `viewport`, so the scroll is the
+element's and `scrollbar()` *is* the bar — the thing the adapter could not
+describe comes free once the window belongs to the tree. Selection stays
+controlled, which is what keeps the plugin API frozen: the plugin sets it, the
+host's keys move it, and the list's own `Anchor` reveals it whenever it moves,
+"the owner passing a new one down" included — the auto-clamp the runtime did
+by hand, for free. The rows themselves are still the runtime's, because what a
+row *says* is not this migration's business.
+
 **That is why C.2 comes before full coverage, not after.** `widgets::List` and
 `widgets::Tree` own their scroll, and then the bar is the viewport's and comes
 free. These kinds cross the boundary when their state does. The panels that

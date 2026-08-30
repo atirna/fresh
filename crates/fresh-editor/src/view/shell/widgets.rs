@@ -108,33 +108,40 @@ pub fn covered(spec: &WidgetSpec) -> bool {
             children.iter().all(covered)
         }
         WidgetSpec::LabeledSection { child, .. } => covered(child),
-        WidgetSpec::Button { .. } | WidgetSpec::Toggle { .. } | WidgetSpec::Number { .. } => true,
-        // Through their own collectors — see [`collected`].
-        //
-        // **The scrollable kinds are deliberately not covered yet**, and the
-        // reason is a boundary rather than an omission. Their scroll is the
-        // *runtime's*: the collector windows the rows itself and reports the
-        // offset on a `LayoutBox`, and the painter draws a bar over the
-        // rightmost column from that. The adapter turns rows into nodes and
-        // has nothing to say about a bar, so describing one of these today
-        // would render it correctly and silently lose its scrollbar.
-        //
-        // Wrapping the already-windowed rows in a `viewport` would not fix it
-        // — the rows are pre-windowed, so the viewport would have nothing to
-        // scroll and the bar would be wrong rather than missing. What fixes it
-        // is C.2: `widgets::List` and `widgets::Tree` own their scroll, and
-        // then the bar is the viewport's and comes free. So these cross when
-        // the state does, and until then their panels paint whole.
-        WidgetSpec::Text { rows, .. } => *rows <= 1,
-        WidgetSpec::Dropdown { .. } => true,
-        WidgetSpec::List { .. } | WidgetSpec::Tree { .. } | WidgetSpec::DualList { .. } => false,
         WidgetSpec::Component { child, .. }
         | WidgetSpec::Overlay { child, .. }
         | WidgetSpec::Popup { child, .. } => covered(child),
+        WidgetSpec::Button { .. } | WidgetSpec::Toggle { .. } | WidgetSpec::Number { .. } => true,
         WidgetSpec::Spacer { .. }
         | WidgetSpec::Divider { .. }
         | WidgetSpec::HintBar { .. }
         | WidgetSpec::Raw { .. } => true,
+
+        // **The scrollable kinds cross when their state does, not before.**
+        //
+        // Where the *runtime* owns the scroll, it windows the rows itself and
+        // reports the offset on a `LayoutBox` for the painter to draw a bar
+        // from. The adapter turns rows into nodes and has nothing to say about
+        // a bar, so describing one of those would render it correctly and
+        // silently lose its scrollbar — worse than painting it whole. Wrapping
+        // already-windowed rows in a `viewport` does not rescue it either:
+        // there would be nothing to scroll, so the bar would be wrong rather
+        // than missing.
+        //
+        // `List` has crossed because `widgets::List` windows its own rows out
+        // of a viewport — the scroll is the element's and `scrollbar()` is the
+        // bar. A list of *cards* has not: its rows are multi-row subtrees with
+        // their own selection marking, which is the next substitution.
+        WidgetSpec::List { item_specs, .. } => item_specs.is_empty(),
+        // A single-line field does not scroll; a multi-line one does.
+        WidgetSpec::Text { rows, .. } => *rows <= 1,
+        // `Dropdown` carries a `scroll_offset` of its own: its open pop-over
+        // windows its options.
+        WidgetSpec::Tree { .. } | WidgetSpec::DualList { .. } | WidgetSpec::Dropdown { .. } => {
+            false
+        }
+
+        // `WindowEmbed` is a `Host` leaf by rule and never crosses.
         _ => false,
     }
 }
@@ -523,7 +530,105 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
                 ]),
             }
         }
-        // The five with collectors of their own. See [`collected`].
+        // **The first kind whose state the tree owns** (C.2), and the reason
+        // it could cross the boundary the others have not: `widgets::List`
+        // windows its own rows out of a `viewport`, so the scroll is the
+        // element's and `scrollbar()` is the bar — where the runtime windowed
+        // the rows itself and reported an offset for the painter to draw one
+        // from.
+        //
+        // Selection stays *controlled*: the plugin sets it, the host's key
+        // dispatch moves it, and it arrives here each frame. The list's own
+        // `Anchor` reveals it whenever it moves — "the owner passing a new one
+        // down" included — which is the auto-clamp the runtime did by hand.
+        //
+        // The rows are still the runtime's: a `List`'s items arrive
+        // pre-rendered, and what a row *says* is not this migration's
+        // business. What moved is where it is, what a press on it means, and
+        // who owns the window it sits in.
+        WidgetSpec::List {
+            items,
+            item_specs,
+            item_keys,
+            selected_index,
+            visible_rows,
+            key,
+            ..
+        } if item_specs.is_empty() => {
+            use std::rc::Rc;
+            let n = items.len();
+            let rows = Rc::new(items.clone());
+            let keys = Rc::new(item_keys.clone());
+            let list_key = key.clone().unwrap_or_default();
+            let slot = cx.slot;
+            let sel = *selected_index;
+            let hit_keys = keys.clone();
+            let list = fresh_ui::List::windowed(
+                n,
+                {
+                    let keys = keys.clone();
+                    move |i| {
+                        fresh_ui::Key::Str(
+                            keys.get(i).cloned().unwrap_or_else(|| i.to_string()).into(),
+                        )
+                    }
+                },
+                {
+                    let rows = rows.clone();
+                    move |i| entry_row(&rows[i])
+                },
+            )
+            // The panel's focus is the host's — the runtime resolves a focus
+            // key across every widget — so the list declines the ring and
+            // keeps its mouse, which is what that flag means since #3108.
+            .focusable(false)
+            .scrollbar()
+            .row_theme(|_, st| match st {
+                fresh_ui::widgets::RowState::Selected
+                | fresh_ui::widgets::RowState::SelectedBlur => Ink::new(
+                    Paint::key("ui.popup_selection_fg"),
+                    Paint::key("ui.popup_selection_bg"),
+                )
+                .to_string(),
+                _ => Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)).to_string(),
+            })
+            .on_activate_handler(Rc::new(move |i| {
+                Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
+                    slot,
+                    hit: crate::widgets::HitArea {
+                        row_target: true,
+                        context_click: false,
+                        overlay: false,
+                        widget_key: hit_keys.get(i).cloned().unwrap_or_default(),
+                        widget_kind: "list",
+                        buffer_row: i as u32,
+                        byte_start: 0,
+                        byte_end: 0,
+                        payload: serde_json::json!({
+                            "index": i,
+                            "key": hit_keys.get(i).cloned().unwrap_or_default(),
+                        }),
+                        event_type: "select",
+                        // A row's hit names the List that owns it: focus moves
+                        // there, and the arrows after a row click keep driving
+                        // the list's selection.
+                        owner_key: Some(list_key.clone()),
+                    },
+                }))
+            }));
+            let list = match sel >= 0 {
+                true => list.selected(sel as usize),
+                false => list,
+            };
+            let node = fresh_ui::ComponentExt::node(list);
+            match visible_rows {
+                Some(r) => node.h(Sizing::Cells(*r as u16)),
+                None => node.flex(1),
+            }
+        }
+        // The rest, with collectors of their own. See [`collected`]. A list
+        // of *cards* falls here too: `covered` says no, and the arm above
+        // matched only the plain form.
         WidgetSpec::Text { .. }
         | WidgetSpec::List { .. }
         | WidgetSpec::Tree { .. }
@@ -1569,17 +1674,137 @@ mod tests {
             key: Some("l".into()),
             focusable: true,
         };
-        assert!(!covered(&list), "a list owns its own scroll");
+        assert!(covered(&list), "a plain list is `widgets::List` now");
+
+        // A tree still windows its own rows, so it has not crossed — and one
+        // uncovered node takes its panel with it.
+        // A multi-line text field, which still scrolls.
+        let tree = WidgetSpec::Text {
+            value: "a\nb\nc".into(),
+            cursor_byte: -1,
+            focused: false,
+            label: String::new(),
+            placeholder: None,
+            rows: 4,
+            field_width: 10,
+            max_visible_chars: 0,
+            full_width: false,
+            completions: Vec::new(),
+            completions_visible_rows: 0,
+            block_caret: false,
+            sel_start: -1,
+            sel_end: -1,
+            label_width: 0,
+            read_only: false,
+            markdown: false,
+            key: Some("t2".into()),
+        };
+        assert!(
+            !covered(&tree),
+            "a multi-line field still owns its own scroll"
+        );
         assert!(
             !covered(&col_of(vec![
                 WidgetSpec::Raw {
                     entries: vec![raw("x")],
                     key: None
                 },
-                list
+                tree
             ])),
             "and one of them takes its panel with it"
         );
+    }
+
+    fn a_list(n: usize, selected: i32, visible: u32) -> WidgetSpec {
+        WidgetSpec::List {
+            items: (0..n).map(|i| raw(&format!("row{i}"))).collect(),
+            item_specs: Vec::new(),
+            item_keys: (0..n).map(|i| format!("k{i}")).collect(),
+            selected_index: selected,
+            visible_rows: Some(visible),
+            key: Some("l".into()),
+            focusable: true,
+        }
+    }
+
+    /// **The bar comes free, and that is the whole reason `List` crossed.**
+    /// The viewport owns the window, so an overflowing list gets a scrollbar
+    /// from the library rather than from a painter reading a recorded offset.
+    #[test]
+    fn an_overflowing_list_has_a_scrollbar() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&a_list(50, 0, 5), WIDTH, &cx()), Size::new(WIDTH, 24));
+        assert!(
+            ui.spec()
+                .in_flow()
+                .iter()
+                .any(|i| matches!(i.draw, fresh_ui::Draw::Scrollbar { .. })),
+            "fifty rows in five do not fit"
+        );
+
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&a_list(3, 0, 5), WIDTH, &cx()), Size::new(WIDTH, 24));
+        assert!(
+            !ui.spec()
+                .in_flow()
+                .iter()
+                .any(|i| matches!(i.draw, fresh_ui::Draw::Scrollbar { .. })),
+            "three rows in five do"
+        );
+    }
+
+    /// The window follows the selection without anyone clamping it by hand:
+    /// the list's own `Anchor` reveals a selection that moved, "the owner
+    /// passing a new one down" included, which is what the runtime's
+    /// auto-clamp did.
+    #[test]
+    fn the_window_follows_a_selection_it_is_given() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&a_list(50, 0, 5), WIDTH, &cx()), Size::new(WIDTH, 24));
+        ui.frame(node(&a_list(50, 40, 5), WIDTH, &cx()), Size::new(WIDTH, 24));
+        let shown = tree_text(&a_list(50, 40, 5), &cx());
+        // Row 40 is in the window, and row 0 is not.
+        assert!(
+            shown.iter().any(|r| r.contains("row40")),
+            "the selection was revealed, got {shown:?}"
+        );
+    }
+
+    /// A row press carries the hit `deliver_widget_hit` expects, naming the
+    /// List as its owner — so focus moves to the list and the arrows after a
+    /// row click keep driving its selection.
+    #[test]
+    fn a_list_row_press_names_the_list_that_owns_it() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&a_list(4, 0, 4), WIDTH, &cx()), Size::new(WIDTH, 24));
+        let at = fresh_ui::Point::new(1, 2);
+        let mut msgs = ui
+            .dispatch(fresh_ui::Input::press(
+                at,
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs;
+        msgs.extend(
+            ui.dispatch(fresh_ui::Input::release(
+                at,
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs,
+        );
+        let hit = msgs
+            .into_iter()
+            .find_map(|m| match m {
+                UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => Some(hit),
+                _ => None,
+            })
+            .expect("a row press");
+        assert_eq!(hit.widget_kind, "list");
+        assert_eq!(hit.event_type, "select");
+        assert_eq!(hit.owner_key.as_deref(), Some("l"));
+        assert_eq!(hit.payload["index"], 2);
+        assert_eq!(hit.payload["key"], "k2");
     }
 
     /// A single-line text field is covered; a multi-line one is not, for the
@@ -1608,55 +1833,6 @@ mod tests {
         };
         assert!(covered(&field(1)));
         assert!(!covered(&field(4)));
-    }
-
-    /// **A list row answers its own press**, with the hit the runtime
-    /// recorded for it — which is what makes the byte-range scan removable.
-    #[test]
-    fn a_list_row_delivers_its_own_hit() {
-        let spec = WidgetSpec::List {
-            items: vec![raw("one"), raw("two")],
-            item_specs: Vec::new(),
-            item_keys: vec!["a".into(), "b".into()],
-            selected_index: 0,
-            visible_rows: Some(2),
-            key: Some("l".into()),
-            focusable: true,
-        };
-        let mut ui: Ui<UiMsg> = Ui::new();
-        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
-        // Press the second row.
-        let got = ui
-            .dispatch(fresh_ui::Input::press(
-                fresh_ui::Point::new(1, 1),
-                fresh_ui::MouseButton::Left,
-                fresh_ui::Mods::NONE,
-            ))
-            .msgs
-            .into_iter()
-            .find_map(|m| match m {
-                UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => Some(hit),
-                _ => None,
-            })
-            .expect("a row press is the list's");
-        assert_eq!(got.widget_kind, "list");
-        // The runtime's own hit for that row, for comparison.
-        let out = crate::widgets::render_spec_with_options(
-            &spec,
-            &Default::default(),
-            WIDTH as u32,
-            crate::widgets::RenderOptions {
-                prev_focus_key: "",
-                auto_focus_first: false,
-                ..Default::default()
-            },
-        );
-        let want = out
-            .hits
-            .iter()
-            .find(|h| h.buffer_row == 1)
-            .expect("the runtime's hit for row 1");
-        assert_eq!(&got, want, "the same hit, delivered by the tree");
     }
 
     /// **The variant whose parity is geometric, not textual.** The runtime
