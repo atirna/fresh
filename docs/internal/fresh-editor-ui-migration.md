@@ -314,6 +314,24 @@ first variants settled:
   recorded channels by. Chrome variants are checked that way; leaf and text
   variants are checked cell for cell.
 
+**The route for the five heavy variants** (`Text`, `List`, `Tree`,
+`Dropdown`, `DualList`), which is different from the nine already done and
+worth stating before it is discovered twice. Each of them ends in a
+`CollectedOutput` — entries, hits, overlays, a focus cursor — produced by a
+collector that already exists and already knows the kind's rendering. So the
+step that unlocks all five at once is a generic **`CollectedOutput` → `Node`**
+adapter: rows become nodes, each hit becomes a gesture on the sub-range it
+covers, each overlay becomes a layer. That is what deletes `LayoutBox` and the
+byte-range scan (C.3) for every variant simultaneously, rather than five times.
+
+**It is a stage, not the end.** After it, the runtime is a *formatter*: it
+still decides what a list row looks like, and the tree owns where it is and
+what a press on it means. Replacing that formatting with `widgets::List` and
+`widgets::Tree` — so a plugin's list is the list the settings form uses, which
+is goal 1 — is the step after, and it is where `WidgetInstanceState` becomes
+element state (C.2). Doing the adapter first is what makes that step a
+substitution rather than a rewrite.
+
 **Three things the table settles that were open.**
 
 * **`indeterminate` is the only library gap left in the set**, and it is one

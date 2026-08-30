@@ -58,8 +58,18 @@ pub enum Slot {
 /// focus-marker gutter is reserved. Passed down rather than looked up,
 /// because a description is a pure function of what it is handed.
 #[derive(Clone, Debug)]
-pub struct Ctx {
+pub struct Ctx<'a> {
     pub slot: Slot,
+    /// The panel's widget instance state, by key.
+    ///
+    /// **Read, not written.** Some kinds are authoritative once they have
+    /// rendered — a `Number`'s clamped value, a `List`'s scroll offset and
+    /// selection — and the spec's field is a seed the first time only. The
+    /// runtime read it out of `prev` and wrote the next value into
+    /// `next_state` in the same walk; a description is a pure function of what
+    /// it is handed, so it reads and the host resolves. Turning these into
+    /// element state proper is C.2.
+    pub states: &'a std::collections::HashMap<String, crate::widgets::WidgetInstanceState>,
     /// The panel's focused widget key, or empty.
     pub focus_key: String,
     /// The widget key the pointer is over, if any.
@@ -68,7 +78,7 @@ pub struct Ctx {
     pub marker_gutter: bool,
 }
 
-impl Ctx {
+impl Ctx<'_> {
     fn is_focused(&self, key: Option<&str>) -> bool {
         key.is_some_and(|k| !k.is_empty() && k == self.focus_key)
     }
@@ -92,7 +102,10 @@ pub fn covered(spec: &WidgetSpec) -> bool {
             children.iter().all(covered)
         }
         WidgetSpec::LabeledSection { child, .. } => covered(child),
-        WidgetSpec::Button { .. } | WidgetSpec::Toggle { .. } => true,
+        WidgetSpec::Button { .. } | WidgetSpec::Toggle { .. } | WidgetSpec::Number { .. } => true,
+        WidgetSpec::Component { child, .. }
+        | WidgetSpec::Overlay { child, .. }
+        | WidgetSpec::Popup { child, .. } => covered(child),
         WidgetSpec::Spacer { .. }
         | WidgetSpec::Divider { .. }
         | WidgetSpec::HintBar { .. }
@@ -108,7 +121,7 @@ pub fn covered(spec: &WidgetSpec) -> bool {
 /// runtime pads rows to it. Passing it in rather than reading it back is the
 /// rule §4.4 states — this is *content* resolved from a known extent, not
 /// geometry recorded from a paint.
-pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx) -> Node<UiMsg> {
+pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
     match spec {
         WidgetSpec::Row { children, wrap, .. } => {
             let r = row().children(
@@ -157,6 +170,148 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx) -> Node<UiMsg> {
         // the variant's whole contract, and it is one row per entry.
         WidgetSpec::Raw { entries, .. } => {
             col().children(entries.iter().map(entry_row).collect::<Vec<_>>())
+        }
+        // **The first variant whose value the host owns.** Instance state is
+        // authoritative once the widget has rendered and the spec's `value` is
+        // a seed only, so the current value is read from the state map rather
+        // than from the spec. The runtime read it and wrote the clamped result
+        // back in the same walk; the description only reads, and the host
+        // resolves — which is C.2's shape before C.2 lands.
+        //
+        // The hit is the value cell alone: "a click on the value cell begins
+        // in-place editing host-side", and a click on the label does not.
+        WidgetSpec::Number {
+            value,
+            min,
+            max,
+            integer,
+            percent,
+            label,
+            focused,
+            label_width,
+            edit_text,
+            edit_cursor,
+            edit_sel_start,
+            edit_sel_end,
+            key,
+            ..
+        } => {
+            let key = key.as_deref();
+            let is_focused = match key.is_some_and(|k| !k.is_empty()) {
+                true => cx.is_focused(key),
+                false => *focused,
+            };
+            let cur = match key.filter(|k| !k.is_empty()).and_then(|k| cx.states.get(k)) {
+                Some(crate::widgets::WidgetInstanceState::Number { value }) => *value,
+                _ => *value,
+            };
+            let cur = crate::widgets::clamp_number(cur, *min, *max);
+            let rendered = crate::widgets::render_number(
+                cur,
+                *integer,
+                *percent,
+                label,
+                is_focused,
+                *label_width,
+                edit_text.as_deref().map(|t| crate::widgets::NumberEdit {
+                    text: t,
+                    cursor: *edit_cursor,
+                    sel_start: *edit_sel_start,
+                    sel_end: *edit_sel_end,
+                }),
+                cx.marker_gutter,
+            );
+            entry_row_hit(
+                &rendered.entry,
+                rendered.value_range,
+                cx.slot,
+                crate::widgets::HitArea {
+                    row_target: false,
+                    context_click: false,
+                    overlay: false,
+                    widget_key: key.unwrap_or("").to_string(),
+                    widget_kind: "number",
+                    buffer_row: 0,
+                    byte_start: rendered.value_range.0,
+                    byte_end: rendered.value_range.1,
+                    payload: serde_json::json!({}),
+                    event_type: "number_value",
+                    owner_key: None,
+                },
+            )
+        }
+        // **Not the library's `Component`, and it must not become one.**
+        //
+        // Its documented job is two things: trap Tab among the focusables
+        // *inside* it so a picker or dialog subtree keeps its own ring, and
+        // name the subtree for keyed reconciliation. Those are `focus_scope`
+        // and `key`, exactly. It owns no state, so making it a library
+        // `Component` would hand a plugin's subtree host state it never asked
+        // for — the names collide, the concepts do not.
+        WidgetSpec::Component { child, key } => {
+            let n = fresh_ui::focusable(node(child, width, cx)).focus_scope();
+            match key.as_deref().filter(|k| !k.is_empty()) {
+                Some(k) => n.key(fresh_ui::Key::Str(k.into())),
+                None => n,
+            }
+        }
+        // **Floats over the rows it would have occupied.** "Placed inside a
+        // `Col`, the overlay anchors at the row it would have occupied if it
+        // were a regular child — but the rows below it do not shift down."
+        // That is a layer anchored to its own slot: out of flow, so the column
+        // lays out as if it were not there, placed where it would have been.
+        //
+        // The runtime says the same thing by collecting the child's rows into
+        // a separate `overlays` list carrying an anchor row, which the host
+        // paints after the main entries — a second paint pass, ordered by
+        // hand, for what paint order already does.
+        WidgetSpec::Overlay { child, key } => {
+            let k = match key.as_deref() {
+                Some(k) if !k.is_empty() => fresh_ui::Key::Str(k.into()),
+                _ => fresh_ui::Key::Str("overlay".into()),
+            };
+            let anchor = row().h(Sizing::Cells(0)).key(k.clone());
+            fresh_ui::stack().children([
+                anchor,
+                fresh_ui::layer()
+                    .anchor(fresh_ui::Anchor::Node(k))
+                    .place(fresh_ui::Place::Over)
+                    .child(node(child, width, cx)),
+            ])
+        }
+        // **The same node, and its two modes are one property.** A popup is
+        // an `Overlay` that may escape the panel's clipping: `screen_space`
+        // "escapes the panel's clipping and is painted at screen level",
+        // otherwise it "keeps panel-clipped like `Overlay`". A layer already
+        // distinguishes those — `within` names the region it may be placed
+        // inside, and its absence means the frame. Before that existed these
+        // would have been two mechanisms; the runtime has two (`overlays` and
+        // `popups`), which is why.
+        WidgetSpec::Popup {
+            child,
+            key,
+            anchor,
+            screen_space,
+        } => {
+            let k = match key.as_deref() {
+                Some(k) if !k.is_empty() => fresh_ui::Key::Str(k.into()),
+                _ => fresh_ui::Key::Str("popup".into()),
+            };
+            let slot = row().h(Sizing::Cells(0)).key(k.clone());
+            let l = fresh_ui::layer()
+                .place(fresh_ui::Place::Over)
+                .anchor(match anchor {
+                    // Panel-inner coordinates, which is what the anchor is
+                    // documented in.
+                    Some([r, c]) => fresh_ui::Anchor::Point(*c as u16, *r as u16),
+                    None => fresh_ui::Anchor::Node(k),
+                })
+                .fit(fresh_ui::Fit::CLAMP);
+            let l = match screen_space {
+                true => l,
+                false => l.within(super::panel::body_key()),
+            };
+            fresh_ui::stack().children([slot, l.child(node(child, width, cx))])
         }
         // **A hit that is not the whole row.** Form layout (`label: [v]`)
         // restricts the press to the chip so a click on the label does not
@@ -540,9 +695,19 @@ mod tests {
 
     const WIDTH: u16 = 40;
 
-    fn cx() -> Ctx {
+    fn no_state() -> &'static std::collections::HashMap<String, crate::widgets::WidgetInstanceState>
+    {
+        use std::sync::OnceLock;
+        static EMPTY: OnceLock<
+            std::collections::HashMap<String, crate::widgets::WidgetInstanceState>,
+        > = OnceLock::new();
+        EMPTY.get_or_init(Default::default)
+    }
+
+    fn cx() -> Ctx<'static> {
         Ctx {
             slot: Slot::Floating,
+            states: no_state(),
             focus_key: String::new(),
             hovered_key: None,
             marker_gutter: false,
@@ -705,7 +870,7 @@ mod tests {
     /// theme — so a toggle whose chip is styled differently from its label
     /// arrives as two items on one line. The runtime's unit is the entry,
     /// which is a line, so the comparison has to be made at that unit.
-    fn tree_text(spec: &WidgetSpec, c: &Ctx) -> Vec<String> {
+    fn tree_text(spec: &WidgetSpec, c: &Ctx<'_>) -> Vec<String> {
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(node(spec, WIDTH, c), Size::new(WIDTH, 24));
         rows_of(&ui)
@@ -737,7 +902,7 @@ mod tests {
     }
 
     /// The runtime's, under the same context.
-    fn runtime_text(spec: &WidgetSpec, c: &Ctx) -> Vec<String> {
+    fn runtime_text(spec: &WidgetSpec, c: &Ctx<'_>) -> Vec<String> {
         crate::widgets::render_spec_with_options(
             spec,
             &Default::default(),
@@ -779,7 +944,7 @@ mod tests {
     /// stays that way; only the hit moved.
     #[test]
     fn a_button_renders_what_the_runtime_renders() {
-        let cases: Vec<(&str, WidgetSpec, Ctx)> = vec![
+        let cases: Vec<(&str, WidgetSpec, Ctx<'static>)> = vec![
             ("framed", button("Go", Some("go"), false, false), cx()),
             ("bare", button("×", Some("x"), false, true), cx()),
             ("disabled", button("Go", Some("go"), true, false), cx()),
@@ -893,7 +1058,7 @@ mod tests {
     /// states, focused and hovered.
     #[test]
     fn a_toggle_renders_what_the_runtime_renders() {
-        let mut cases: Vec<(String, WidgetSpec, Ctx)> = Vec::new();
+        let mut cases: Vec<(String, WidgetSpec, Ctx<'static>)> = Vec::new();
         for label_first in [false, true] {
             for checked in [false, true] {
                 cases.push((
@@ -982,6 +1147,187 @@ mod tests {
         };
         assert_eq!(hit.widget_kind, "toggle");
         assert_eq!(hit.event_type, "toggle");
+    }
+
+    /// A number field says what the runtime says, in every shape its
+    /// formatter branches on — integer, percent, clamped, labelled, focused,
+    /// and mid-edit.
+    #[test]
+    fn a_number_renders_what_the_runtime_renders() {
+        let base = |integer: bool, percent: bool| WidgetSpec::Number {
+            value: 42.0,
+            min: Some(0.0),
+            max: Some(100.0),
+            step: 1.0,
+            integer,
+            percent,
+            label: "size".into(),
+            focused: false,
+            label_width: 8,
+            edit_text: None,
+            edit_cursor: -1,
+            edit_sel_start: -1,
+            edit_sel_end: -1,
+            key: Some("n".into()),
+        };
+        let mut cases: Vec<(String, WidgetSpec, Ctx<'static>)> = vec![
+            ("integer".into(), base(true, false), cx()),
+            ("float".into(), base(false, false), cx()),
+            ("percent".into(), base(false, true), cx()),
+            (
+                "focused".into(),
+                base(true, false),
+                Ctx {
+                    focus_key: "n".into(),
+                    ..cx()
+                },
+            ),
+        ];
+        // Above the max: the runtime clamps, and so must this.
+        let mut over = base(true, false);
+        if let WidgetSpec::Number { value, .. } = &mut over {
+            *value = 999.0;
+        }
+        cases.push(("clamped".into(), over, cx()));
+        // Mid-edit: the buffer being typed replaces the value cell.
+        let mut editing = base(true, false);
+        if let WidgetSpec::Number {
+            edit_text,
+            edit_cursor,
+            ..
+        } = &mut editing
+        {
+            *edit_text = Some("7".into());
+            *edit_cursor = 1;
+        }
+        cases.push(("editing".into(), editing, cx()));
+
+        for (label, spec, c) in cases {
+            assert!(covered(&spec));
+            assert_eq!(tree_text(&spec, &c), runtime_text(&spec, &c), "{label}");
+        }
+    }
+
+    /// **The value cell, and only the value cell.** "A click on the value cell
+    /// begins in-place editing"; a click on the label does not.
+    #[test]
+    fn a_number_answers_on_its_value_and_not_on_its_label() {
+        let spec = WidgetSpec::Number {
+            value: 42.0,
+            min: None,
+            max: None,
+            step: 1.0,
+            integer: true,
+            percent: false,
+            label: "size".into(),
+            focused: false,
+            label_width: 8,
+            edit_text: None,
+            edit_cursor: -1,
+            edit_sel_start: -1,
+            edit_sel_end: -1,
+            key: Some("n".into()),
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let press = |ui: &mut Ui<UiMsg>, x: i32| {
+            ui.dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(x, 0),
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs
+            .into_iter()
+            .find_map(|m| match m {
+                UiMsg::Ui(f @ UiFact::WidgetHit { .. }) => Some(f),
+                _ => None,
+            })
+        };
+        assert!(press(&mut ui, 0).is_none(), "the label is not the value");
+        let out = crate::widgets::render_spec_with_options(
+            &spec,
+            &Default::default(),
+            WIDTH as u32,
+            crate::widgets::RenderOptions {
+                prev_focus_key: "",
+                auto_focus_first: false,
+                ..Default::default()
+            },
+        );
+        let h = out.hits.first().expect("a hit");
+        let col = out.entries[0].text[..h.byte_start].chars().count() as i32;
+        let UiFact::WidgetHit { hit, .. } = press(&mut ui, col).expect("the value cell") else {
+            unreachable!()
+        };
+        assert_eq!(hit.widget_kind, "number");
+        assert_eq!(hit.event_type, "number_value");
+    }
+
+    /// **`Component` is a focus scope with a key, and nothing else.** It
+    /// renders its child transparently — no chrome, no rows of its own — so
+    /// the rows are exactly the child's.
+    #[test]
+    fn a_component_is_transparent_and_adds_no_rows() {
+        let inner = WidgetSpec::Raw {
+            entries: vec![raw("one"), raw("two")],
+            key: None,
+        };
+        let wrapped = WidgetSpec::Component {
+            child: Box::new(inner.clone()),
+            key: Some("picker".into()),
+        };
+        assert!(covered(&wrapped));
+        assert_eq!(tree_text(&wrapped, &cx()), tree_text(&inner, &cx()));
+    }
+
+    /// **An overlay consumes no vertical space.** "The rows below it do not
+    /// shift down" — so a column containing one lays out as though it were not
+    /// there, and the floated rows are placed over what follows.
+    #[test]
+    fn an_overlay_does_not_push_the_rows_below_it_down() {
+        let plain = col_of(vec![
+            WidgetSpec::Raw {
+                entries: vec![raw("first")],
+                key: None,
+            },
+            WidgetSpec::Raw {
+                entries: vec![raw("second")],
+                key: None,
+            },
+        ]);
+        let floated = col_of(vec![
+            WidgetSpec::Raw {
+                entries: vec![raw("first")],
+                key: None,
+            },
+            WidgetSpec::Overlay {
+                child: Box::new(WidgetSpec::Raw {
+                    entries: vec![raw("hint")],
+                    key: None,
+                }),
+                key: None,
+            },
+            WidgetSpec::Raw {
+                entries: vec![raw("second")],
+                key: None,
+            },
+        ]);
+        assert!(covered(&floated));
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&floated, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let row_of = |ui: &Ui<UiMsg>, text: &str| -> i32 {
+            ui.spec()
+                .in_flow()
+                .iter()
+                .chain(ui.spec().layers().iter())
+                .find_map(|i| match &i.draw {
+                    fresh_ui::Draw::Lines(l) if l.iter().any(|s| &**s == text) => Some(i.rect.y),
+                    _ => None,
+                })
+                .unwrap_or(-1)
+        };
+        assert_eq!(row_of(&ui, "second"), 1, "the row below did not shift");
+        let _ = plain;
     }
 
     /// **The variant whose parity is geometric, not textual.** The runtime
