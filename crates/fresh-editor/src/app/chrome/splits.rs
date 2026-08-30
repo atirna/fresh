@@ -614,6 +614,31 @@ impl Editor {
         })
     }
 
+    /// Where the pane showing this buffer laid its content out.
+    ///
+    /// The three callers that wanted this scanned `split_areas` for an entry
+    /// whose buffer matched and took the rectangle beside it — a lookup that
+    /// answered "which pane" from the painter's record of the last frame when
+    /// the split model already knows. The model says which pane, the tree says
+    /// where it is.
+    ///
+    /// A buffer mounted in no visible pane has no rectangle, which is what an
+    /// absent entry meant.
+    pub(crate) fn pane_content_rect_for_buffer(
+        &self,
+        buffer_id: crate::app::BufferId,
+    ) -> Option<ratatui::layout::Rect> {
+        let pane = self
+            .windows
+            .get(&self.active_window)?
+            .buffers
+            .splits()
+            .map(|(mgr, _)| mgr.visible_leaves())?
+            .into_iter()
+            .find_map(|(pane, bid)| (bid == buffer_id).then_some(pane))?;
+        self.pane_content_rect(pane)
+    }
+
     /// The pane a screen cell belongs to, counting its scrollbar column.
     ///
     /// The wider question than [`Self::pane_content_at`], and the one

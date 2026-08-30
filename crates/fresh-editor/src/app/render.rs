@@ -1643,12 +1643,7 @@ impl Editor {
             .1
             .get(&active_split)
             .map(|vs| *vs.cursors.primary())?;
-        let content_rect = self
-            .active_layout()
-            .split_areas
-            .iter()
-            .find(|(split_id, _, _, _, _, _)| *split_id == active_split)
-            .map(|(_, _, rect, _, _, _)| *rect);
+        let content_rect = self.pane_content_rect(active_split);
 
         let state = self.active_state_mut();
         let gutter_width = viewport.gutter_width(&state.buffer) as u16;
@@ -1810,12 +1805,7 @@ impl Editor {
                 .map(|(mgr, _)| mgr)
                 .expect("active window must have a populated split layout")
                 .active_split();
-            let active_split_area = self
-                .active_layout()
-                .split_areas
-                .iter()
-                .find(|(split_id, _, _, _, _, _)| *split_id == active_split)
-                .map(|(_, _, content_rect, _, _, _)| *content_rect);
+            let active_split_area = self.pane_content_rect(active_split);
 
             if let Some(terminal_area) = active_split_area {
                 self.apply_keyboard_capture_dimming(frame, terminal_area);

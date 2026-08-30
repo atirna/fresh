@@ -556,12 +556,19 @@ impl super::Editor {
         {
             return None;
         }
-        let content_rect = self
-            .active_layout()
-            .split_areas
-            .iter()
-            .find(|(sid, bid, _, _, _, _)| *sid == split_id && *bid == buffer_id)
-            .map(|(_, _, rect, _, _, _)| *rect)?;
+        // The pane is named, so its content rectangle is the tree's; the scan
+        // this replaces also checked that the pane still shows this buffer,
+        // which `pane_buffer` answers from the model rather than from the
+        // painter's record of the last frame.
+        let content_rect = self.pane_content_rect(split_id)?;
+        if self
+            .windows
+            .get(&self.active_window)
+            .and_then(|w| w.pane_buffer(split_id))
+            != Some(buffer_id)
+        {
+            return None;
+        }
 
         // Drop into read-only scrollback. The press already focused the
         // split, so the sync pins THIS split's viewport to the grid's row 0.
