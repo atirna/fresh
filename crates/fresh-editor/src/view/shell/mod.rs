@@ -22,6 +22,7 @@ pub mod file_explorer;
 pub mod fold;
 pub mod frame;
 pub mod input;
+pub mod keybinding;
 pub mod menu;
 pub mod modal;
 pub mod msg;

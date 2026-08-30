@@ -2939,6 +2939,7 @@ impl Editor {
             browser,
             trust,
             modal,
+            keybinding: self.keybinding_editor.is_some(),
             calibration: self.calibration_description(),
             splits,
             menu_bar: menu_bar_visible,
@@ -3407,14 +3408,21 @@ impl Editor {
         // Keybinding editor: web renders it natively from `keybinding_editor_view`;
         // paint cells only for the TUI.
         if draw_aux {
-            if let Some(ref mut kb_editor) = self.keybinding_editor {
-                crate::view::dimming::apply_dimming(frame, area);
-                crate::view::keybinding_editor::render_keybinding_editor(
-                    frame,
-                    area,
-                    kb_editor,
-                    &self.theme.read().unwrap(),
-                );
+            // **The box is the tree's.** `view::shell::keybinding` places it —
+            // ninety percent of the chrome area, capped, floored, centred
+            // beside the dock — and this reads the answer. The four lines of
+            // arithmetic that computed it here and then filed it in
+            // `editor.layout.modal_area` for a mouse handler to compare
+            // against were the same rectangle stated twice.
+            let modal_area = self.panel_rect(&crate::view::shell::keybinding::key());
+            if let (Some(modal_area), true) = (modal_area, self.keybinding_editor.is_some()) {
+                let theme = self.theme.read().unwrap().clone();
+                if let Some(ref mut kb_editor) = self.keybinding_editor {
+                    crate::view::dimming::apply_dimming(frame, area);
+                    crate::view::keybinding_editor::render_keybinding_editor(
+                        frame, modal_area, kb_editor, &theme,
+                    );
+                }
             }
         }
 
