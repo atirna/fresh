@@ -324,6 +324,7 @@ fn body(p: &Panel) -> Node<UiMsg> {
                     marker_gutter: i.marker_gutter,
                     hovered_item_key: i.hovered_item_key.clone(),
                     avail_height: i.avail_height,
+                    surface: super::widgets::panel_surface(),
                 },
             )
         },

@@ -39,9 +39,15 @@ use crate::app::shell_host::shell_theme::{Attrs, Ink, Paint};
 
 use super::msg::UiMsg;
 
-/// The panel surface's own colours, which every row starts from.
+/// The plugin panel surface's own colours, which every row of one starts
+/// from. Other surfaces say their own — see [`Ctx::surface`].
 const BASE_FG: &str = "ui.suggestion_fg";
 const BASE_BG: &str = "ui.suggestion_bg";
+
+/// The ink a plugin panel's rows start from: the default [`Ctx::surface`].
+pub fn panel_surface() -> Ink {
+    Ink::keys(BASE_FG, BASE_BG)
+}
 
 /// Which panel a description belongs to.
 ///
@@ -84,6 +90,16 @@ pub struct Ctx<'a> {
     /// Row budget for auto-sized `List`/`Tree` widgets, when the host knows
     /// the surface's inner height.
     pub avail_height: Option<u32>,
+    /// The ink every row on this panel starts from.
+    ///
+    /// **A widget does not know what it is sitting on.** The same
+    /// `WidgetSpec` is a row of a plugin's dock panel, a floating panel, and
+    /// a settings card — three surfaces with three backgrounds — and the
+    /// runtime painted entries whose `bg` was simply *unset*, so whatever the
+    /// painter had already put in the cell showed through. A description has
+    /// no "already": every run carries both halves, so the surface has to be
+    /// said rather than inherited. This is where it is said.
+    pub surface: Ink,
 }
 
 /// The empty instance-state map, for a spec with no host state behind it.
@@ -111,6 +127,7 @@ impl Ctx<'static> {
             marker_gutter: false,
             hovered_item_key: String::new(),
             avail_height: None,
+            surface: panel_surface(),
         }
     }
 }
@@ -352,18 +369,25 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             };
             let n = width as usize / glyph.chars().count().max(1);
             let ink = match style {
-                Some(o) => ink_of(o, &Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG))),
-                None => Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)),
+                Some(o) => ink_of(o, &cx.surface),
+                None => cx.surface.clone(),
             };
             text_runs([Run::themed(glyph.repeat(n), ink.to_string())]).h(Sizing::Cells(1))
         }
         // The formatter is the runtime's own: what a hint row *says* is domain
         // knowledge and does not move.
-        WidgetSpec::HintBar { entries, .. } => entry_row(&crate::widgets::render_hint_bar(entries)),
+        WidgetSpec::HintBar { entries, .. } => {
+            entry_row(&crate::widgets::render_hint_bar(entries), &cx.surface)
+        }
         // Entries the plugin wrote, inlined without interpretation. That is
         // the variant's whole contract, and it is one row per entry.
         WidgetSpec::Raw { entries, .. } => {
-            col().children(entries.iter().map(entry_row).collect::<Vec<_>>())
+            col().children(
+                entries
+                    .iter()
+                    .map(|e| entry_row(e, &cx.surface))
+                    .collect::<Vec<_>>(),
+            )
         }
         // **The first variant whose value the host owns.** Instance state is
         // authoritative once the widget has rendered and the spec's `value` is
@@ -419,6 +443,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 &rendered.entry,
                 rendered.value_range,
                 cx.slot,
+                &cx.surface,
                 crate::widgets::HitArea {
                     row_target: false,
                     context_click: false,
@@ -567,6 +592,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 &entry,
                 chip,
                 cx.slot,
+                &cx.surface,
                 crate::widgets::HitArea {
                     row_target: false,
                     context_click: false,
@@ -640,7 +666,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                     hovered,
                 ),
             };
-            let n = entry_row(&entry);
+            let n = entry_row(&entry, &cx.surface);
             match disabled {
                 true => n,
                 false => hit_node(
@@ -676,7 +702,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
         // translation, stated as layout instead of as an arithmetic shift
         // applied to six recorded channels.
         WidgetSpec::LabeledSection { label, child, .. } => {
-            let ring = Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)).to_string();
+            let ring = cx.surface.to_string();
             // The child is handed the width less this box's four columns of
             // chrome, which is the contract `emit_completion_overlays` reads
             // when it widens a completion popup back out by four. Two of those
@@ -758,7 +784,8 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 },
                 {
                     let rows = rows.clone();
-                    move |i| entry_row(&rows[i])
+                    let surface = cx.surface.clone();
+                    move |i| entry_row(&rows[i], &surface)
                 },
             )
             // The panel's focus is the host's — the runtime resolves a focus
@@ -766,14 +793,17 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             // keeps its mouse, which is what that flag means since #3108.
             .focusable(false)
             .scrollbar()
-            .row_theme(|_, st| match st {
-                fresh_ui::widgets::RowState::Selected
-                | fresh_ui::widgets::RowState::SelectedBlur => Ink::new(
-                    Paint::key("ui.popup_selection_fg"),
-                    Paint::key("ui.popup_selection_bg"),
-                )
-                .to_string(),
-                _ => Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)).to_string(),
+            .row_theme({
+                let plain = cx.surface.to_string();
+                move |_, st| match st {
+                    fresh_ui::widgets::RowState::Selected
+                    | fresh_ui::widgets::RowState::SelectedBlur => Ink::new(
+                        Paint::key("ui.popup_selection_fg"),
+                        Paint::key("ui.popup_selection_bg"),
+                    )
+                    .to_string(),
+                    _ => plain.clone(),
+                }
             })
             .on_activate_handler(Rc::new(move |i| {
                 Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
@@ -882,6 +912,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 },
                 {
                     let cards = cards.clone();
+                    let surface = cx.surface.clone();
                     move |i| {
                         let selected = i as i32 == sel;
                         col().children((0..item_height as usize).map(|r| {
@@ -893,7 +924,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                             if selected {
                                 crate::widgets::render::mark_list_card_selected(&mut e);
                             }
-                            entry_row(&e)
+                            entry_row(&e, &surface)
                         }))
                     }
                 },
@@ -901,12 +932,19 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             .focusable(false)
             .row_rows(item_height)
             .scrollbar_gutter()
-            .row_theme(|_, st| match st {
-                fresh_ui::widgets::RowState::Hover => {
-                    Ink::new(Paint::key(BASE_FG), Paint::key("ui.menu_hover_bg")).to_string()
+            .row_theme({
+                let plain = cx.surface.to_string();
+                let hover = cx
+                    .surface
+                    .clone()
+                    .with_bg(Paint::key("ui.menu_hover_bg"))
+                    .to_string();
+                move |_, st| match st {
+                    fresh_ui::widgets::RowState::Hover => hover.clone(),
+                    // A selected card is marked in its own glyphs, not by a
+                    // band.
+                    _ => plain.clone(),
                 }
-                // A selected card is marked in its own glyphs, not by a band.
-                _ => Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)).to_string(),
             })
             .on_activate_handler(Rc::new(move |i| {
                 let item_key = hit_keys.get(i).cloned().unwrap_or_default();
@@ -1082,14 +1120,14 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 if body < end {
                     hits.push(((body, end), select(body, end, true)));
                 }
-                rows.push(entry_row_hits(&primary, cx.slot, &hits));
+                rows.push(entry_row_hits(&primary, cx.slot, &cx.surface, &hits));
                 for extra in r.extra_entries.iter() {
                     let mut e = extra.clone();
                     dress(&mut e);
                     let b = e.text.len();
                     rows.push(match b > 0 {
-                        true => entry_row_hit(&e, (0, b), cx.slot, select(0, b, true)),
-                        false => entry_row(&e),
+                        true => entry_row_hit(&e, (0, b), cx.slot, &cx.surface, select(0, b, true)),
+                        false => entry_row(&e, &cx.surface),
                     });
                 }
                 let h = rows.len() as u32;
@@ -1137,6 +1175,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             let keys = Rc::new(item_keys.clone());
             let tree_key = key.clone().unwrap_or_default();
             let (slot, checkable, indent) = (cx.slot, *checkable, *indent_cols);
+            let surface = cx.surface.clone();
             let sel_abs = *selected_index;
             let n = visible.len();
 
@@ -1217,7 +1256,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                         serde_json::json!({ "index": abs, "key": item_key }),
                         true,
                     ));
-                    entry_row_hits(&r.entry, slot, &hits)
+                    entry_row_hits(&r.entry, slot, &surface, &hits)
                 }
             };
 
@@ -1238,14 +1277,17 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             )
             .focusable(false)
             .scrollbar()
-            .row_theme(|_, st| match st {
-                fresh_ui::widgets::RowState::Selected
-                | fresh_ui::widgets::RowState::SelectedBlur => Ink::new(
-                    Paint::key("ui.popup_selection_fg"),
-                    Paint::key("ui.popup_selection_bg"),
-                )
-                .to_string(),
-                _ => Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)).to_string(),
+            .row_theme({
+                let plain = cx.surface.to_string();
+                move |_, st| match st {
+                    fresh_ui::widgets::RowState::Selected
+                    | fresh_ui::widgets::RowState::SelectedBlur => Ink::new(
+                        Paint::key("ui.popup_selection_fg"),
+                        Paint::key("ui.popup_selection_bg"),
+                    )
+                    .to_string(),
+                    _ => plain.clone(),
+                }
             });
             // The spec's selection is an index into the *whole* array; the
             // list's is into the visible window, which is the same array with
@@ -1327,6 +1369,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             let hits = std::rc::Rc::new(out.hits.clone());
             let n = rows_src.len();
             let slot = cx.slot;
+            let surface = cx.surface.clone();
             let sel = caret_row.and_then(|r| r.checked_sub(head));
             let list = fresh_ui::List::windowed(n, |i| fresh_ui::Key::Str(i.to_string().into()), {
                 let rows_src = rows_src.clone();
@@ -1338,8 +1381,8 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                         .collect();
                     let at = caret.filter(|_| sel == Some(i));
                     match mine.is_empty() && at.is_none() {
-                        true => entry_row(&rows_src[i]),
-                        false => row_pieces(&rows_src[i], slot, &mine, at),
+                        true => entry_row(&rows_src[i], &surface),
+                        false => row_pieces(&rows_src[i], slot, &surface, &mine, at),
                     }
                 }
             })
@@ -1348,7 +1391,10 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             // The rows carry their own colours — a focused field paints its
             // own background band per row — so the list's row states must not
             // paint over them.
-            .row_theme(|_, _| Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)).to_string());
+            .row_theme({
+                let plain = cx.surface.to_string();
+                move |_, _| plain.clone()
+            });
             // "Selected" here means "where the caret is", which is what the
             // list reveals when it moves. That is the whole of the auto-clamp
             // the runtime did by hand.
@@ -1359,7 +1405,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             let body = fresh_ui::ComponentExt::node(list).h(Sizing::Cells(*rows as u16));
             match head {
                 0 => body,
-                _ => col().children([entry_row(&out.entries[0]), body]),
+                _ => col().children([entry_row(&out.entries[0], &cx.surface), body]),
             }
         }
         // The rest, with collectors of their own. See [`collected`].
@@ -1540,13 +1586,14 @@ fn rows_with_hits(
             .filter(|c| c.buffer_row as usize == i)
             .map(|c| c.byte_in_row as usize);
         let mut node = match mine.is_empty() && at.is_none() {
-            true => entry_row(entry),
+            true => entry_row(entry, &cx.surface),
             // **Every hit on the row, not the first.** A tree row has three
             // and a dual list's has two; keeping only one silently made the
             // others unclickable.
             false => row_pieces(
                 entry,
                 cx.slot,
+                &cx.surface,
                 &mine
                     .iter()
                     .map(|h| ((h.byte_start, h.byte_end), (*h).clone()))
@@ -1591,7 +1638,7 @@ fn rows_with_hits(
                     row()
                         .h(Sizing::Cells(1))
                         .theme(Ink::new(Paint::key(BASE_FG), Paint::key("ui.popup_bg")).to_string())
-                        .child(entry_row(&o.entry)),
+                        .child(entry_row(&o.entry, &cx.surface)),
                     cx.slot,
                 )),
         );
@@ -1666,6 +1713,7 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
                 e,
                 (0, e.text.len()),
                 cx.slot,
+                &cx.surface,
                 crate::widgets::HitArea {
                     row_target: true,
                     context_click: false,
@@ -1680,7 +1728,7 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
                     owner_key: None,
                 },
             ),
-            None => entry_row(e),
+            None => entry_row(e, &cx.surface),
         })
         .collect();
     // A press anywhere in the box that is not on an option — its border — is
@@ -1744,8 +1792,8 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
 /// overlapping overlays per property in declaration order — with the theme
 /// *names* kept instead of resolved colours, because the fold resolves them
 /// and that is what makes the row inspectable and the web able to paint it.
-pub fn entry_row(entry: &TextPropertyEntry) -> Node<UiMsg> {
-    text_runs(entry_runs(entry, &[]).into_iter().map(|(_, r)| r)).h(Sizing::Cells(1))
+pub fn entry_row(entry: &TextPropertyEntry, surface: &Ink) -> Node<UiMsg> {
+    text_runs(entry_runs(entry, &[], surface).into_iter().map(|(_, r)| r)).h(Sizing::Cells(1))
 }
 
 /// One styled row whose `range` of bytes answers a press with `hit`.
@@ -1760,9 +1808,10 @@ pub fn entry_row_hit(
     entry: &TextPropertyEntry,
     range: (usize, usize),
     slot: Slot,
+    surface: &Ink,
     hit: crate::widgets::HitArea,
 ) -> Node<UiMsg> {
-    entry_row_hits(entry, slot, &[(range, hit)])
+    entry_row_hits(entry, slot, surface, &[(range, hit)])
 }
 
 /// One styled row carrying several hits, each over the bytes it names.
@@ -1775,9 +1824,10 @@ pub fn entry_row_hit(
 pub fn entry_row_hits(
     entry: &TextPropertyEntry,
     slot: Slot,
+    surface: &Ink,
     hits: &[((usize, usize), crate::widgets::HitArea)],
 ) -> Node<UiMsg> {
-    row_pieces(entry, slot, hits, None)
+    row_pieces(entry, slot, surface, hits, None)
 }
 
 /// The key of the caret's cell, for the host that has to place a hardware
@@ -1798,6 +1848,7 @@ pub fn caret_key() -> fresh_ui::Key {
 fn row_pieces(
     entry: &TextPropertyEntry,
     slot: Slot,
+    surface: &Ink,
     hits: &[((usize, usize), crate::widgets::HitArea)],
     caret: Option<usize>,
 ) -> Node<UiMsg> {
@@ -1807,7 +1858,7 @@ fn row_pieces(
         cuts.push(*b);
     }
     cuts.extend(caret);
-    let runs = entry_runs(entry, &cuts);
+    let runs = entry_runs(entry, &cuts, surface);
     // Group consecutive runs by which hit covers them. A byte covered by two
     // ranges takes the first that names it, which is the order the collector
     // pushed them — the same precedence the byte-range scan had.
@@ -1871,7 +1922,11 @@ fn row_pieces(
 ///
 /// `extra` are additional byte offsets to split at, for a caller that needs a
 /// piece boundary the overlays do not provide.
-fn entry_runs(entry: &TextPropertyEntry, extra: &[usize]) -> Vec<(std::ops::Range<usize>, Run)> {
+fn entry_runs(
+    entry: &TextPropertyEntry,
+    extra: &[usize],
+    surface: &Ink,
+) -> Vec<(std::ops::Range<usize>, Run)> {
     let mut normalized = entry.clone();
     normalized.normalize_widths();
     let mut text = normalized.text.clone();
@@ -1880,8 +1935,8 @@ fn entry_runs(entry: &TextPropertyEntry, extra: &[usize]) -> Vec<(std::ops::Rang
     }
 
     let base = match normalized.style.as_ref() {
-        Some(o) => ink_of(o, &Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG))),
-        None => Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)),
+        Some(o) => ink_of(o, surface),
+        None => surface.clone(),
     };
 
     if text.is_empty() {
@@ -1990,6 +2045,7 @@ mod tests {
             marker_gutter: false,
             hovered_item_key: String::new(),
             avail_height: None,
+            surface: panel_surface(),
         }
     }
 
@@ -3199,6 +3255,7 @@ mod tests {
         let node = entry_row_hits(
             &e,
             Slot::Floating,
+            &panel_surface(),
             &[
                 ((0, 3), hit("toggle", 0, 3)),
                 ((4, 5), hit("expand", 4, 5)),
@@ -3325,7 +3382,7 @@ mod tests {
             unit: Default::default(),
         }];
         let mut ui: Ui<UiMsg> = Ui::new();
-        ui.frame(entry_row(&e), Size::new(WIDTH, 4));
+        ui.frame(entry_row(&e, &panel_surface()), Size::new(WIDTH, 4));
         let texts: Vec<String> = ui
             .spec()
             .in_flow()
