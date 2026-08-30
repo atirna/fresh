@@ -567,7 +567,7 @@ fn collected(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
         },
         width as u32,
     );
-    rows_with_hits(&out.entries, &out.hits, cx, &out.overlays)
+    rows_with_hits(&out.entries, &out.hits, cx, &out.overlays, &out.popups)
 }
 
 /// The rows of a collected subtree, each carrying whatever hits land on it.
@@ -581,6 +581,7 @@ fn rows_with_hits(
     hits: &[crate::widgets::HitArea],
     cx: &Ctx<'_>,
     overlays: &[crate::widgets::OverlayRow],
+    popups: &[crate::widgets::PanelPopup],
 ) -> Node<UiMsg> {
     let mut kids: Vec<Node<UiMsg>> = Vec::with_capacity(entries.len());
     for (i, entry) in entries.iter().enumerate() {
@@ -599,7 +600,7 @@ fn rows_with_hits(
         });
     }
     let body = col().children(kids);
-    match overlays.is_empty() {
+    match overlays.is_empty() && popups.is_empty() {
         true => body,
         // Rows the collector floated: they anchor at a row of the body and
         // paint over what is there, without having consumed its height. A
@@ -613,6 +614,60 @@ fn rows_with_hits(
                         .place(fresh_ui::Place::Over)
                         .fit(fresh_ui::Fit::CLAMP)
                         .child(entry_row(&o.entry)),
+                );
+            }
+            // An open dropdown's option list. **Not confined to the panel**:
+            // it "extends past the panel/modal border instead of
+            // growing/clipping it", which is a layer that names no region —
+            // the frame is its bounds. Each row selects an absolute option
+            // index, which is the payload the runtime's own hit carries.
+            for p in popups {
+                let rows: Vec<Node<UiMsg>> = p
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| match p.row_indices.get(i) {
+                        Some(idx) => entry_row_hit(
+                            e,
+                            (0, e.text.len()),
+                            cx.slot,
+                            crate::widgets::HitArea {
+                                row_target: true,
+                                context_click: false,
+                                overlay: true,
+                                widget_key: p.widget_key.clone(),
+                                widget_kind: "dropdown",
+                                buffer_row: i as u32,
+                                byte_start: 0,
+                                byte_end: e.text.len(),
+                                payload: serde_json::json!({ "index": idx }),
+                                event_type: "dropdown_select",
+                                owner_key: None,
+                            },
+                        ),
+                        None => entry_row(e),
+                    })
+                    .collect();
+                stack.push(
+                    fresh_ui::layer()
+                        .anchor(fresh_ui::Anchor::Point(
+                            p.anchor_col as u16,
+                            p.anchor_row as u16,
+                        ))
+                        .place(fresh_ui::Place::Below)
+                        .fit(fresh_ui::Fit::FLIP.or(fresh_ui::Fit::CLAMP))
+                        .child(
+                            col()
+                                .theme(
+                                    Ink::new(
+                                        Paint::key("ui.popup_border_fg"),
+                                        Paint::key("ui.popup_bg"),
+                                    )
+                                    .to_string(),
+                                )
+                                .border()
+                                .children(rows),
+                        ),
                 );
             }
             fresh_ui::stack().children(stack)

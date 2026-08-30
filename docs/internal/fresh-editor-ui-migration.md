@@ -507,6 +507,21 @@ immediate-mode one costs.
    C.4's mutation fast path being kept on intuition, and its opposite — a
    `.shared()` cache guarding something cheaper than the guard.
 
+**And one rule about layers, learned the same way.** Layers are hit-tested
+top down and **the first layer with any path at the point wins** — and a
+`PointerMode::Transparent` node still produces a path. So "transparent" means
+*the hit continues behind me within this layer*, not *across* layers: a
+decorative layer laid over a claim-everything one does not fall through to it,
+it swallows the press and nothing handles it. A layer therefore has to say what
+a press anywhere on it means, or not be a layer. `PointerMode::Ignore` does not
+rescue this either — it skips the node's whole subtree, so a container using it
+takes its own buttons out with it.
+
+C.6 shipped with exactly that mistake and its own tests caught it, which is the
+argument for writing the tests at the same time rather than after: the panel's
+frame was a transparent layer above the modal's claim, and every press on the
+box's chrome and content area went nowhere.
+
 And one rule of this migration's own, learned the expensive way and worth
 keeping at the top: **the tree runs first, so anything that used to sit between
 it and the legacy walk now sits behind whatever the tree claims.** Three things
