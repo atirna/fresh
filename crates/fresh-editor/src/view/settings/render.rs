@@ -134,11 +134,11 @@ pub fn render_settings(
     let search_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
     let search_header_height = 1u16;
     let search_gap = 1u16;
-    if state.search_active {
-        render_search_header(frame, search_area, state, theme);
-    } else {
-        render_search_hint(frame, search_area, theme);
-    }
+    // **The search row is the tree's** (`view::shell::settings`): the query
+    // was already a `WidgetSpec::Text` rendered through `render_spec`, so it
+    // is a *node* now, through the same adapter a plugin's field goes through.
+    // `search_area` stays because everything below it is measured from here.
+    let _ = search_area;
 
     // Footer height: 2 lines for horizontal (separator + buttons), 7 for vertical
     let footer_height = if narrow_mode { 7 } else { 2 };
@@ -2399,131 +2399,6 @@ fn render_footer_vertical(
         true, // dimmed
     );
     layout.edit_button = Some(edit_area);
-}
-
-/// Render the search header with query input
-fn render_search_header(frame: &mut Frame, area: Rect, state: &SettingsState, theme: &Theme) {
-    // Show result count and scroll position inline after cursor
-    let result_count = state.search_results.len();
-    let count_text = if state.search_query().is_empty() {
-        String::new()
-    } else if result_count == 0 {
-        " (no results)".to_string()
-    } else if result_count == 1 {
-        " (1 result)".to_string()
-    } else if state.search_max_visible >= result_count {
-        // All results visible, no need to show range
-        format!(" ({} results)", result_count)
-    } else {
-        // Show current position in results
-        let first = state.search_scroll_offset + 1;
-        let last = (state.search_scroll_offset + state.search_max_visible).min(result_count);
-        format!(" ({}-{} of {})", first, last, result_count)
-    };
-
-    // Add scroll indicators
-    let has_more_above = state.search_scroll_offset > 0;
-    let has_more_below = state.search_scroll_offset + state.search_max_visible < result_count;
-    let scroll_indicator = match (has_more_above, has_more_below) {
-        (true, true) => " ↑↓",
-        (true, false) => " ↑",
-        (false, true) => " ↓",
-        (false, false) => "",
-    };
-
-    let count_style = Style::default().fg(theme.line_number_fg);
-    let indicator_style = Style::default()
-        .fg(theme.menu_active_fg)
-        .add_modifier(Modifier::BOLD);
-
-    // The editable query renders through the plugin widget framework —
-    // the same `WidgetSpec::Text` + `render_spec` path every settings
-    // field now uses — instead of hand-rolled cursor spans. The widget
-    // owns the caret (a REVERSED block cell via `block_caret`) and the
-    // selection highlight, driven statelessly from the search input's
-    // `TextEdit` (value + byte cursor + live selection). The result
-    // count / scroll indicators are search chrome, painted after the
-    // field at its rendered width.
-    let query = state.search_query();
-    let cursor = state.search_cursor().min(query.len()) as i32;
-    let (sel_start, sel_end) = state
-        .search_input
-        .editor
-        .selection_flat_range()
-        .map(|(a, b)| (a as i32, b as i32))
-        .unwrap_or((-1, -1));
-    let field_spec = fresh_core::api::WidgetSpec::Text {
-        value: query.to_string(),
-        cursor_byte: cursor,
-        focused: true,
-        label: String::new(),
-        placeholder: None,
-        rows: 1,
-        field_width: 0,
-        max_visible_chars: 0,
-        full_width: false,
-        completions: Vec::new(),
-        completions_visible_rows: 0,
-        block_caret: true,
-        sel_start,
-        sel_end,
-        label_width: 0,
-        read_only: false,
-        markdown: false,
-        key: None,
-    };
-    let out = crate::widgets::render_spec_no_autofocus(
-        &field_spec,
-        &std::collections::HashMap::new(),
-        "",
-        area.width.max(1) as u32,
-    );
-    let field_width = out
-        .entries
-        .first()
-        .map(|e| crate::primitives::display_width::str_width(e.text.trim_end_matches('\n')))
-        .unwrap_or(0) as u16;
-    if let Some(entry) = out.entries.first() {
-        crate::app::render::paint_text_property_entry(
-            frame.buffer_mut(),
-            entry,
-            area.x,
-            area.y,
-            area.width,
-            theme,
-            None,
-        );
-    }
-
-    // Result-count + scroll-indicator suffix, right after the field.
-    let suffix_x = area.x.saturating_add(field_width);
-    if suffix_x < area.x + area.width && !(count_text.is_empty() && scroll_indicator.is_empty()) {
-        let suffix = Line::from(vec![
-            Span::styled(count_text, count_style),
-            Span::styled(scroll_indicator, indicator_style),
-        ]);
-        let suffix_w = (area.x + area.width).saturating_sub(suffix_x);
-        frame.render_widget(
-            Paragraph::new(suffix),
-            Rect::new(suffix_x, area.y, suffix_w, 1),
-        );
-    }
-}
-
-/// Render search hint when search is not active
-fn render_search_hint(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let hint_style = Style::default().fg(theme.line_number_fg);
-    let key_style = Style::default()
-        .fg(theme.popup_text_fg)
-        .bg(theme.split_separator_fg);
-
-    let spans = vec![
-        Span::styled("Press ", hint_style),
-        Span::styled(" / ", key_style),
-        Span::styled(" to search settings...", hint_style),
-    ];
-    let line = Line::from(spans);
-    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// Render search results with breadcrumbs

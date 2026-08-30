@@ -52,22 +52,116 @@ pub fn fit(info: LayoutInfo) -> Option<(u16, u16)> {
     Some(((w * 90 / 100).min(MAX_WIDTH), h * 90 / 100))
 }
 
-/// The dialog's box as a layer: centred beside the dock, invisible to the
-/// pointer.
-pub fn layer() -> Node<UiMsg> {
+/// The dialog's box as a layer: centred beside the dock, with the chrome the
+/// tree owns inside it and a claim band where the painter's body still is.
+///
+/// **The body band is `PointerMode::Ignore`, not a claim**, and the difference
+/// matters: the panels underneath are still hit-tested by
+/// `settings/mouse.rs` against rectangles the painter recorded, so a press
+/// there has to reach the modal slot that routes to it. Taking it here would
+/// make the whole settings body inert. The chrome rows that *are* the tree's
+/// stop their own presses before they get that far.
+pub fn layer(c: Option<&Chrome>) -> Node<UiMsg> {
+    let c = c.cloned();
     fresh_ui::layer()
         .within(super::frame::chrome_key())
         .anchor(Anchor::Screen(Align::Center))
         .place(Place::Over)
         .pointer_mode(PointerMode::Ignore)
-        .child(layout_reader(|info: LayoutInfo| {
+        .child(layout_reader(move |info: LayoutInfo| {
             let (w, h) = fit(info).unwrap_or((0, 0));
-            row()
-                .w(Sizing::Cells(w))
-                .h(Sizing::Cells(h))
-                .pointer_mode(PointerMode::Ignore)
-                .key(key())
+            let n = col().w(Sizing::Cells(w)).h(Sizing::Cells(h)).key(key());
+            match &c {
+                None => n.pointer_mode(PointerMode::Ignore),
+                // One row of border, the search row, a blank gap, and then the
+                // painter's body — `search_header_height + search_gap` in the
+                // renderer, which is where it puts everything else.
+                Some(c) => n.pointer_mode(PointerMode::Transparent).children([
+                    row().h(Sizing::Cells(1)).pointer_mode(PointerMode::Ignore),
+                    row().h(Sizing::Cells(1)).children([
+                        row().w(Sizing::Cells(1)).pointer_mode(PointerMode::Ignore),
+                        search_row(&c.search),
+                    ]),
+                    row().flex(1).pointer_mode(PointerMode::Ignore),
+                ]),
+            }
         }))
+}
+
+fn search_row(s: &Search) -> Node<UiMsg> {
+    let mut kids: Vec<Node<UiMsg>> = Vec::new();
+    match s {
+        Search::Hint(v) => kids.extend(
+            v.iter()
+                .map(|s| text(s.text.clone()).theme(s.theme.clone())),
+        ),
+        Search::Active { field, suffix } => {
+            // Through the same adapter a plugin's field goes through. The
+            // width it is given is the row's, which is what
+            // `render_spec_no_autofocus(.., area.width)` was handed.
+            kids.push(layout_reader({
+                let field = field.clone();
+                move |info: LayoutInfo| {
+                    super::widgets::node(
+                        &field,
+                        info.constraints.max_w,
+                        &super::widgets::Ctx::plain(super::widgets::Slot::Floating),
+                    )
+                }
+            }));
+            kids.extend(
+                suffix
+                    .iter()
+                    .map(|s| text(s.text.clone()).theme(s.theme.clone())),
+            );
+        }
+    }
+    row().h(Sizing::Cells(1)).key(search_key()).children(kids)
+}
+
+/// One styled run of the modal's chrome.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Span {
+    pub text: String,
+    pub theme: String,
+}
+
+impl Span {
+    pub fn new(text: impl Into<String>, theme: impl Into<String>) -> Self {
+        Span {
+            text: text.into(),
+            theme: theme.into(),
+        }
+    }
+}
+
+/// The modal's top row: a live query field, or the hint that opens one.
+#[derive(Clone, Debug)]
+pub enum Search {
+    Hint(Vec<Span>),
+    /// **The query is a `WidgetSpec::Text`**, which is how it was already
+    /// painted — "the same `WidgetSpec` + `render_spec` path every settings
+    /// field now uses, instead of hand-rolled cursor spans". It is a *node*
+    /// now, through the same adapter a plugin's field goes through, which is
+    /// what "there is no privileged internal surface" means.
+    Active {
+        field: std::rc::Rc<fresh_core::api::WidgetSpec>,
+        /// The result count and scroll arrows, painted after the field at its
+        /// rendered width.
+        suffix: Vec<Span>,
+    },
+}
+
+/// The settings modal's chrome: what the tree draws around a body the painter
+/// still owns.
+#[derive(Clone, Debug)]
+pub struct Chrome {
+    pub title: String,
+    pub search: Search,
+}
+
+pub fn search_key() -> fresh_ui::Key {
+    fresh_ui::Key::Str("settings_search".into())
 }
 
 /// What a press on one of the settings dialogs asks for.
@@ -385,11 +479,51 @@ mod tests {
     use crate::view::shell::msg::UiFact;
     use fresh_ui::{Size, Ui};
 
+    fn chrome() -> Chrome {
+        let dim = pair("ui.line_number_fg", "ui.popup_bg");
+        Chrome {
+            title: " Settings [user] ".into(),
+            search: Search::Hint(vec![Span::new("Press / to search settings...", dim)]),
+        }
+    }
+
+    fn searching(query: &str) -> Chrome {
+        Chrome {
+            title: " Settings [user] ".into(),
+            search: Search::Active {
+                field: std::rc::Rc::new(fresh_core::api::WidgetSpec::Text {
+                    value: query.into(),
+                    cursor_byte: query.len() as i32,
+                    focused: true,
+                    label: String::new(),
+                    placeholder: None,
+                    rows: 1,
+                    field_width: 0,
+                    max_visible_chars: 0,
+                    full_width: false,
+                    completions: Vec::new(),
+                    completions_visible_rows: 0,
+                    block_caret: true,
+                    sel_start: -1,
+                    sel_end: -1,
+                    label_width: 0,
+                    read_only: false,
+                    markdown: false,
+                    key: None,
+                }),
+                suffix: vec![Span::new(
+                    " (3 results)",
+                    pair("ui.line_number_fg", "ui.popup_bg"),
+                )],
+            },
+        }
+    }
+
     fn laid_out(w: u16, h: u16, dock: Option<u16>) -> Ui<UiMsg> {
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(
             frame_tree(Frame {
-                settings: true,
+                settings: Some(chrome()),
                 modal: Some(Slot::Settings),
                 dock,
                 menu_bar: false,
@@ -471,7 +605,7 @@ mod tests {
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(
             frame_tree(Frame {
-                settings: true,
+                settings: Some(chrome()),
                 settings_dialog: Some(d),
                 modal: Some(Slot::Settings),
                 menu_bar: false,
@@ -666,5 +800,71 @@ mod tests {
         d.grave = false;
         let ui = with_dialog(Dialog::EntryDiscard(d), 200, 60);
         assert_eq!(ui.rect_of(ui.find_by_key(&dialog_key()).unwrap()).w, 50);
+    }
+
+    /// **The search row is where the painter put it**: one row of border, then
+    /// the row, then a blank gap before the body.
+    #[test]
+    fn the_search_row_is_the_first_row_inside_the_border() {
+        let ui = laid_out(200, 60, None);
+        let b = ui.rect_of(ui.find_by_key(&key()).expect("the box"));
+        let s = ui.rect_of(ui.find_by_key(&search_key()).expect("the search row"));
+        assert_eq!(s.y, b.y + 1, "inside the border");
+        assert_eq!(s.h, 1);
+    }
+
+    /// **The live query is a node, through the adapter a plugin's field goes
+    /// through.** It was already a `WidgetSpec::Text` rendered by
+    /// `render_spec`; what changed is that the tree lays it out.
+    #[test]
+    fn an_active_search_paints_its_query_and_its_count() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            frame_tree(Frame {
+                settings: Some(searching("theme")),
+                modal: Some(Slot::Settings),
+                menu_bar: false,
+                status_bar: false,
+                ..Frame::default()
+            }),
+            Size::new(200, 60),
+        );
+        let painted: Vec<String> = ui
+            .spec()
+            .layers()
+            .iter()
+            .filter_map(|i| match &i.draw {
+                fresh_ui::Draw::Lines(l) => {
+                    Some(l.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert!(painted.iter().any(|r| r.contains("theme")), "{painted:?}");
+        assert!(
+            painted.iter().any(|r| r.contains("(3 results)")),
+            "the count rides after the field: {painted:?}"
+        );
+    }
+
+    /// **The body band is invisible to the pointer, not a claim.** The panels
+    /// under it are still hit-tested against rectangles the painter recorded,
+    /// so a press there has to reach the slot that routes to them — taking it
+    /// here would make the whole settings body inert.
+    #[test]
+    fn a_press_on_the_body_reaches_the_modal_router() {
+        let mut ui = laid_out(200, 60, None);
+        let b = ui.rect_of(ui.find_by_key(&key()).expect("the box"));
+        let got = facts(ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(b.x + 10, b.y + 10),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        assert!(
+            got.iter()
+                .any(|f| matches!(f, UiFact::ModalPointer(Slot::Settings))),
+            "the slot answers: {got:?}"
+        );
     }
 }

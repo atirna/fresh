@@ -185,7 +185,9 @@ pub struct Frame {
     /// Whether the settings dialog is open. As `keybinding`: the tree carries
     /// the box its twenty-odd recorded rectangles are measured from, and
     /// nothing else of it yet.
-    pub settings: bool,
+    /// The settings dialog, when it is open: its title and its search row.
+    /// The body between them is still the painter's.
+    pub settings: Option<super::settings::Chrome>,
     /// Its open dialog, when it has one. Three of them are here — the
     /// unsaved-changes prompt, the reset prompt and the help overlay — and the
     /// entry-dialog stack is not.
@@ -260,7 +262,7 @@ impl Default for Frame {
             browser: None,
             trust: None,
             modal: None,
-            settings: false,
+            settings: None,
             settings_dialog: None,
             keybinding: None,
             keybinding_table: None,
@@ -525,9 +527,9 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // The settings dialog's box. Like the keybinding editor's below it, this
     // contributes a rectangle and nothing else — `PointerMode::Ignore`, so the
     // modal slot behind it is still the one asked.
-    let frame = match f.settings {
-        true => frame.child(super::settings::layer()),
-        false => frame,
+    let frame = match &f.settings {
+        Some(c) => frame.child(super::settings::layer(Some(c))),
+        None => frame,
     };
     // Its open dialog, **after** the box for the same reason the keybinding
     // editor's is: layers are offered the pointer in reverse declaration

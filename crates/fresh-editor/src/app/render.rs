@@ -2106,6 +2106,88 @@ impl Editor {
         })
     }
 
+    /// The settings dialog's title and search row.
+    fn settings_chrome_description(&self) -> Option<crate::view::shell::settings::Chrome> {
+        use crate::app::shell_host::shell_theme::{attrs, pair};
+        use crate::view::shell::settings as st;
+
+        let s = self.settings_state.as_ref().filter(|s| s.visible)?;
+        let dim = pair("ui.line_number_fg", "ui.popup_bg");
+        let search = match s.search_active {
+            false => st::Search::Hint(vec![
+                st::Span::new("Press ", dim.clone()),
+                st::Span::new(" / ", pair("ui.popup_text_fg", "ui.split_separator_fg")),
+                st::Span::new(" to search settings...", dim.clone()),
+            ]),
+            true => {
+                let query = s.search_query();
+                let cursor = s.search_cursor().min(query.len()) as i32;
+                let (sel_start, sel_end) = s
+                    .search_input
+                    .editor
+                    .selection_flat_range()
+                    .map(|(a, b)| (a as i32, b as i32))
+                    .unwrap_or((-1, -1));
+                let n = s.search_results.len();
+                // The count and the scroll arrows, which are search chrome
+                // rather than the field.
+                let count = match (query.is_empty(), n) {
+                    (true, _) => String::new(),
+                    (false, 0) => " (no results)".into(),
+                    (false, 1) => " (1 result)".into(),
+                    (false, _) if s.search_max_visible >= n => format!(" ({n} results)"),
+                    (false, _) => format!(
+                        " ({}-{} of {n})",
+                        s.search_scroll_offset + 1,
+                        (s.search_scroll_offset + s.search_max_visible).min(n)
+                    ),
+                };
+                let arrows = match (
+                    s.search_scroll_offset > 0,
+                    s.search_scroll_offset + s.search_max_visible < n,
+                ) {
+                    (true, true) => " ↑↓",
+                    (true, false) => " ↑",
+                    (false, true) => " ↓",
+                    (false, false) => "",
+                };
+                st::Search::Active {
+                    field: std::rc::Rc::new(fresh_core::api::WidgetSpec::Text {
+                        value: query.to_string(),
+                        cursor_byte: cursor,
+                        focused: true,
+                        label: String::new(),
+                        placeholder: None,
+                        rows: 1,
+                        field_width: 0,
+                        max_visible_chars: 0,
+                        full_width: false,
+                        completions: Vec::new(),
+                        completions_visible_rows: 0,
+                        block_caret: true,
+                        sel_start,
+                        sel_end,
+                        label_width: 0,
+                        read_only: false,
+                        markdown: false,
+                        key: None,
+                    }),
+                    suffix: vec![
+                        st::Span::new(count, dim.clone()),
+                        st::Span::new(arrows, attrs("ui.menu_active_fg", "ui.popup_bg", &["bold"])),
+                    ],
+                }
+            }
+        };
+        Some(st::Chrome {
+            title: match s.has_changes() {
+                true => format!(" Settings [{}] • (modified) ", s.target_layer_name()),
+                false => format!(" Settings [{}] ", s.target_layer_name()),
+            },
+            search,
+        })
+    }
+
     /// The settings dialog's open prompt or help overlay.
     ///
     /// Not the entry-dialog stack, which is its own surface and its own
@@ -3515,7 +3597,7 @@ impl Editor {
             trust,
             modal,
             event_debug: self.event_debug_description(),
-            settings: self.settings_state.as_ref().is_some_and(|s| s.visible),
+            settings: self.settings_chrome_description(),
             settings_dialog: self.settings_dialog_description(),
             keybinding: self.keybinding_chrome_description(),
             keybinding_table: self.keybinding_table_description(),
