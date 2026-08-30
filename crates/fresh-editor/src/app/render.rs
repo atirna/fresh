@@ -5065,9 +5065,13 @@ impl Editor {
     /// about which panes exist — which is exactly what the oracle is for, and
     /// the one disagreement the skip would have hidden.
     ///
-    /// A pane with no scrollbar is not that case: `pane_interior` places all
-    /// three parts unconditionally and gives the bar the pane does not have a
-    /// width of zero, so the node is there either way.
+    /// A pane with no scrollbar is not that case. `pane_interior` does place
+    /// all three parts unconditionally — but it gives the bar the pane does
+    /// not have a width of zero, and `rect_of` drops zero-size elements, so
+    /// the tree's answer for a bar that is not there is `None` rather than a
+    /// zero-width rectangle. That is what `pane_vscroll_rect`'s own doc says,
+    /// and asserting the opposite here contradicted it: the check has to ask
+    /// whether the *painter* drew a bar before it asks the tree for one.
     #[cfg(debug_assertions)]
     fn assert_pane_rects_match_layout(
         &self,
@@ -5090,6 +5094,16 @@ impl Editor {
     ) {
         use crate::view::shell::splits::{content_key, hscroll_key, vscroll_key};
         let check = |what: &str, leaf, painted: ratatui::layout::Rect, key: fresh_ui::Key| {
+            // **"No bar" first, because both sides spell it differently.** The
+            // painter records a zero-width rectangle for a bar it did not
+            // draw; the tree has a zero-width *node* for one the pane does not
+            // have, and `rect_of` drops zero-size elements — so the tree's
+            // spelling is `None`. Neither is a rectangle worth comparing, and
+            // asking for the node before checking this made a pane with no
+            // scrollbar look like a pane the tree had lost.
+            if painted.width == 0 {
+                return;
+            }
             let Some(placed) = self.panel_rect(&key) else {
                 debug_assert!(
                     false,
@@ -5098,10 +5112,7 @@ impl Editor {
                 );
                 return;
             };
-            // A zero-width bar is "no bar" on the painter's side and a
-            // zero-width node on the tree's; both mean the same thing and
-            // neither is a rectangle worth comparing.
-            if painted.width == 0 || placed.width == 0 {
+            if placed.width == 0 {
                 return;
             }
             debug_assert_eq!(
