@@ -147,7 +147,22 @@ pub fn covered(spec: &WidgetSpec) -> bool {
             card_borders,
             ..
         } => *item_height <= 1 && !card_borders,
-        WidgetSpec::DualList { .. } | WidgetSpec::Dropdown { .. } => false,
+        // **`DualList` does not scroll**, which is why it crosses through the
+        // adapter with no substitution at all. It emits every row — its body
+        // is `max(available, included, visible_rows)` tall and there is no
+        // offset in its instance state — so there is no bar to lose. It was
+        // excluded with the scrollable kinds on an assumption; the source says
+        // otherwise.
+        //
+        // What it *does* need is the multi-hit row: each of its rows is two
+        // cells side by side, one per column, each with its own `dual_focus`
+        // hit over a byte range in the same row. That is exactly what
+        // `entry_row_hits` gives, and without it only the left column would
+        // have answered.
+        WidgetSpec::DualList { .. } => true,
+        // `Dropdown` carries a `scroll_offset` of its own: its open pop-over
+        // windows its options.
+        WidgetSpec::Dropdown { .. } => false,
 
         // `WindowEmbed` is a `Host` leaf by rule and never crosses.
         _ => false,
@@ -2146,6 +2161,88 @@ mod tests {
                 "{label}: the selected node is on screen, got {shown:?}"
             );
         }
+    }
+
+    fn a_dual_list() -> WidgetSpec {
+        WidgetSpec::DualList {
+            options: vec![
+                fresh_core::api::DualListOption {
+                    value: "a".into(),
+                    label: "Alpha".into(),
+                },
+                fresh_core::api::DualListOption {
+                    value: "b".into(),
+                    label: "Beta".into(),
+                },
+            ],
+            included: vec!["b".into()],
+            excluded: Vec::new(),
+            label: "cols".into(),
+            focused: false,
+            active_included: false,
+            available_cursor: 0,
+            included_cursor: 0,
+            hint: String::new(),
+            visible_rows: 3,
+            key: Some("dl".into()),
+        }
+    }
+
+    /// A dual list renders what the runtime renders, through the adapter and
+    /// with no substitution: it emits every row, so there is no window and no
+    /// bar to lose.
+    #[test]
+    fn a_dual_list_renders_what_the_runtime_renders() {
+        let spec = a_dual_list();
+        assert!(covered(&spec));
+        assert_eq!(tree_text(&spec, &cx()), runtime_text(&spec, &cx()));
+    }
+
+    /// **Both columns answer.** Each row is two cells with a `dual_focus` hit
+    /// apiece over its own byte range — the case that needed a row to stop
+    /// being one target, and the one where keeping only the first hit would
+    /// have left the right-hand column dead.
+    #[test]
+    fn both_columns_of_a_dual_list_answer_a_press() {
+        let spec = a_dual_list();
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let out = crate::widgets::render_spec_with_options(
+            &spec,
+            &Default::default(),
+            WIDTH as u32,
+            crate::widgets::RenderOptions {
+                prev_focus_key: "",
+                auto_focus_first: false,
+                ..Default::default()
+            },
+        );
+        let mut seen: Vec<String> = Vec::new();
+        for h in out.hits.iter().filter(|h| h.event_type == "dual_focus") {
+            let text = &out.entries[h.buffer_row as usize].text;
+            let col = text[..h.byte_start].chars().count() as i32;
+            let got = ui
+                .dispatch(fresh_ui::Input::press(
+                    fresh_ui::Point::new(col, h.buffer_row as i32),
+                    fresh_ui::MouseButton::Left,
+                    fresh_ui::Mods::NONE,
+                ))
+                .msgs
+                .into_iter()
+                .find_map(|m| match m {
+                    UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => {
+                        Some(hit.payload["column"].as_str().unwrap_or("").to_string())
+                    }
+                    _ => None,
+                });
+            if let Some(c) = got {
+                seen.push(c);
+            }
+        }
+        assert!(
+            seen.iter().any(|c| c == "available") && seen.iter().any(|c| c == "included"),
+            "both columns answered, got {seen:?}"
+        );
     }
 
     /// **A row is not one target.** A tree row has three — the disclosure

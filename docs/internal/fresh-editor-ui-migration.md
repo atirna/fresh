@@ -282,7 +282,7 @@ API is frozen, and this is a change of what the host does with it.
 | `Toggle` | `widgets::Toggle` | `label_first` / `label_width` are the row's order and a `Sizing::Cells` on the label. `indeterminate` needs a third glyph state — the one small library change this table implies. |
 | `Number` | `widgets::Number` | |
 | `Dropdown` | `widgets::Dropdown` | Its pop-over is a `Layer`; the `screen_space` escape below is the same mechanism. |
-| `DualList` | `widgets::DualList` | |
+| `DualList` | ~~`widgets::DualList`~~ **the adapter, unchanged** | **The table was wrong here too, twice over.** The library's `DualList` is two `List`s side by side, each with its own scroll; `WidgetSpec::DualList` is a *two-column table of paired rows*, one hit per cell in the same row. And it does not scroll at all — its body is `max(available, included, visible_rows)` tall with no offset anywhere — so it needs no substitution and has no bar to lose. It crosses through the adapter, and the only thing it needed was for a row to stop being one target. |
 | `Button` | `widgets::Button` | |
 | `List` | `widgets::List` | |
 | `Tree` | ~~`widgets::Tree`~~ **`widgets::List`** | **The table was wrong here.** `WidgetSpec::Tree` is already *flat* — `nodes: Vec<TreeNode>` with a `depth` and a `has_children` flag — and its expansion is the **plugin's**: `expanded_keys` comes down in the spec and goes back through `WidgetMutation`. `widgets::Tree` builds its own nesting from recursive roots and owns `expanded` in element state, so it would fight the plugin for the one fact the plugin is authoritative for. The spec's tree is a controlled list of pre-rendered rows, and that is what it maps onto. |
