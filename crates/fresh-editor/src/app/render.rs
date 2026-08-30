@@ -2106,6 +2106,77 @@ impl Editor {
         })
     }
 
+    /// The keybinding editor's table, when no dialog covers it.
+    ///
+    /// **The rows are resolved here** — every column already padded to nothing
+    /// and every colour already a name — because a description is a pure
+    /// function of what it is handed, and `t!` and `Theme` are neither.
+    fn keybinding_table_description(&self) -> Option<crate::view::shell::keybinding::Table> {
+        use crate::app::keybinding_editor::{BindingSource, DisplayRow};
+        use crate::view::shell::keybinding as kb;
+        use fresh_i18n::t;
+
+        let e = self.keybinding_editor.as_ref()?;
+        // A dialog is a layer over the box, so the table under it is not seen.
+        if e.showing_help || e.edit_dialog.is_some() || e.showing_confirm_dialog {
+            return None;
+        }
+        Some(kb::Table {
+            columns: [
+                t!("keybinding_editor.header_key").to_string(),
+                t!("keybinding_editor.header_action").to_string(),
+                t!("keybinding_editor.header_description").to_string(),
+                t!("keybinding_editor.header_context").to_string(),
+                t!("keybinding_editor.header_source").to_string(),
+            ],
+            rows: e
+                .display_rows
+                .iter()
+                .map(|r| match r {
+                    DisplayRow::SectionHeader {
+                        plugin_name,
+                        collapsed,
+                        binding_count,
+                    } => kb::Row::Section {
+                        chevron: match collapsed {
+                            true => "▶".into(),
+                            false => "▼".into(),
+                        },
+                        label: plugin_name.clone().unwrap_or_else(|| "Builtin".into()),
+                        count: *binding_count,
+                    },
+                    DisplayRow::Binding(i) => {
+                        let b = &e.bindings[*i];
+                        kb::Row::Binding {
+                            key: b.key_display.clone(),
+                            action: b.action.clone(),
+                            description: b.action_display.clone(),
+                            context: b.context.clone(),
+                            source: match b.source {
+                                BindingSource::Custom => {
+                                    t!("keybinding_editor.source_custom").to_string()
+                                }
+                                BindingSource::Keymap => {
+                                    t!("keybinding_editor.source_keymap").to_string()
+                                }
+                                BindingSource::Plugin => {
+                                    t!("keybinding_editor.source_plugin", default = "Plugin")
+                                        .to_string()
+                                }
+                                BindingSource::Unbound => String::new(),
+                            },
+                            source_accent: matches!(
+                                b.source,
+                                BindingSource::Custom | BindingSource::Plugin
+                            ),
+                        }
+                    }
+                })
+                .collect(),
+            selected: e.selected,
+        })
+    }
+
     /// The keybinding editor's open dialog, as a description.
     fn keybinding_dialog_description(&self) -> Option<crate::view::shell::keybinding::Dialog> {
         use crate::app::keybinding_editor::EditMode;
@@ -3170,6 +3241,7 @@ impl Editor {
             event_debug: self.event_debug_description(),
             settings: self.settings_state.as_ref().is_some_and(|s| s.visible),
             keybinding: self.keybinding_editor.is_some(),
+            keybinding_table: self.keybinding_table_description(),
             keybinding_dialog: self.keybinding_dialog_description(),
             calibration: self.calibration_description(),
             splits,
@@ -3662,6 +3734,15 @@ impl Editor {
             // `editor.layout.modal_area` for a mouse handler to compare
             // against were the same rectangle stated twice.
             let modal_area = self.panel_rect(&crate::view::shell::keybinding::key());
+            // The page a `PgUp` moves by. It was the table rectangle's height,
+            // filed by the painter as it drew; the box is the tree's and the
+            // bands between it and the rows are one statement in
+            // `keybinding::table_rows`, so the page and the window the rows
+            // fill cannot disagree.
+            if let (Some(r), Some(e)) = (modal_area, self.keybinding_editor.as_mut()) {
+                e.scroll
+                    .set_viewport(crate::view::shell::keybinding::table_rows(r.height));
+            }
             if let (Some(modal_area), true) = (modal_area, self.keybinding_editor.is_some()) {
                 let theme = self.theme.read().unwrap().clone();
                 if let Some(ref mut kb_editor) = self.keybinding_editor {

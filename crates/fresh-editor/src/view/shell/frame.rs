@@ -191,6 +191,10 @@ pub struct Frame {
     /// rectangles — so what the tree carries is the box those rectangles are
     /// measured from, and the claim.
     pub keybinding: bool,
+    /// Its table, when no dialog covers it. `None` while one does: a dialog is
+    /// a layer over this one, so the table would be under it and building it
+    /// would be work for cells nobody sees.
+    pub keybinding_table: Option<super::keybinding::Table>,
     /// The keybinding editor's open dialog, when it has one. **These are the
     /// tree's and the rest of the interior is not**, which is a statement
     /// about paint order rather than about how far the migration got: the
@@ -251,6 +255,7 @@ impl Default for Frame {
             modal: None,
             settings: false,
             keybinding: false,
+            keybinding_table: None,
             keybinding_dialog: None,
             event_debug: None,
             calibration: None,
@@ -526,7 +531,7 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // below: the box is asked first, and the slot behind it catches whatever
     // the box does not answer.
     let frame = match f.keybinding {
-        true => frame.child(super::keybinding::layer()),
+        true => frame.child(super::keybinding::layer(f.keybinding_table.as_ref())),
         false => frame,
     };
     // The event-debug dialog, which like the wizard below carries its own

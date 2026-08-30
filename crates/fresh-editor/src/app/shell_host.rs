@@ -1395,6 +1395,19 @@ impl Editor {
             // and buttons, and the mouse arm behind them was a chain of
             // `point_in_rect` against each. What is left here is what the
             // press *meant*, which was always the editor's own business.
+            // A row of the editor's table. Selecting is the whole of it, and
+            // a section heading toggles as well — which is what the arm did
+            // once it had worked out which row was under the cell.
+            UiFact::KeybindingRow(i) => {
+                if let Some(e) = self.keybinding_editor.as_mut() {
+                    if i < e.display_rows.len() {
+                        e.selected = i;
+                        if e.selected_is_section_header() {
+                            e.toggle_section_at_selected();
+                        }
+                    }
+                }
+            }
             UiFact::KeybindingDialog(t) => {
                 use crate::view::shell::keybinding::Target;
                 let Some(mut e) = self.keybinding_editor.take() else {

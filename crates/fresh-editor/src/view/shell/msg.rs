@@ -355,6 +355,13 @@ pub enum UiFact {
     /// `point_in_rect` against each. They are nodes now; the table and the
     /// search bar still go through `ModalPointer`.
     KeybindingDialog(super::keybinding::Target),
+    /// A press on a row of the keybinding editor's table, by display index.
+    ///
+    /// The arm behind it was `(row - table_first_row_y) + scroll.offset`,
+    /// against two rectangles the painter recorded — the second of which
+    /// existed only because the window belonged to the painter. The row knows
+    /// its own index.
+    KeybindingRow(usize),
 }
 
 /// What a menu-bar navigation step does to the open chain.

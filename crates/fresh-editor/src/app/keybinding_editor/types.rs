@@ -267,10 +267,6 @@ pub enum DisplayRow {
 pub struct KeybindingEditorLayout {
     /// The full modal area (all mouse events inside are captured)
     pub modal_area: Rect,
-    /// The table area (for scroll and click)
-    pub table_area: Rect,
-    /// The y-offset of the first visible row in the table
-    pub table_first_row_y: u16,
     // **The five the dialogs owned are gone.** `dialog_buttons`,
     // `dialog_key_field`, `dialog_action_field`, `dialog_context_field` and
     // `confirm_buttons` were rectangles the painter filed for a chain of
@@ -278,6 +274,8 @@ pub struct KeybindingEditorLayout {
     // their fields and buttons answer their own presses.
     /// Search bar area (for clicking to focus)
     pub search_bar: Option<Rect>,
-    /// Vertical scrollbar area for the table (1 column wide), if rendered
-    pub table_scrollbar: Option<Rect>,
+    // `table_area`, `table_first_row_y` and `table_scrollbar` are gone with the
+    // table. The first two existed so a mouse arm could turn a cell back into
+    // a row index — the row knows its own — and the third so a second arm
+    // could drag a thumb the library's viewport already drags.
 }

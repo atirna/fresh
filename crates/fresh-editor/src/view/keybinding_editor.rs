@@ -3,12 +3,10 @@
 //! Renders the keybinding editor modal and handles input events.
 
 use crate::app::keybinding_editor::{
-    BindingSource, ContextFilter, DeleteResult, DisplayRow, EditMode, KeybindingEditor, SearchMode,
-    SourceFilter,
+    ContextFilter, DeleteResult, EditMode, KeybindingEditor, SearchMode, SourceFilter,
 };
 use crate::input::keybindings::{format_keybinding, normalize_key};
 use crate::view::theme::Theme;
-use crate::view::ui::scrollbar::{render_scrollbar, ScrollbarColors};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use fresh_i18n::t;
 use ratatui::{
@@ -60,20 +58,27 @@ pub fn render_keybinding_editor(
     ])
     .split(inner);
 
-    // Store layout for mouse hit testing
+    // Store layout for mouse hit testing. Two left: the box, which the tree
+    // places and this reads, and the search bar, which is still a row this
+    // paints.
     editor.layout.modal_area = modal_area;
-    editor.layout.table_area = chunks[1];
-    editor.layout.table_first_row_y = chunks[1].y + 2; // +2 for header + separator
     editor.layout.search_bar = Some(Rect {
         x: inner.x,
         y: inner.y + 1, // second row of header
         width: inner.width,
         height: 1,
     });
-    editor.layout.table_scrollbar = None;
 
+    // **The table is the tree's** (`view::shell::keybinding::table`): a header,
+    // a rule, and `widgets::List` under them, in a `viewport` that owns the
+    // window and draws the bar. What was here windowed the rows itself against
+    // `editor.scroll`, filed `table_area` and `table_first_row_y` so a mouse
+    // arm could turn a cell back into a row index, and filed `table_scrollbar`
+    // so a second one could drag a thumb the library already drags.
+    //
+    // The page a `PgUp` moves by comes from the box the tree placed — see
+    // `keybinding::table_rows` — so the window and the page cannot disagree.
     render_header(frame, chunks[0], editor, theme);
-    render_table(frame, chunks[1], editor, theme);
     render_footer(frame, chunks[2], editor, theme);
 
     // **The three dialogs are the tree's** — help, edit, and the
@@ -231,278 +236,6 @@ fn render_header(frame: &mut Frame, area: Rect, editor: &KeybindingEditor, theme
     frame.render_widget(Paragraph::new(Line::from(filter_spans)), chunks[2]);
 }
 
-/// Render the keybinding table
-fn render_table(frame: &mut Frame, area: Rect, editor: &mut KeybindingEditor, theme: &Theme) {
-    if area.height < 2 {
-        return;
-    }
-
-    let inner_width = area.width.saturating_sub(2); // Leave room for scrollbar
-
-    // Column widths (adaptive): Key | Action Name | Description | Context | Source
-    let key_col_width = (inner_width as f32 * 0.16).min(20.0) as u16;
-    let action_name_col_width = (inner_width as f32 * 0.22).min(28.0) as u16;
-    let context_col_width = (inner_width as f32 * 0.18).clamp(14.0, 30.0) as u16;
-    let source_col_width = 8u16;
-    let fixed_cols =
-        key_col_width + action_name_col_width + context_col_width + source_col_width + 5; // +5 for spacers
-    let description_col_width = inner_width.saturating_sub(fixed_cols);
-
-    // Header line
-    let header = Line::from(vec![
-        Span::styled(" ", Style::default()),
-        Span::styled(
-            pad_right(&t!("keybinding_editor.header_key"), key_col_width as usize),
-            Style::default()
-                .fg(theme.help_key_fg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" ", Style::default()),
-        Span::styled(
-            pad_right(
-                &t!("keybinding_editor.header_action"),
-                action_name_col_width as usize,
-            ),
-            Style::default()
-                .fg(theme.help_key_fg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" ", Style::default()),
-        Span::styled(
-            pad_right(
-                &t!("keybinding_editor.header_description"),
-                description_col_width as usize,
-            ),
-            Style::default()
-                .fg(theme.help_key_fg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" ", Style::default()),
-        Span::styled(
-            pad_right(
-                &t!("keybinding_editor.header_context"),
-                context_col_width as usize,
-            ),
-            Style::default()
-                .fg(theme.help_key_fg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" ", Style::default()),
-        Span::styled(
-            pad_right(
-                &t!("keybinding_editor.header_source"),
-                source_col_width as usize,
-            ),
-            Style::default()
-                .fg(theme.help_key_fg)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(header), Rect { height: 1, ..area });
-
-    // Separator
-    if area.height > 1 {
-        let sep = "\u{2500}".repeat(inner_width as usize);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!(" {}", sep),
-                Style::default().fg(theme.popup_text_fg),
-            ))),
-            Rect {
-                y: area.y + 1,
-                height: 1,
-                ..area
-            },
-        );
-    }
-
-    // Table rows
-    let table_area = Rect {
-        y: area.y + 2,
-        height: area.height.saturating_sub(2),
-        ..area
-    };
-
-    // Sync scroll state with actual viewport dimensions
-    editor.scroll.set_viewport(table_area.height);
-    editor
-        .scroll
-        .set_content_height(editor.display_rows.len() as u16);
-
-    let visible_rows = table_area.height as usize;
-    let scroll_offset = editor.scroll.offset as usize;
-
-    for (display_idx, display_row) in editor
-        .display_rows
-        .iter()
-        .skip(scroll_offset)
-        .take(visible_rows)
-        .enumerate()
-    {
-        let row_y = table_area.y + display_idx as u16;
-        if row_y >= table_area.y + table_area.height {
-            break;
-        }
-
-        let is_selected = scroll_offset + display_idx == editor.selected;
-        let row_area = Rect {
-            y: row_y,
-            height: 1,
-            ..table_area
-        };
-
-        match display_row {
-            DisplayRow::SectionHeader {
-                plugin_name,
-                collapsed,
-                binding_count,
-            } => {
-                let (row_bg, row_fg) = if is_selected {
-                    (theme.popup_selection_bg, theme.popup_text_fg)
-                } else {
-                    (theme.popup_bg, theme.help_key_fg)
-                };
-
-                let chevron = if *collapsed { "\u{25b6}" } else { "\u{25bc}" };
-                let label = match plugin_name {
-                    Some(name) => name.as_str(),
-                    None => "Builtin",
-                };
-
-                let header_text = format!("{} {} ({})", chevron, label, binding_count);
-                let header_style = Style::default()
-                    .fg(row_fg)
-                    .bg(row_bg)
-                    .add_modifier(Modifier::BOLD);
-
-                let indicator = if is_selected { ">" } else { " " };
-                let row = Line::from(vec![
-                    Span::styled(indicator, Style::default().fg(theme.help_key_fg).bg(row_bg)),
-                    Span::styled(header_text, header_style),
-                ]);
-
-                frame.render_widget(
-                    Paragraph::new("").style(Style::default().bg(row_bg)),
-                    row_area,
-                );
-                frame.render_widget(Paragraph::new(row), row_area);
-            }
-            DisplayRow::Binding(binding_idx) => {
-                let binding = &editor.bindings[*binding_idx];
-
-                let (row_bg, row_fg) = if is_selected {
-                    (theme.popup_selection_bg, theme.popup_text_fg)
-                } else {
-                    (theme.popup_bg, theme.popup_text_fg)
-                };
-
-                let key_style = Style::default()
-                    .fg(if is_selected {
-                        theme.popup_text_fg
-                    } else {
-                        theme.help_key_fg
-                    })
-                    .bg(row_bg);
-                let action_name_style = Style::default()
-                    .fg(if is_selected {
-                        theme.popup_text_fg
-                    } else {
-                        theme.diagnostic_info_fg
-                    })
-                    .bg(row_bg);
-                let action_style = Style::default().fg(row_fg).bg(row_bg);
-                let context_style = Style::default()
-                    .fg(if is_selected {
-                        row_fg
-                    } else {
-                        theme.popup_text_fg
-                    })
-                    .bg(row_bg);
-                let source_style = Style::default()
-                    .fg(
-                        if binding.source == BindingSource::Custom
-                            || binding.source == BindingSource::Plugin
-                        {
-                            if is_selected {
-                                theme.popup_text_fg
-                            } else {
-                                theme.diagnostic_info_fg
-                            }
-                        } else {
-                            context_style.fg.unwrap_or(theme.popup_text_fg)
-                        },
-                    )
-                    .bg(row_bg);
-
-                let indicator = if is_selected { ">" } else { " " };
-
-                let row = Line::from(vec![
-                    Span::styled(indicator, Style::default().fg(theme.help_key_fg).bg(row_bg)),
-                    Span::styled(
-                        pad_right(&binding.key_display, key_col_width as usize),
-                        key_style,
-                    ),
-                    Span::styled(" ", action_name_style),
-                    Span::styled(
-                        pad_right(&binding.action, action_name_col_width as usize),
-                        action_name_style,
-                    ),
-                    Span::styled(" ", action_style),
-                    Span::styled(
-                        pad_right(&binding.action_display, description_col_width as usize),
-                        action_style,
-                    ),
-                    Span::styled(" ", context_style),
-                    Span::styled(
-                        pad_right(&binding.context, context_col_width as usize),
-                        context_style,
-                    ),
-                    Span::styled(" ", source_style),
-                    Span::styled(
-                        pad_right(
-                            &match binding.source {
-                                BindingSource::Custom => {
-                                    t!("keybinding_editor.source_custom").to_string()
-                                }
-                                BindingSource::Keymap => {
-                                    t!("keybinding_editor.source_keymap").to_string()
-                                }
-                                BindingSource::Plugin => {
-                                    t!("keybinding_editor.source_plugin", default = "Plugin")
-                                        .to_string()
-                                }
-                                BindingSource::Unbound => String::new(),
-                            },
-                            source_col_width as usize,
-                        ),
-                        source_style,
-                    ),
-                ]);
-
-                frame.render_widget(
-                    Paragraph::new("").style(Style::default().bg(row_bg)),
-                    row_area,
-                );
-                frame.render_widget(Paragraph::new(row), row_area);
-            }
-        }
-    }
-
-    // Scrollbar
-    if editor.scroll.needs_scrollbar() {
-        let sb_area = Rect::new(
-            table_area.x + table_area.width.saturating_sub(1),
-            table_area.y,
-            1,
-            table_area.height,
-        );
-        let sb_state = editor.scroll.to_scrollbar_state();
-        let sb_colors = ScrollbarColors::from_theme(theme);
-        render_scrollbar(frame.buffer_mut(), sb_area, &sb_state, &sb_colors);
-        editor.layout.table_scrollbar = Some(sb_area);
-    }
-}
-
 /// Render the footer with key hints
 fn render_footer(frame: &mut Frame, area: Rect, editor: &KeybindingEditor, theme: &Theme) {
     let hints = if editor.search_active && editor.search_focused {
@@ -579,17 +312,6 @@ fn render_footer(frame: &mut Frame, area: Rect, editor: &KeybindingEditor, theme
     };
 
     frame.render_widget(Paragraph::new(Line::from(hints)), area);
-}
-
-/// Right-pad a string to a given width (in chars), truncating if necessary
-fn pad_right(s: &str, width: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count >= width {
-        s.chars().take(width).collect()
-    } else {
-        let padding = width - char_count;
-        format!("{}{}", s, " ".repeat(padding))
-    }
 }
 
 // ==================== INPUT HANDLING ====================

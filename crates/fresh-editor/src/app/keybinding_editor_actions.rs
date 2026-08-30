@@ -159,87 +159,26 @@ impl Editor {
             return Ok(false);
         }
 
-        match mouse_event.kind {
-            // Scroll the viewport without touching selection. Coupling
-            // wheel to selection meant any prior scrollbar drag snapped
-            // back via `ensure_visible` on the next wheel tick. Three
-            // rows per tick matches the settings modal.
-            MouseEventKind::ScrollUp
-                if editor.edit_dialog.is_none() && !editor.showing_confirm_dialog =>
-            {
-                editor.scroll.scroll_by(-3);
+        // **What is left of the arm.** The wheel and the scrollbar drag were
+        // the viewport's job all along — `widgets::List` scrolls under the
+        // wheel and its bar drags — and the row click is the row's. The
+        // dialogs answer for themselves (`UiFact::KeybindingDialog`), and the
+        // table's rows likewise (`UiFact::KeybindingRow`). The search bar is
+        // the one rectangle still compared against a cell, because it is the
+        // one part of the header this still paints.
+        if let MouseEventKind::Down(MouseButton::Left) = mouse_event.kind {
+            // A press while a dialog is open belongs to that dialog's scrim,
+            // which consumes it and does nothing — the same as before, where
+            // a click on the dimmed backdrop hit none of the rectangles.
+            if editor.showing_confirm_dialog || editor.edit_dialog.is_some() {
+                self.keybinding_editor = Some(editor);
+                return Ok(true);
             }
-            MouseEventKind::ScrollDown
-                if editor.edit_dialog.is_none() && !editor.showing_confirm_dialog =>
-            {
-                editor.scroll.scroll_by(3);
-            }
-            MouseEventKind::Drag(MouseButton::Left) => {
-                // Continue dragging the scrollbar thumb (no selection or
-                // dialog disambiguation needed: the press that started the
-                // drag already gated those).
-                if let Some(sb) = editor.layout.table_scrollbar {
-                    let sb_state = scrollbar_state_for(&editor);
-                    if let Some(new_offset) = editor.scrollbar_mouse.drag(sb_state, sb, row) {
-                        editor.scroll.offset = new_offset as u16;
-                    }
+            if let Some(search_r) = layout.search_bar {
+                if point_in_rect(search_r, col, row) {
+                    editor.start_search();
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => {
-                editor.scrollbar_mouse.release();
-            }
-            MouseEventKind::Down(MouseButton::Left) => {
-                // **The dialogs answer for themselves.** Confirm buttons,
-                // edit-dialog fields and edit-dialog buttons were three
-                // chains of `point_in_rect` against rectangles the painter
-                // filed; they are nodes now and arrive as
-                // `UiFact::KeybindingDialog`. A press that reaches *here*
-                // while one is open belongs to the dialog's own scrim, which
-                // consumes it and does nothing — the same as before, where a
-                // click on the dimmed backdrop hit none of the rectangles.
-                if editor.showing_confirm_dialog || editor.edit_dialog.is_some() {
-                    self.keybinding_editor = Some(editor);
-                    return Ok(true);
-                }
-
-                // Click on search bar to focus it
-                if let Some(search_r) = layout.search_bar {
-                    if point_in_rect(search_r, col, row) {
-                        editor.start_search();
-                        self.keybinding_editor = Some(editor);
-                        return Ok(true);
-                    }
-                }
-
-                // Press on the scrollbar — delegate to the shared widget
-                // so press-on-thumb (no jump), press-on-track (recentre),
-                // and the follow-up drag all run through the same well-
-                // tested math. Checked before the row-click branch because
-                // the scrollbar overlaps the rightmost column of `table_area`.
-                if let Some(sb) = layout.table_scrollbar {
-                    let sb_state = scrollbar_state_for(&editor);
-                    if let Some(new_offset) = editor.scrollbar_mouse.press(sb_state, sb, col, row) {
-                        editor.scroll.offset = new_offset as u16;
-                        self.keybinding_editor = Some(editor);
-                        return Ok(true);
-                    }
-                }
-
-                // Click on table row to select (or toggle section header)
-                let table_area = layout.table_area;
-                let first_row_y = layout.table_first_row_y;
-                if point_in_rect(table_area, col, row) && row >= first_row_y {
-                    let clicked_row = (row - first_row_y) as usize;
-                    let new_selected = editor.scroll.offset as usize + clicked_row;
-                    if new_selected < editor.display_rows.len() {
-                        editor.selected = new_selected;
-                        if editor.selected_is_section_header() {
-                            editor.toggle_section_at_selected();
-                        }
-                    }
-                }
-            }
-            _ => {}
         }
 
         self.keybinding_editor = Some(editor);
@@ -260,14 +199,4 @@ impl Editor {
             }
         }
     }
-}
-
-/// Snapshot the keybinding editor's scroll state as a `ScrollbarState`,
-/// so we can call into the shared scrollbar widget for click/drag math.
-fn scrollbar_state_for(editor: &KeybindingEditor) -> crate::view::ui::scrollbar::ScrollbarState {
-    crate::view::ui::scrollbar::ScrollbarState::new(
-        editor.scroll.content_height as usize,
-        editor.scroll.viewport as usize,
-        editor.scroll.offset as usize,
-    )
 }

@@ -167,8 +167,9 @@ pub fn fit(info: LayoutInfo) -> (u16, u16) {
     (width, height)
 }
 
-/// The editor's box as a layer: centred beside the dock, and **invisible to
-/// the pointer**.
+/// The editor's box as a layer, with its table inside it when it has one.
+///
+/// **Invisible to the pointer where it is empty.**
 ///
 /// It paints nothing — the interior still does, and a layer is in the overlay
 /// band, so anything drawn here would land on top of the painter that owns the
@@ -186,21 +187,45 @@ pub fn fit(info: LayoutInfo) -> (u16, u16) {
 /// The exclusivity is the slot's, not this layer's, for the same reason: two
 /// claims to the same modality is one too many, and the slot is the one that
 /// carries the routing.
-pub fn layer() -> Node<UiMsg> {
+pub fn layer(t: Option<&Table>) -> Node<UiMsg> {
+    let t = t.cloned();
+    let empty = t.is_none();
     fresh_ui::layer()
         .within(super::frame::chrome_key())
         .anchor(Anchor::Screen(Align::Center))
         .place(Place::Over)
-        // On the layer, not only on the box inside it: the layer node is a box
-        // of its own and would produce the path by itself.
-        .pointer_mode(PointerMode::Ignore)
-        .child(layout_reader(|info: LayoutInfo| {
+        // On the layer, not only on the box inside it: the layer is a box of
+        // its own and would produce the path by itself. Only while the box is
+        // empty — a table inside it has rows that answer.
+        .pointer_mode(match empty {
+            true => PointerMode::Ignore,
+            false => PointerMode::Transparent,
+        })
+        .child(layout_reader(move |info: LayoutInfo| {
             let (w, h) = fit(info);
-            row()
-                .w(Sizing::Cells(w))
-                .h(Sizing::Cells(h))
-                .pointer_mode(PointerMode::Ignore)
-                .key(key())
+            // A column: the bands stack. It was a `row()` while the box was
+            // empty and it did not matter, and it silently laid the header
+            // band beside the table rather than above it the moment one
+            // existed.
+            let n = col().w(Sizing::Cells(w)).h(Sizing::Cells(h)).key(key());
+            match &t {
+                // The header band and the footer are still the painter's, so
+                // the table sits where they left it: three rows down inside
+                // the border, one row up from the bottom.
+                //
+                // **And those bands claim their own presses**, routing them to
+                // the modal slot. A layer that merely lets a hit through is
+                // still a layer with a path at the point, so the slot beneath
+                // would never be asked — the same trap the empty box fell into.
+                // Claiming is what "the parts I do not own yet go to the
+                // router" looks like from inside a layer.
+                Some(t) => n.children([
+                    claim().h(Sizing::Cells(4)),
+                    col().flex(1).children([table(t)]),
+                    claim().h(Sizing::Cells(2)),
+                ]),
+                None => n.pointer_mode(PointerMode::Ignore),
+            }
         }))
 }
 
@@ -237,6 +262,30 @@ pub fn dialog_layer(d: &Dialog) -> Node<UiMsg> {
                 h.min(info.constraints.max_h.saturating_sub(4)),
             ))
         }))
+}
+
+/// A band the painter still owns, routing its presses to the modal slot.
+fn claim() -> Node<UiMsg> {
+    // Full width, because an empty box measures to nothing and a band with no
+    // width claims no cell.
+    let mut n = gesture(col().w(Sizing::Pct(100)));
+    for kind in [
+        GestureKind::Press,
+        GestureKind::Release,
+        GestureKind::Move,
+        GestureKind::Wheel,
+    ] {
+        n = n.on(
+            kind,
+            Rc::new(|e: &Event| {
+                e.stop();
+                Some(UiMsg::Ui(UiFact::ModalPointer(
+                    super::modal::Slot::KeybindingEditor,
+                )))
+            }),
+        );
+    }
+    n
 }
 
 fn ring() -> String {
@@ -470,6 +519,170 @@ fn confirm_box(c: &Confirm) -> Node<UiMsg> {
             row().flex(1),
             row().h(Sizing::Cells(1)).children(kids),
         ])
+}
+
+/// One row of the table.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Row {
+    /// A plugin's collapsible group heading.
+    Section {
+        chevron: String,
+        label: String,
+        count: usize,
+    },
+    /// A binding: five columns, padded to the widths the table resolved.
+    Binding {
+        key: String,
+        action: String,
+        description: String,
+        context: String,
+        source: String,
+        /// Whether the source reads as an accent — a custom or plugin
+        /// binding, which the painter coloured apart from a keymap's.
+        source_accent: bool,
+    },
+}
+
+/// The table: a header, a rule, and the rows under them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Table {
+    /// Key, Action, Description, Context, Source.
+    pub columns: [String; 5],
+    pub rows: Vec<Row>,
+    pub selected: usize,
+}
+
+/// The five column widths for a table of this inner width.
+///
+/// The painter's own fractions, kept because they are the rule: sixteen
+/// percent for the key capped at twenty, twenty-two for the action name capped
+/// at twenty-eight, eighteen for the context clamped to fourteen-to-thirty,
+/// eight fixed for the source, and the description takes what is left.
+pub fn columns(inner: u16) -> [u16; 5] {
+    let key = ((inner as f32 * 0.16).min(20.0)) as u16;
+    let action = ((inner as f32 * 0.22).min(28.0)) as u16;
+    let context = ((inner as f32 * 0.18).clamp(14.0, 30.0)) as u16;
+    let source = 8u16;
+    // +5 for the single-column gaps between the five.
+    let desc = inner.saturating_sub(key + action + context + source + 5);
+    [key, action, desc, context, source]
+}
+
+/// How many rows of the table fit in a box of `box_h`.
+///
+/// The bands the painter split by hand: two border rows, three of header, one
+/// of footer, and two more for the table's own header and rule. Stated once so
+/// the page a `PgUp` moves by and the window the rows fill cannot disagree.
+pub fn table_rows(box_h: u16) -> u16 {
+    box_h.saturating_sub(2 + 3 + 1 + 2)
+}
+
+fn pad(s: &str, w: usize) -> String {
+    let n = s.chars().count();
+    match n >= w {
+        true => s.chars().take(w).collect(),
+        false => format!("{s}{}", " ".repeat(w - n)),
+    }
+}
+
+/// The table as a node, at whatever width it is given.
+pub fn table(t: &Table) -> Node<UiMsg> {
+    let t = t.clone();
+    layout_reader(move |info: LayoutInfo| {
+        // One column reserved for the bar, which is what `inner_width`'s
+        // `saturating_sub(2)` was approximating.
+        let w = info.constraints.max_w;
+        let cols = columns(w.saturating_sub(2));
+        let head = attrs("ui.help_key_fg", "ui.popup_bg", &["bold"]);
+        let header = row().h(Sizing::Cells(1)).children(
+            std::iter::once(text(" ").theme(ink()))
+                .chain(
+                    t.columns
+                        .iter()
+                        .zip(cols)
+                        .enumerate()
+                        .flat_map(|(i, (c, cw))| {
+                            let mut out = vec![text(pad(c, cw as usize)).theme(head.clone())];
+                            if i + 1 < 5 {
+                                out.push(text(" ").theme(ink()));
+                            }
+                            out
+                        }),
+                )
+                .collect::<Vec<_>>(),
+        );
+        let rule = text(format!(" {}", "─".repeat(w.saturating_sub(2) as usize))).theme(ink());
+        let rows = std::rc::Rc::new(t.rows.clone());
+        let n = rows.len();
+        let list = fresh_ui::List::windowed(n, |i| fresh_ui::Key::Str(i.to_string().into()), {
+            let rows = rows.clone();
+            move |i| table_row(&rows[i], &cols)
+        })
+        .focusable(false)
+        .scrollbar()
+        .row_theme(|_, st| match st {
+            fresh_ui::widgets::RowState::Selected | fresh_ui::widgets::RowState::SelectedBlur => {
+                pair("ui.popup_text_fg", "ui.popup_selection_bg")
+            }
+            _ => ink(),
+        })
+        .on_select(|i| UiMsg::Ui(UiFact::KeybindingRow(i)));
+        let list = match n {
+            0 => list,
+            _ => list.selected(t.selected.min(n - 1)),
+        };
+        col().children([
+            header,
+            rule.h(Sizing::Cells(1)),
+            fresh_ui::ComponentExt::node(list).flex(1),
+        ])
+    })
+}
+
+fn table_row(r: &Row, cols: &[u16; 5]) -> Node<UiMsg> {
+    match r {
+        // A section heading is one bold run after the indicator column; the
+        // painter drew it that way too, ignoring the column grid.
+        Row::Section {
+            chevron,
+            label,
+            count,
+        } => row().h(Sizing::Cells(1)).children([
+            text(" ").theme(pair("ui.help_key_fg", "ui.popup_bg")),
+            text(format!("{chevron} {label} ({count})")).theme(attrs(
+                "ui.help_key_fg",
+                "ui.popup_bg",
+                &["bold"],
+            )),
+        ]),
+        Row::Binding {
+            key,
+            action,
+            description,
+            context,
+            source,
+            source_accent,
+        } => {
+            let accent = |on: bool, name: &str| match on {
+                true => pair(name, "ui.popup_bg"),
+                false => ink(),
+            };
+            row().h(Sizing::Cells(1)).children([
+                text(" ").theme(pair("ui.help_key_fg", "ui.popup_bg")),
+                text(pad(key, cols[0] as usize)).theme(pair("ui.help_key_fg", "ui.popup_bg")),
+                text(" ").theme(ink()),
+                text(pad(action, cols[1] as usize))
+                    .theme(pair("ui.diagnostic_info_fg", "ui.popup_bg")),
+                text(" ").theme(ink()),
+                text(pad(description, cols[2] as usize)).theme(ink()),
+                text(" ").theme(ink()),
+                text(pad(context, cols[3] as usize)).theme(ink()),
+                text(" ").theme(ink()),
+                text(pad(source, cols[4] as usize))
+                    .theme(accent(*source_accent, "ui.diagnostic_info_fg")),
+            ])
+        }
+    }
 }
 
 #[cfg(test)]
@@ -844,6 +1057,145 @@ mod tests {
         assert!(
             !got.iter().any(|f| matches!(f, UiFact::KeybindingDialog(_))),
             "{got:?}"
+        );
+    }
+
+    fn a_table(n: usize, selected: usize) -> Table {
+        Table {
+            columns: [
+                "Key".into(),
+                "Action".into(),
+                "Description".into(),
+                "Context".into(),
+                "Source".into(),
+            ],
+            rows: (0..n)
+                .map(|i| match i % 5 {
+                    0 => Row::Section {
+                        chevron: "▼".into(),
+                        label: format!("plugin{i}"),
+                        count: 4,
+                    },
+                    _ => Row::Binding {
+                        key: format!("Ctrl+{i}"),
+                        action: format!("act{i}"),
+                        description: format!("does {i}"),
+                        context: "normal".into(),
+                        source: "Custom".into(),
+                        source_accent: true,
+                    },
+                })
+                .collect(),
+            selected,
+        }
+    }
+
+    fn with_table(t: Table, w: u16, h: u16) -> Ui<UiMsg> {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            frame_tree(Frame {
+                keybinding: true,
+                keybinding_table: Some(t),
+                modal: Some(crate::view::shell::modal::Slot::KeybindingEditor),
+                menu_bar: false,
+                status_bar: false,
+                ..Frame::default()
+            }),
+            Size::new(w, h),
+        );
+        ui
+    }
+
+    /// **The columns are the painter's fractions**, resolved from the width
+    /// layout gave rather than from a rectangle handed in.
+    #[test]
+    fn the_columns_are_the_documented_fractions() {
+        // 100 inner: key 16, action 22, context 18, source 8, +5 gaps → 31
+        assert_eq!(columns(100), [16, 22, 31, 18, 8]);
+        // Wide enough for the caps to bite: key 20, action 28.
+        assert_eq!(columns(200)[0], 20);
+        assert_eq!(columns(200)[1], 28);
+        // And narrow enough for the context's floor.
+        assert_eq!(columns(40)[3], 14);
+    }
+
+    /// The page a `PgUp` moves by is the box less the bands around the rows —
+    /// two borders, three of header, one of footer, and the table's own header
+    /// and rule.
+    #[test]
+    fn the_page_is_the_box_less_its_bands() {
+        assert_eq!(table_rows(20), 12);
+        assert_eq!(table_rows(8), 0);
+    }
+
+    /// **A row knows its own index.** The arm behind this was
+    /// `(row - table_first_row_y) + scroll.offset`, against two rectangles the
+    /// painter recorded — the second of which existed only because the window
+    /// belonged to the painter.
+    #[test]
+    fn pressing_a_row_names_it() {
+        use crate::view::shell::msg::UiFact;
+        let mut ui = with_table(a_table(30, 0), 160, 50);
+        let r = ui.rect_of(
+            ui.find_by_key(&fresh_ui::Key::Str("3".into()))
+                .expect("row 3"),
+        );
+        let at = fresh_ui::Point::new(r.x + 2, r.y);
+        ui.dispatch(fresh_ui::Input::press(
+            at,
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        ));
+        let got = facts(ui.dispatch(fresh_ui::Input::release(
+            at,
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        assert!(
+            got.contains(&UiFact::KeybindingRow(3)),
+            "row 3 names itself: {got:?}"
+        );
+    }
+
+    /// **The window is the viewport's**, so a table longer than the box gets a
+    /// bar and the selection is inside the window whatever its index.
+    #[test]
+    fn a_long_table_scrolls_to_its_selection() {
+        let ui = with_table(a_table(200, 150), 160, 50);
+        let bar = ui
+            .spec()
+            .items
+            .iter()
+            .any(|i| matches!(i.draw, fresh_ui::Draw::Scrollbar { .. }));
+        assert!(bar, "two hundred rows in a box of fifty overflow");
+        let selected = ui.rect_of(
+            ui.find_by_key(&fresh_ui::Key::Str("150".into()))
+                .expect("row 150"),
+        );
+        let boxed = ui.rect_of(ui.find_by_key(&key()).expect("the box"));
+        assert!(
+            selected.y >= boxed.y && selected.y < boxed.y + boxed.h as i32,
+            "the selected row is in view at {}",
+            selected.y
+        );
+    }
+
+    /// A press *outside* the table but inside the box still reaches the modal
+    /// router — the header band and the footer are the painter's, and its
+    /// search bar is the one rectangle still compared against a cell.
+    #[test]
+    fn a_press_on_the_header_band_reaches_the_modal_router() {
+        use crate::view::shell::msg::UiFact;
+        let mut ui = with_table(a_table(30, 0), 160, 50);
+        let boxed = ui.rect_of(ui.find_by_key(&key()).expect("the box"));
+        let got = facts(ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(boxed.x + 4, boxed.y + 2),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        assert!(
+            got.iter().any(|f| matches!(f, UiFact::ModalPointer(_))),
+            "the slot answers: {got:?}"
         );
     }
 }
