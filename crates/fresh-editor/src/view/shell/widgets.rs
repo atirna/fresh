@@ -1248,7 +1248,14 @@ fn collected(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
         },
         width as u32,
     );
-    rows_with_hits(&out.entries, &out.hits, cx, &out.overlays, &out.popups)
+    rows_with_hits(
+        &out.entries,
+        &out.hits,
+        cx,
+        &out.overlays,
+        &out.popups,
+        out.focus_cursor,
+    )
 }
 
 /// The rows of a collected subtree, each carrying whatever hits land on it.
@@ -1272,23 +1279,31 @@ fn rows_with_hits(
     cx: &Ctx<'_>,
     overlays: &[crate::widgets::OverlayRow],
     popups: &[crate::widgets::PanelPopup],
+    caret: Option<crate::widgets::FocusCursor>,
 ) -> Node<UiMsg> {
     let mut kids: Vec<Node<UiMsg>> = Vec::with_capacity(entries.len());
     for (i, entry) in entries.iter().enumerate() {
         let mine: Vec<&crate::widgets::HitArea> =
             hits.iter().filter(|h| h.buffer_row as usize == i).collect();
-        let mut node = match mine.is_empty() {
+        // The caret is on at most one row, and the marker goes in that row's
+        // pieces so its cell comes from the glyphs rather than from measuring
+        // them a second time.
+        let at = caret
+            .filter(|c| c.buffer_row as usize == i)
+            .map(|c| c.byte_in_row as usize);
+        let mut node = match mine.is_empty() && at.is_none() {
             true => entry_row(entry),
             // **Every hit on the row, not the first.** A tree row has three
             // and a dual list's has two; keeping only one silently made the
             // others unclickable.
-            false => entry_row_hits(
+            false => row_pieces(
                 entry,
                 cx.slot,
                 &mine
                     .iter()
                     .map(|h| ((h.byte_start, h.byte_end), (*h).clone()))
                     .collect::<Vec<_>>(),
+                at,
             ),
         };
         // An open dropdown's option list hangs off the row its trigger is on,
@@ -1475,11 +1490,36 @@ pub fn entry_row_hits(
     slot: Slot,
     hits: &[((usize, usize), crate::widgets::HitArea)],
 ) -> Node<UiMsg> {
-    let mut cuts: Vec<usize> = Vec::with_capacity(hits.len() * 2);
+    row_pieces(entry, slot, hits, None)
+}
+
+/// The key of the caret's cell, for the host that has to place a hardware
+/// cursor there.
+///
+/// **The caret is a node, because its cell is layout's answer.** The runtime
+/// reported a row and a byte offset and the painter turned that into a screen
+/// cell with `inner.x + byte_to_screen_col(...)` — a second measurement of
+/// text the row had already measured to paint it. A zero-width marker at the
+/// caret's byte lands where the glyphs put it, and the host reads the
+/// rectangle back rather than recomputing it.
+pub fn caret_key() -> fresh_ui::Key {
+    fresh_ui::Key::Str("widget_caret".into())
+}
+
+/// One row split into its hit pieces, with the caret's marker at `caret` if it
+/// falls on this row.
+fn row_pieces(
+    entry: &TextPropertyEntry,
+    slot: Slot,
+    hits: &[((usize, usize), crate::widgets::HitArea)],
+    caret: Option<usize>,
+) -> Node<UiMsg> {
+    let mut cuts: Vec<usize> = Vec::with_capacity(hits.len() * 2 + 1);
     for ((a, b), _) in hits {
         cuts.push(*a);
         cuts.push(*b);
     }
+    cuts.extend(caret);
     let runs = entry_runs(entry, &cuts);
     // Group consecutive runs by which hit covers them. A byte covered by two
     // ranges takes the first that names it, which is the order the collector
@@ -1487,6 +1527,12 @@ pub fn entry_row_hits(
     let owner = |at: &std::ops::Range<usize>| -> Option<usize> {
         hits.iter()
             .position(|((a, b), _)| at.start >= *a && at.end <= *b && b > a)
+    };
+    let marker = || {
+        row()
+            .key(caret_key())
+            .w(Sizing::Cells(0))
+            .h(Sizing::Cells(1))
     };
     let mut kids: Vec<Node<UiMsg>> = Vec::new();
     let mut group: Vec<Run> = Vec::new();
@@ -1501,15 +1547,27 @@ pub fn entry_row_hits(
             None => piece,
         });
     };
+    let mut end = 0usize;
     for (at, run) in runs {
         let of = owner(&at);
-        if of != group_of {
+        // The caret sits *between* two runs, so the group before it has to
+        // close whether or not the hit changes there.
+        if of != group_of || caret == Some(at.start) {
             flush(&mut kids, &mut group, group_of);
             group_of = of;
         }
+        if caret == Some(at.start) {
+            kids.push(marker());
+        }
+        end = at.end;
         group.push(run);
     }
     flush(&mut kids, &mut group, group_of);
+    // A caret past the last glyph — the usual place for one — is the row's
+    // end, which no run starts at.
+    if caret.is_some_and(|c| c >= end) {
+        kids.push(marker());
+    }
     row().h(Sizing::Cells(1)).children(kids)
 }
 
@@ -3358,5 +3416,67 @@ mod tests {
             Some((0, 50, 10)),
             "ten five-row cards in a ten-row window"
         );
+    }
+
+    fn text_field(value: &str, cursor: i32, focused: bool) -> WidgetSpec {
+        WidgetSpec::Text {
+            value: value.into(),
+            cursor_byte: cursor,
+            focused,
+            label: String::new(),
+            placeholder: None,
+            rows: 1,
+            field_width: 20,
+            max_visible_chars: 0,
+            full_width: false,
+            completions: Vec::new(),
+            completions_visible_rows: 0,
+            block_caret: false,
+            sel_start: -1,
+            sel_end: -1,
+            label_width: 0,
+            read_only: false,
+            markdown: false,
+            key: Some("field".into()),
+        }
+    }
+
+    /// **The caret is a node, and its cell is where the glyphs put it.**
+    ///
+    /// The runtime reported a row and a byte offset and the painter turned
+    /// that into a screen cell by measuring the row's text a second time. A
+    /// zero-width marker at the caret's byte lands after the same glyphs the
+    /// row painted, so the host reads a rectangle instead of re-measuring.
+    #[test]
+    fn the_caret_is_a_cell_the_layout_placed() {
+        let focused = Ctx {
+            focus_key: "field".into(),
+            ..cx()
+        };
+        let at = |value: &str, cursor: i32| {
+            let mut ui: Ui<UiMsg> = Ui::new();
+            ui.frame(
+                node(&text_field(value, cursor, true), WIDTH, &focused),
+                Size::new(WIDTH, 8),
+            );
+            ui.find_by_key(&caret_key()).map(|id| ui.rect_of(id).x)
+        };
+        let head = at("hello", 0).expect("a caret at the head");
+        let mid = at("hello", 3).expect("a caret in the middle");
+        let end = at("hello", 5).expect("a caret past the last glyph");
+        assert_eq!(mid - head, 3, "three glyphs to the left of it");
+        assert_eq!(end - head, 5, "and five at the end");
+    }
+
+    /// A caret only where there is one: an unfocused field has no marker, so
+    /// the host has nothing to place and parks its cursor instead.
+    #[test]
+    fn an_unfocused_field_has_no_caret_node() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            node(&text_field("hello", -1, false), WIDTH, &cx()),
+            Size::new(WIDTH, 8),
+        );
+        assert!(ui.find_by_key(&caret_key()).is_none());
     }
 }
