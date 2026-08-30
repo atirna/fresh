@@ -1840,9 +1840,9 @@ impl Editor {
         if self.keybinding_editor.is_some() {
             return Some(Slot::KeybindingEditor);
         }
-        if self.calibration_wizard.is_some() {
-            return Some(Slot::Calibration);
-        }
+        // The calibration wizard is not here: it is a *described* modal now,
+        // and its own layer carries the exclusivity. A slot beside it would
+        // route a pointer to a surface that has never wanted one.
         if self.floating_widget_panel.is_some() {
             return Some(Slot::FloatingPanel);
         }
@@ -1858,6 +1858,222 @@ impl Editor {
     /// test to compare against. A column of rows in a viewport is all of that:
     /// its height is the count, the window is the viewport's, and each control
     /// answers its own press.
+    /// The calibration wizard as a description.
+    ///
+    /// Every string resolved and every colour named here, where the wizard and
+    /// the theme both are — a description is a pure function of what it is
+    /// handed, and `t!` and `Theme` are neither.
+    fn calibration_description(&self) -> Option<crate::view::shell::calibration::Calibration> {
+        use crate::app::calibration_wizard::{CalibrationStep, KeyStatus, PendingConfirmation};
+        use crate::view::shell::calibration as cal;
+        use fresh_i18n::t;
+
+        let w = self.calibration_wizard.as_ref()?;
+        // Its cells were suppressed on the web rather than projected, and
+        // that is still true: the description exists, the web fold does not
+        // paint it. One less place for the two frontends to disagree comes
+        // with D.3, not here.
+        let ctrl = |k: &str, label: String, theme: &str| cal::Control {
+            key: k.to_string(),
+            label,
+            key_theme: theme.to_string(),
+        };
+        let status_of = |s: &KeyStatus, current: bool| -> (String, String) {
+            match s {
+                KeyStatus::Pending if current => (
+                    ">".into(),
+                    crate::app::shell_host::shell_theme::attrs(
+                        "ui.status_warning_fg",
+                        "ui.popup_bg",
+                        &["bold"],
+                    ),
+                ),
+                KeyStatus::Pending => (
+                    " ".into(),
+                    crate::app::shell_host::shell_theme::pair("ui.line_number_fg", "ui.popup_bg"),
+                ),
+                KeyStatus::Captured => (
+                    "*".into(),
+                    crate::app::shell_host::shell_theme::pair(
+                        "ui.diagnostic_info_fg",
+                        "ui.popup_bg",
+                    ),
+                ),
+                KeyStatus::Skipped => (
+                    "-".into(),
+                    crate::app::shell_host::shell_theme::pair("ui.line_number_fg", "ui.popup_bg"),
+                ),
+                KeyStatus::Verified => (
+                    "v".into(),
+                    crate::app::shell_host::shell_theme::pair("ui.help_key_fg", "ui.popup_bg"),
+                ),
+            }
+        };
+
+        let confirm = match w.pending_confirmation {
+            PendingConfirmation::None => None,
+            PendingConfirmation::Abort => Some(cal::Confirm {
+                title: t!("calibration.confirm_abort_title").to_string(),
+                message: t!("calibration.confirm_abort_message").to_string(),
+                confirm_key: "d".into(),
+                confirm_label: t!("calibration.action_discard").to_string(),
+                cancel_key: "c".into(),
+                cancel_label: t!("calibration.action_cancel").to_string(),
+            }),
+            PendingConfirmation::Restart => Some(cal::Confirm {
+                title: t!("calibration.confirm_restart_title").to_string(),
+                message: t!("calibration.confirm_restart_message").to_string(),
+                confirm_key: "r".into(),
+                confirm_label: t!("calibration.action_restart").to_string(),
+                cancel_key: "c".into(),
+                cancel_label: t!("calibration.action_cancel").to_string(),
+            }),
+        };
+
+        let (title, phase, controls) = match &w.step {
+            CalibrationStep::Capture { group_idx, key_idx } => {
+                let groups = w.groups();
+                let group = &groups[*group_idx];
+                let target = &group.targets[*key_idx];
+                let (step, total) = w.current_step_info();
+                let flat_base: usize = groups[..*group_idx].iter().map(|g| g.targets.len()).sum();
+                let keys = group
+                    .targets
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        let (glyph, theme) = status_of(w.key_status(flat_base + i), i == *key_idx);
+                        cal::KeyRow {
+                            glyph,
+                            name: t.name.to_string(),
+                            theme,
+                        }
+                    })
+                    .collect();
+                (
+                    t!("calibration.title_capture").to_string(),
+                    cal::Phase::Capture {
+                        group_label: t!("calibration.group").to_string(),
+                        group_name: group.name.to_string(),
+                        press_prompt: t!("calibration.press_key").to_string(),
+                        target_name: target.name.to_string(),
+                        keys,
+                        at: *key_idx,
+                        step_info: format!("{} {}/{}", t!("calibration.step"), step, total),
+                    },
+                    vec![
+                        ctrl("s", t!("calibration.skip").to_string(), "ui.help_key_fg"),
+                        ctrl("b", t!("calibration.back").to_string(), "ui.help_key_fg"),
+                        ctrl(
+                            "g",
+                            t!("calibration.skip_group").to_string(),
+                            "ui.help_key_fg",
+                        ),
+                        ctrl(
+                            "a",
+                            t!("calibration.abort").to_string(),
+                            "ui.diagnostic_error_fg",
+                        ),
+                    ],
+                )
+            }
+            CalibrationStep::Verify if w.translation_count() == 0 => (
+                t!("calibration.title_verify").to_string(),
+                cal::Phase::AllOk {
+                    title: t!("calibration.all_keys_ok_title").to_string(),
+                    message: t!("calibration.all_keys_ok_message").to_string(),
+                },
+                vec![
+                    ctrl(
+                        "y",
+                        t!("calibration.save").to_string(),
+                        "ui.diagnostic_info_fg",
+                    ),
+                    ctrl(
+                        "a",
+                        t!("calibration.abort").to_string(),
+                        "ui.diagnostic_error_fg",
+                    ),
+                ],
+            ),
+            CalibrationStep::Verify => {
+                let (verified, total) = w.verification_progress();
+                let keys = w
+                    .all_key_info()
+                    .into_iter()
+                    .filter_map(|(_, _, target, status)| {
+                        let glyph = match status {
+                            KeyStatus::Verified => "v",
+                            KeyStatus::Captured => " ",
+                            _ => return None,
+                        };
+                        let theme = match status {
+                            KeyStatus::Verified => crate::app::shell_host::shell_theme::pair(
+                                "ui.diagnostic_info_fg",
+                                "ui.popup_bg",
+                            ),
+                            _ => crate::app::shell_host::shell_theme::pair(
+                                "ui.status_warning_fg",
+                                "ui.popup_bg",
+                            ),
+                        };
+                        Some(cal::KeyRow {
+                            glyph: format!("[{glyph}]"),
+                            name: target.name.to_string(),
+                            theme,
+                        })
+                    })
+                    .collect();
+                (
+                    t!("calibration.title_verify").to_string(),
+                    cal::Phase::Verify {
+                        title: t!("calibration.verify_title").to_string(),
+                        instructions: t!("calibration.verify_instructions").to_string(),
+                        translations_label: t!("calibration.translations").to_string(),
+                        translations: w.translation_count().to_string(),
+                        verified_line: format!(
+                            "{}: {}/{}",
+                            t!("calibration.verified"),
+                            verified,
+                            total
+                        ),
+                        keys,
+                    },
+                    vec![
+                        ctrl(
+                            "y",
+                            t!("calibration.save").to_string(),
+                            "ui.diagnostic_info_fg",
+                        ),
+                        ctrl("b", t!("calibration.back").to_string(), "ui.help_key_fg"),
+                        ctrl(
+                            "r",
+                            t!("calibration.restart").to_string(),
+                            "ui.status_warning_fg",
+                        ),
+                        ctrl(
+                            "a",
+                            t!("calibration.abort").to_string(),
+                            "ui.diagnostic_error_fg",
+                        ),
+                    ],
+                )
+            }
+        };
+
+        Some(cal::Calibration {
+            title,
+            phase,
+            controls,
+            status: w.status_message.clone().unwrap_or_default(),
+            confirm,
+            // Resolved against the frame by `calibration::sized`, which is
+            // where the extent is known.
+            width: cal::DIALOG_WIDTH,
+            height: cal::DIALOG_HEIGHT,
+        })
+    }
+
     pub(crate) fn trust_description(
         &self,
         size: ratatui::layout::Rect,
@@ -2723,6 +2939,7 @@ impl Editor {
             browser,
             trust,
             modal,
+            calibration: self.calibration_description(),
             splits,
             menu_bar: menu_bar_visible,
             status_bar: status_row,
@@ -3178,20 +3395,10 @@ impl Editor {
             }
         }
 
-        // Render calibration wizard if active. (Deprecated; the web has no native
-        // projection for it, so suppress its cells there rather than bleed.)
-        if !self.suppress_chrome_cells {
-            if let Some(ref wizard) = self.calibration_wizard {
-                // Dim the editor content behind the wizard modal
-                crate::view::dimming::apply_dimming(frame, area);
-                crate::view::calibration_wizard::render_calibration_wizard(
-                    frame,
-                    area,
-                    wizard,
-                    &self.theme.read().unwrap(),
-                );
-            }
-        }
+        // The calibration wizard is the tree's — box, bands, key list and all.
+        // It was `apply_dimming` over the frame and four `Paragraph`s into
+        // three rectangles it split by hand; it is `Scrim::Dim` and a column
+        // now (`view::shell::calibration`). Nothing paints here.
 
         // Event-debug: the web renders it natively from `aux_modals_view`; paint
         // cells only for the TUI.
