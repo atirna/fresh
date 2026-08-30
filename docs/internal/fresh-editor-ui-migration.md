@@ -262,6 +262,57 @@ Everything else in this document is gated on one of these two. That is the
 honest shape of what is left: the ungated items are done, and the remainder is
 two subsystem replacements plus the deletions they unblock.
 
+#### B.1 in full: what is left of the settings dialog, and the one decision in it
+
+**Crossed so far**: the box, the search row, the wide footer, five of the seven
+dialogs, and the **category tree** — which took five families of recorded
+rectangle with it (`categories`, `sections`, `category_disclosures`,
+`categories_panel_area`, `categories_scrollbar_area`), the wheel arm that
+routed through one of them, and `categories_scroll`'s double life as both the
+window and the page. The body band's three columns
+(`[Length(24), Length(1), Min(40)]`) are laid out once now and the painter
+*reads* the panel's rectangle back.
+
+**Left**: the settings body itself, the entry-dialog stack, and the narrow
+layout's horizontal category strip and seven-row footer.
+
+The body is the piece the plan calls the bulk, and its shape is settled:
+
+* `render_settings_panel` walks `page.items` through a `ScrollablePanel` with a
+  per-item `ItemBox` plan — five row counts and five `_y()` accessors computed
+  by hand — plus a `skip_top` for the item hanging off the top edge and a
+  `BandViewport` to clip each band against. `ItemBox` **is** the second layout
+  tree goal 5 forbids; a `col()` is the same thing measured once, by the layout
+  that also paints it.
+* An item is: an optional section heading, a bordered card, a three-column
+  gutter (`>` for the cursor, `●` for a pending change, a space), the control,
+  and the wrapped description under it with its config layer appended. The
+  highlight sits on the label row only, and the `(Inherited)` badge or
+  `[Inherit]` button is right-aligned on that same row — **one row tall**,
+  which is the rule the panel's title strip cost us.
+* **The control is already a `WidgetSpec`.** `widget_map` maps a
+  `SettingControl` onto one and `render_control_via_widget` renders it through
+  `render_spec`, so it becomes `shell::widgets::node` — the adapter a plugin's
+  field goes through. Its press comes back as the runtime's own hit, and
+  `shell_host` turns that back into the `SettingsHit` the dialog's dispatch
+  takes — which is also what the **web** calls by name, so neither path moves.
+  The translation table already exists in the code: every
+  `hit_rect(&out, "<kind>", "<event>", …)` call paired with the
+  `ControlLayoutInfo` field it fills and the `hit_test` arm that reads it.
+
+**And one decision it cannot dodge: the open dropdown.** The settings dialog
+draws an open `Dropdown`'s options **inline**, reserving rows for them through
+`SettingControl::height`; the widget runtime surfaces the same options as a
+floating screen-level pop-over and discards the inline rows —
+`render_control`'s own comment records the bug that came of mixing the two
+(#2765: the dropdown opened to an empty box). `shell::widgets::node` describes
+the pop-over. So describing a settings dropdown *changes* it: the list floats
+over the cards instead of pushing the card taller, which is what a plugin
+panel's dropdown and the web's already do. That is almost certainly the better
+answer — one dropdown, everywhere — but it is a **behaviour change with
+e2e tests on the current one**, and it belongs in the commit that makes it,
+stated, rather than arriving as a diff nobody chose.
+
 #### C.1 in full: the nineteen variants, and where each one lands
 
 Written down because C.1 is the largest remaining item and every other
@@ -647,6 +698,16 @@ strip covering the whole box). **A spacer flexes along the axis it sits on**;
 say the axis (`.w(Sizing::Flex(1))` or `.h(...)`) rather than reaching for
 `flex`, and where the axis is not known statically, carry it — which is what
 `widgets::Site` does for the adapter.
+
+**And a deletion is checked with `--all-features`, because the web is a
+second caller.** Every recorded rectangle this migration removes has *two*
+consumers: the TUI's hit test and `webui::apply_settings`, which names the same
+`SettingsHit` variants by string for the web's native projection. `cargo check
+--workspace --all-targets` does not build that path; CI's `--all-features`
+does, and the categories tree's deletion reached CI as a compile error in a
+file the change never touched. The seam is the answer as well as the trap: the
+three bodies became `Editor::settings_*` methods with one caller each side, and
+"one body, two callers" is what the fact was for.
 
 **And the parity oracle has to be a fold, not a string join.** The five faults
 above all passed a per-variant suite that compared the tree's *run strings*

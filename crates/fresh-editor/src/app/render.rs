@@ -2219,13 +2219,12 @@ impl Editor {
                 }
             }
         };
-        // The footer, in the wide layout only: the narrow one is seven rows
-        // rather than two and stacks its buttons, which has not crossed. The
-        // box's own width decides, the way `inner_area.width < 60` did.
+        // The box's own width decides which footer, the way
+        // `inner_area.width < 60` did: one row across, or five down.
         let wide = self
             .panel_rect(&st::key())
             .is_some_and(|r| r.width.saturating_sub(2) >= 60);
-        let footer = wide.then(|| {
+        let footer = Some(()).map(|()| {
             let nullable_set = s
                 .current_item()
                 .map(|i| i.nullable && !i.is_null)
@@ -2268,6 +2267,7 @@ impl Editor {
                     Some(SettingsHit::EditButton) => Some(st::Button::Edit),
                     _ => None,
                 },
+                stacked: !wide,
             }
         });
         // The category tree, in the wide layout and while no search is

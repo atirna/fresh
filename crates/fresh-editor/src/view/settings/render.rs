@@ -156,18 +156,10 @@ pub fn render_settings(
 
     if narrow_mode {
         // Vertical layout: categories on top, items below
-        render_vertical_layout(frame, content_area, modal_area, state, theme, &mut layout);
+        render_vertical_layout(frame, content_area, state, theme, &mut layout);
     } else {
         // Horizontal layout: categories left, items right
-        render_horizontal_layout(
-            frame,
-            content_area,
-            modal_area,
-            panel_area,
-            state,
-            theme,
-            &mut layout,
-        );
+        render_horizontal_layout(frame, content_area, panel_area, state, theme, &mut layout);
     }
 
     // Determine the topmost dialog layer and apply dimming to layers below
@@ -222,7 +214,6 @@ pub fn render_settings(
 fn render_horizontal_layout(
     frame: &mut Frame,
     content_area: Rect,
-    modal_area: Rect,
     panel: Option<Rect>,
     state: &mut SettingsState,
     theme: &Theme,
@@ -270,16 +261,16 @@ fn render_horizontal_layout(
         render_settings_panel(frame, settings_inner, state, theme, layout);
     }
 
-    // Render footer with buttons (horizontal layout)
-    // The wide footer is the tree's; only the narrow one still paints.
-    render_footer(frame, modal_area, state, theme, layout, false);
+    // **Both footers are the tree's** (`view::shell::settings`): one row of
+    // buttons across, or five down below sixty columns. `render_footer` and
+    // `render_footer_vertical` are gone, and with them the five rectangles
+    // the narrow one filed for `hit_test` to compare a cell against.
 }
 
 /// Render vertical layout (narrow mode): categories on top, items below
 fn render_vertical_layout(
     frame: &mut Frame,
     content_area: Rect,
-    modal_area: Rect,
     state: &mut SettingsState,
     theme: &Theme,
     layout: &mut SettingsLayout,
@@ -329,9 +320,6 @@ fn render_vertical_layout(
     } else {
         render_settings_panel(frame, settings_area, state, theme, layout);
     }
-
-    // Render footer with buttons (vertical layout)
-    render_footer(frame, modal_area, state, theme, layout, true);
 }
 
 /// Render categories as a horizontal strip (for narrow mode)
@@ -1675,241 +1663,6 @@ pub enum ControlLayoutInfo {
     },
     #[default]
     Complex,
-}
-
-/// Render a single button with focus/hover states
-#[allow(clippy::too_many_arguments)]
-fn render_button(
-    frame: &mut Frame,
-    area: Rect,
-    text: &str,
-    focused_text: &str,
-    is_focused: bool,
-    is_hovered: bool,
-    theme: &Theme,
-    dimmed: bool,
-) {
-    if is_focused {
-        let style = Style::default()
-            .fg(theme.menu_highlight_fg)
-            .bg(theme.menu_highlight_bg)
-            .add_modifier(Modifier::BOLD);
-        frame.render_widget(Paragraph::new(focused_text).style(style), area);
-    } else if is_hovered {
-        let style = Style::default()
-            .fg(theme.menu_hover_fg)
-            .bg(theme.menu_hover_bg);
-        frame.render_widget(Paragraph::new(text).style(style), area);
-    } else {
-        let fg = if dimmed {
-            theme.line_number_fg
-        } else {
-            theme.popup_text_fg
-        };
-        frame.render_widget(Paragraph::new(text).style(Style::default().fg(fg)), area);
-    }
-}
-
-/// Render footer with action buttons
-/// When `vertical` is true, buttons are stacked vertically (for narrow mode)
-/// The **narrow** layout's footer: seven rows with the buttons stacked.
-///
-/// The wide one — two rows, a separator and five buttons flush right of an
-/// `[ Edit ]` — is the tree's (`view::shell::settings::Footer`), and its five
-/// recorded rectangles went with it. What was here summed the buttons' widths
-/// to decide which of them fit and then filed a rectangle per button for
-/// `SettingsLayout::hit_test` to compare a cell against; the rule survives,
-/// resolved against the width layout gives.
-fn render_footer(
-    frame: &mut Frame,
-    modal_area: Rect,
-    state: &SettingsState,
-    theme: &Theme,
-    layout: &mut SettingsLayout,
-    vertical: bool,
-) {
-    // Guard against too-small modal
-    if modal_area.height < 4 || modal_area.width < 10 {
-        return;
-    }
-    if vertical {
-        render_footer_vertical(frame, modal_area, state, theme, layout);
-    }
-}
-
-/// Render footer with buttons stacked vertically (for narrow mode)
-fn render_footer_vertical(
-    frame: &mut Frame,
-    modal_area: Rect,
-    state: &SettingsState,
-    theme: &Theme,
-    layout: &mut SettingsLayout,
-) {
-    use super::layout::SettingsHit;
-    use super::state::FocusPanel;
-
-    // Footer takes bottom 7 lines: separator + 5 buttons + help
-    let footer_height = 7u16;
-    let footer_y = modal_area
-        .y
-        .saturating_add(modal_area.height.saturating_sub(footer_height));
-    let footer_width = modal_area.width.saturating_sub(2);
-
-    // Draw top separator
-    let sep_y = footer_y;
-    if sep_y > modal_area.y {
-        let sep_line: String = "─".repeat(footer_width as usize);
-        frame.render_widget(
-            Paragraph::new(sep_line).style(Style::default().fg(theme.split_separator_fg)),
-            Rect::new(modal_area.x + 1, sep_y, footer_width, 1),
-        );
-    }
-
-    // Check if footer has keyboard focus
-    let footer_focused = state.focus_panel() == FocusPanel::Footer;
-
-    // Determine hover and keyboard focus states for buttons
-    let layer_hovered = matches!(state.hover_hit, Some(SettingsHit::LayerButton));
-    let reset_hovered = matches!(state.hover_hit, Some(SettingsHit::ResetButton));
-    let save_hovered = matches!(state.hover_hit, Some(SettingsHit::SaveButton));
-    let cancel_hovered = matches!(state.hover_hit, Some(SettingsHit::CancelButton));
-    let edit_hovered = matches!(state.hover_hit, Some(SettingsHit::EditButton));
-
-    let layer_focused = footer_focused && state.footer_button_index == 0;
-    let reset_focused = footer_focused && state.footer_button_index == 1;
-    let save_focused = footer_focused && state.footer_button_index == 2;
-    let cancel_focused = footer_focused && state.footer_button_index == 3;
-    let edit_focused = footer_focused && state.footer_button_index == 4;
-
-    // Get translated button labels
-    // Use "Inherit" label instead of "Reset" when current item is nullable and explicitly set
-    let current_is_nullable_set = state
-        .current_item()
-        .map(|item| item.nullable && !item.is_null)
-        .unwrap_or(false);
-    let save_label = t!("settings.btn_save").to_string();
-    let cancel_label = t!("settings.btn_cancel").to_string();
-    let reset_label = if current_is_nullable_set {
-        t!("settings.btn_inherit").to_string()
-    } else {
-        t!("settings.btn_reset").to_string()
-    };
-    let edit_label = t!("settings.btn_edit").to_string();
-
-    // Build button text
-    let layer_text = format!("[ {} ]", state.target_layer_name());
-    let layer_text_focused = format!(">[ {} ]", state.target_layer_name());
-    let save_text = format!("[ {} ]", save_label);
-    let save_text_focused = format!(">[ {} ]", save_label);
-    let cancel_text = format!("[ {} ]", cancel_label);
-    let cancel_text_focused = format!(">[ {} ]", cancel_label);
-    let reset_text = format!("[ {} ]", reset_label);
-    let reset_text_focused = format!(">[ {} ]", reset_label);
-    let edit_text = format!("[ {} ]", edit_label);
-    let edit_text_focused = format!(">[ {} ]", edit_label);
-
-    // Render buttons vertically, centered
-    let button_x = modal_area.x + 2;
-    let mut y = sep_y + 1;
-
-    // Layer button
-    let layer_width = str_width(if layer_focused {
-        &layer_text_focused
-    } else {
-        &layer_text
-    }) as u16;
-    let layer_area = Rect::new(button_x, y, layer_width.min(footer_width), 1);
-    render_button(
-        frame,
-        layer_area,
-        &layer_text,
-        &layer_text_focused,
-        layer_focused,
-        layer_hovered,
-        theme,
-        false,
-    );
-    layout.layer_button = Some(layer_area);
-    y += 1;
-
-    // Save button
-    let save_width = str_width(if save_focused {
-        &save_text_focused
-    } else {
-        &save_text
-    }) as u16;
-    let save_area = Rect::new(button_x, y, save_width.min(footer_width), 1);
-    render_button(
-        frame,
-        save_area,
-        &save_text,
-        &save_text_focused,
-        save_focused,
-        save_hovered,
-        theme,
-        false,
-    );
-    layout.save_button = Some(save_area);
-    y += 1;
-
-    // Reset button
-    let reset_width = str_width(if reset_focused {
-        &reset_text_focused
-    } else {
-        &reset_text
-    }) as u16;
-    let reset_area = Rect::new(button_x, y, reset_width.min(footer_width), 1);
-    render_button(
-        frame,
-        reset_area,
-        &reset_text,
-        &reset_text_focused,
-        reset_focused,
-        reset_hovered,
-        theme,
-        false,
-    );
-    layout.reset_button = Some(reset_area);
-    y += 1;
-
-    // Cancel button
-    let cancel_width = str_width(if cancel_focused {
-        &cancel_text_focused
-    } else {
-        &cancel_text
-    }) as u16;
-    let cancel_area = Rect::new(button_x, y, cancel_width.min(footer_width), 1);
-    render_button(
-        frame,
-        cancel_area,
-        &cancel_text,
-        &cancel_text_focused,
-        cancel_focused,
-        cancel_hovered,
-        theme,
-        false,
-    );
-    layout.cancel_button = Some(cancel_area);
-    y += 1;
-
-    // Edit button
-    let edit_width = str_width(if edit_focused {
-        &edit_text_focused
-    } else {
-        &edit_text
-    }) as u16;
-    let edit_area = Rect::new(button_x, y, edit_width.min(footer_width), 1);
-    render_button(
-        frame,
-        edit_area,
-        &edit_text,
-        &edit_text_focused,
-        edit_focused,
-        edit_hovered,
-        theme,
-        true, // dimmed
-    );
-    layout.edit_button = Some(edit_area);
 }
 
 /// Render search results with breadcrumbs

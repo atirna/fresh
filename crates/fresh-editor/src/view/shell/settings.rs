@@ -152,11 +152,24 @@ pub fn layer(c: Option<&Chrome>) -> Node<UiMsg> {
                         rule().flex(1),
                         row().w(Sizing::Cells(1)),
                     ]));
-                    rows.push(row().h(Sizing::Cells(1)).children([
-                        row().w(Sizing::Cells(1)),
-                        footer_row(f).flex(1),
-                        row().w(Sizing::Cells(1)),
-                    ]));
+                    // One row across, five rows down — `footer_height` was 2
+                    // and 7, and the second cell of indent is the narrow
+                    // footer's `modal_area.x + 2`.
+                    rows.push(
+                        row()
+                            .h(Sizing::Cells(match f.stacked {
+                                true => 5,
+                                false => 1,
+                            }))
+                            .children([
+                                row().w(Sizing::Cells(1 + f.stacked as u16)),
+                                match f.stacked {
+                                    true => footer_column(f).flex(1),
+                                    false => footer_row(f).flex(1),
+                                },
+                                row().w(Sizing::Cells(1)),
+                            ]),
+                    );
                     // The border's own row, which the painter draws.
                     rows.push(row().h(Sizing::Cells(1)));
                 }
@@ -477,6 +490,12 @@ pub struct Footer {
     /// The key hints between `[ Edit ]` and the right-hand group, in the
     /// painter's own `Key:Action  Key:Action` form.
     pub help: String,
+    /// **Below sixty columns the five stack.** The painter had two footers —
+    /// `render_footer` and `render_footer_vertical` — differing in which way
+    /// the buttons run, in what order (`[Layer, Save, Reset, Cancel, Edit]`
+    /// down, `[Edit, …, Layer, Reset, Save, Cancel]` across), and in whether
+    /// the hints are shown at all. One description, one flag.
+    pub stacked: bool,
 }
 
 pub fn footer_key(b: Button) -> fresh_ui::Key {
@@ -500,6 +519,30 @@ pub fn footer_key(b: Button) -> fresh_ui::Key {
 /// stays, resolved against the width layout gives rather than against a
 /// rectangle passed in. What goes is the five recorded rectangles and the
 /// `hit_test` that compared a cell against each.
+/// The narrow layout's footer: the same five buttons, one per row.
+///
+/// The painter's own order and its one dimmed button. Nothing about which
+/// buttons fit is decided here — below sixty columns all five are shown and
+/// the hints are not.
+fn footer_column(f: &Footer) -> Node<UiMsg> {
+    col().children(
+        [
+            (Button::Layer, &f.layer),
+            (Button::Save, &f.save),
+            (Button::Reset, &f.reset),
+            (Button::Cancel, &f.cancel),
+            (Button::Edit, &f.edit),
+        ]
+        .into_iter()
+        .map(|(b, label)| {
+            row()
+                .h(Sizing::Cells(1))
+                .children([button(f, b, label), row().flex(1)])
+        })
+        .collect::<Vec<_>>(),
+    )
+}
+
 fn footer_row(f: &Footer) -> Node<UiMsg> {
     let f = f.clone();
     layout_reader(move |info: LayoutInfo| {
@@ -1016,6 +1059,7 @@ mod tests {
 
     fn footer() -> Footer {
         Footer {
+            stacked: false,
             layer: "[ user ]".into(),
             reset: "[ Reset ]".into(),
             save: "[ Save ]".into(),
@@ -1137,6 +1181,41 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// **Below sixty columns the five buttons stack**, which is the whole of
+    /// what `render_footer_vertical` was: the same five, one per row, in the
+    /// painter's own order, with the hints dropped. Two painters differing in
+    /// a direction are one description and a flag.
+    #[test]
+    fn the_narrow_footer_stacks_its_five_buttons() {
+        let mut c = chrome();
+        if let Some(f) = c.footer.as_mut() {
+            f.stacked = true;
+        }
+        c.categories = None;
+        let ui = with_chrome(c, 60, 40, None);
+        let ys: Vec<i32> = [
+            Button::Layer,
+            Button::Save,
+            Button::Reset,
+            Button::Cancel,
+            Button::Edit,
+        ]
+        .into_iter()
+        .map(|b| {
+            ui.rect_of(
+                ui.find_by_key(&footer_key(b))
+                    .unwrap_or_else(|| panic!("{b:?} is on screen")),
+            )
+            .y
+        })
+        .collect();
+        let mut sorted = ys.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted, ys, "one per row, in the painter's order: {ys:?}");
+        assert_eq!(ys[4] - ys[0], 4, "five consecutive rows, not a row of five");
     }
 
     /// The category tree sits down the left of the body band, twenty-four
