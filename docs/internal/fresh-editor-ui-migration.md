@@ -223,6 +223,50 @@ provided at is the scope they belong to.
 | C.5b | **The dock is editor-global UI built from `Editor.windows`, not from the active window.** Its content is the orchestrator's `WidgetSpec`; its column, grip and blur observer are already nodes. | Its content lands like any other panel (C.1), mounted *outside* the window key per 0.5. Its own two remainders go with it: `chrome::Dock::on_layer_key` (A.2) and the scrollbar-reveal hover, which reads zones the plugin publishes from inside the panel. | Building its description from `active_window()`. `shell_frame` does that for nearly everything else, and the dock is the one surface for which it is wrong. |
 | ~~C.6~~ **Done.** | The floating panel's frame — border, title, `[×]`, placement. | `view::shell::panel`: layout places the box, the fold paints it, the painter reads its rectangle and its content rectangle back with no fallback arithmetic. `[×]` is a node that stops its own press, so `close_button_rect` — a rectangle the painter filed for a mouse arm to compare against — is gone from the state, the arm and the web projection. **The scrim did not move**, and the reason is paint order: the dock's own panel is painted after the tree's overlay band, so a `Scrim` here would be overpainted and the frame would read half-dimmed. It goes with C.5b. | — |
 
+#### C.1 in full: the nineteen variants, and where each one lands
+
+Written down because C.1 is the largest remaining item and every other
+ungated item is behind it, and because the mapping is the decision — once it
+is settled the work is mechanical. `WidgetSpec` does not change: the plugin
+API is frozen, and this is a change of what the host does with it.
+
+| `WidgetSpec` | `fresh-ui` | Note |
+|---|---|---|
+| `Row { wrap }` | `row()`, `.wrap_children()` when `wrap` | The one variant with no counterpart until [#3108](https://github.com/sinelaw/fresh/pull/3108) added wrapping boxes. Its rule — break at a child boundary, never split a child — is the library's now. |
+| `Col` | `col()` | |
+| `Spacer` | `widgets::spacer` | |
+| `Divider` | `widgets::divider` | |
+| `Text` | `text()` / `text_runs()` | Styled spans are runs. |
+| `Raw` | `text_runs()` | The escape hatch is `TextPropertyEntry[]`, which is already a run list; nothing interprets it, which is the point. |
+| `HintBar` | `row()` of runs | Composition, not a widget: a hint bar is `<keys> <label>` pairs with a separator. |
+| `LabeledSection` | `col().border()` + a title strip | The shape `popup::border_strip` already has. |
+| `Toggle` | `widgets::Toggle` | `label_first` / `label_width` are the row's order and a `Sizing::Cells` on the label. `indeterminate` needs a third glyph state — the one small library change this table implies. |
+| `Number` | `widgets::Number` | |
+| `Dropdown` | `widgets::Dropdown` | Its pop-over is a `Layer`; the `screen_space` escape below is the same mechanism. |
+| `DualList` | `widgets::DualList` | |
+| `Button` | `widgets::Button` | |
+| `List` | `widgets::List` | |
+| `Tree` | `widgets::Tree` | |
+| `Component` | `focus_scope()` + `key()` | Its two jobs are exactly those: trap Tab inside the subtree, and name it. Not a component in the library's sense, and it should not become one — it owns no state. |
+| `Overlay` | `layer()` anchored to its own position | "Anchors at the row it would have occupied but the rows below do not shift" is `Place::Over` on a layer whose anchor is the node's slot. |
+| `Popup { anchor, screen_space }` | `layer()`, `Anchor::Point` or the node, `within` the panel unless `screen_space` | `screen_space` is precisely "not confined to the panel's region", which is the `within` the base PR added. |
+| `WindowEmbed` | a `Host` leaf | A real editor window inside a panel: cells, like every other `Host`. G's rule applies — this one never migrates. |
+
+**Three things the table settles that were open.**
+
+* **`indeterminate` is the only library gap left in the set**, and it is one
+  glyph state on `Toggle`, not a new widget.
+* **`Component` is not a `Component`.** It is a focus scope with a key, and
+  reading it as the library's `Component` would give a plugin's subtree host
+  state it never asked for. The name collides; the concept does not.
+* **`Popup`'s two modes are one node**, because a layer already distinguishes
+  "confined to a region" from "confined to the frame". Before #3108 they
+  would have been two mechanisms.
+
+What the table does *not* settle is C.5 — whether a buffer-mounted panel is a
+subtree in the pane's content slot or stays a virtual buffer. That was
+deferred deliberately, to be taken with C.1's experience in hand.
+
 ### D. Paint arrangements still mixed
 
 | # | What | How | Avoid |
