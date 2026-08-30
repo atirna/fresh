@@ -234,6 +234,23 @@ one change.
 | **C.1–C.4** | **~17,200** | `crates/fresh-editor/src/widgets/`: `render.rs` alone is 7,832, `kinds/*` another 7,000, plus `registry`, `actions`, `layout_box`, `text_click`. This is a complete widget runtime — layout, paint, hit-testing, focus and event routing — and C.1 replaces it rather than adapting it. |
 | **B.1–B.3** | **~24,000** | Settings (`view/settings/`, ~20k with `render.rs` at 4,040 and `widget_map.rs` at 1,303), the keybinding editor, the calibration wizard. |
 
+**And they are not independent — B.1 largely rides on C.1.** Settings'
+*controls* are already `WidgetSpec`: `view/settings/widget_map.rs` maps a
+`SettingControl` onto a widget kind ("Once Settings renders the resulting tree
+through `widgets::render_spec`, the two frameworks are one" — its own module
+doc, phase 3 of a unification that has landed), `render.rs` calls
+`render_spec_no_autofocus` and paints its `RenderOutput`, and `mouse.rs`
+hit-tests through `WidgetTextClickGeometry::from_render_output`. So the
+control layer of the settings dialog — rendering *and* hit-testing — is the
+widget runtime, and C.1 carries it.
+
+What stays B-specific is the dialog around the controls: the category
+navigation, the search, the item rows, and the editing input path. The
+~24,000 figure is therefore the *file* count, not the migration's; **the
+remaining bulk is C.1's ~17,200, and B.1 shrinks to the page chrome once it
+lands.** That reverses the plan's implicit ordering, which listed B before C
+and treated them as separable.
+
 **Why this matters for sequencing.** Both have to land whole. A panel is
 either described as a `Node` or painted by the runtime; there is no frame in
 which half of it is each, and a partial C.1 is precisely the "second widget
