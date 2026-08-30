@@ -53,39 +53,83 @@ pub fn fit(info: LayoutInfo) -> Option<(u16, u16)> {
 }
 
 /// The dialog's box as a layer: centred beside the dock, with the chrome the
-/// tree owns inside it and a claim band where the painter's body still is.
+/// tree owns inside it and the painter's body between.
 ///
-/// **The body band is `PointerMode::Ignore`, not a claim**, and the difference
-/// matters: the panels underneath are still hit-tested by
-/// `settings/mouse.rs` against rectangles the painter recorded, so a press
-/// there has to reach the modal slot that routes to it. Taking it here would
-/// make the whole settings body inert. The chrome rows that *are* the tree's
-/// stop their own presses before they get that far.
+/// **Everything the tree does not own routes to the modal slot.** The panels
+/// are still hit-tested by `settings/mouse.rs` against rectangles the painter
+/// recorded, so a press there has to reach `handle_settings_mouse` — and a
+/// layer is the first thing asked at a point, so it cannot simply let the hit
+/// fall through: it has to say where it goes. The chrome nodes that *are* the
+/// tree's stop their own presses before they get that far.
+///
+/// While there is no chrome — the box is empty, which is how it started — the
+/// layer is `PointerMode::Ignore` instead: a rectangle and nothing else.
 pub fn layer(c: Option<&Chrome>) -> Node<UiMsg> {
     let c = c.cloned();
-    fresh_ui::layer()
+    let l = fresh_ui::layer()
         .within(super::frame::chrome_key())
         .anchor(Anchor::Screen(Align::Center))
-        .place(Place::Over)
-        .pointer_mode(PointerMode::Ignore)
-        .child(layout_reader(move |info: LayoutInfo| {
-            let (w, h) = fit(info).unwrap_or((0, 0));
-            let n = col().w(Sizing::Cells(w)).h(Sizing::Cells(h)).key(key());
-            match &c {
-                None => n.pointer_mode(PointerMode::Ignore),
-                // One row of border, the search row, a blank gap, and then the
-                // painter's body — `search_header_height + search_gap` in the
-                // renderer, which is where it puts everything else.
-                Some(c) => n.pointer_mode(PointerMode::Transparent).children([
-                    row().h(Sizing::Cells(1)).pointer_mode(PointerMode::Ignore),
-                    row().h(Sizing::Cells(1)).children([
-                        row().w(Sizing::Cells(1)).pointer_mode(PointerMode::Ignore),
-                        search_row(&c.search),
-                    ]),
-                    row().flex(1).pointer_mode(PointerMode::Ignore),
-                ]),
+        .place(Place::Over);
+    let l = match c.is_some() {
+        true => l,
+        false => l.pointer_mode(PointerMode::Ignore),
+    };
+    l.child(layout_reader(move |info: LayoutInfo| {
+        let (w, h) = fit(info).unwrap_or((0, 0));
+        let n = col().w(Sizing::Cells(w)).h(Sizing::Cells(h)).key(key());
+        match &c {
+            None => n.pointer_mode(PointerMode::Ignore),
+            // One row of border, the search row, a blank gap, and then the
+            // painter's body — `search_header_height + search_gap` in the
+            // renderer, which is where it puts everything else.
+            Some(c) => {
+                let mut rows: Vec<Node<UiMsg>> = vec![
+                    row().h(Sizing::Cells(1)),
+                    row()
+                        .h(Sizing::Cells(1))
+                        .children([row().w(Sizing::Cells(1)), search_row(&c.search)]),
+                    row().flex(1),
+                ];
+                if let Some(f) = &c.footer {
+                    // The separator the painter drew one row above the
+                    // buttons, then the buttons, then the border.
+                    rows.push(rule());
+                    rows.push(row().h(Sizing::Cells(1)).children([
+                        row().w(Sizing::Cells(1)),
+                        footer_row(f).flex(1),
+                        row().w(Sizing::Cells(1)),
+                    ]));
+                    // The border's own row, which the painter draws.
+                    rows.push(row().h(Sizing::Cells(1)));
+                }
+                route(n.children(rows))
             }
-        }))
+        }
+    }))
+}
+
+/// Send every pointer event that reaches this node to the modal slot, which
+/// routes it to `handle_settings_mouse`. The parts the tree owns stop the flow
+/// before it gets here.
+fn route(n: Node<UiMsg>) -> Node<UiMsg> {
+    let mut g = gesture(n);
+    for kind in [
+        GestureKind::Press,
+        GestureKind::Release,
+        GestureKind::Move,
+        GestureKind::Wheel,
+    ] {
+        g = g.on(
+            kind,
+            Rc::new(|e: &Event| {
+                e.stop();
+                Some(UiMsg::Ui(UiFact::ModalPointer(
+                    super::modal::Slot::Settings,
+                )))
+            }),
+        );
+    }
+    g
 }
 
 fn search_row(s: &Search) -> Node<UiMsg> {
@@ -158,10 +202,172 @@ pub enum Search {
 pub struct Chrome {
     pub title: String,
     pub search: Search,
+    /// The footer's buttons. `None` in the narrow layout, whose footer is
+    /// seven rows rather than two and has not crossed.
+    pub footer: Option<Footer>,
 }
 
 pub fn search_key() -> fresh_ui::Key {
     fresh_ui::Key::Str("settings_search".into())
+}
+
+/// One of the modal's footer buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    /// Cycles which config layer the dialog writes to.
+    Layer,
+    /// Resets the selected setting — labelled "Inherit" when it can be.
+    Reset,
+    Save,
+    Cancel,
+    /// Opens the layer's config file in the editor.
+    Edit,
+}
+
+/// The footer's five buttons, with the labels and states already resolved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Footer {
+    /// In the order the painter placed them: Edit is left-aligned and the
+    /// rest are flush right, so the list is `[Edit, Layer, Reset, Save,
+    /// Cancel]` and the row does the aligning.
+    pub layer: String,
+    pub reset: String,
+    pub save: String,
+    pub cancel: String,
+    pub edit: String,
+    /// Which one the keyboard is on, when the footer holds focus.
+    pub focused: Option<Button>,
+    pub hovered: Option<Button>,
+    /// The key hints between `[ Edit ]` and the right-hand group, in the
+    /// painter's own `Key:Action  Key:Action` form.
+    pub help: String,
+}
+
+pub fn footer_key(b: Button) -> fresh_ui::Key {
+    fresh_ui::Key::Pair(
+        "settings_footer".into(),
+        match b {
+            Button::Layer => 0,
+            Button::Reset => 1,
+            Button::Save => 2,
+            Button::Cancel => 3,
+            Button::Edit => 4,
+        },
+    )
+}
+
+/// The footer row: `[ Edit ]` at the left, the rest flush right, and the
+/// separator above it.
+///
+/// **Which buttons fit is a rule, not a measurement.** The painter summed the
+/// widths and dropped Edit, then Layer, then Reset as the room ran out; that
+/// stays, resolved against the width layout gives rather than against a
+/// rectangle passed in. What goes is the five recorded rectangles and the
+/// `hit_test` that compared a cell against each.
+fn footer_row(f: &Footer) -> Node<UiMsg> {
+    let f = f.clone();
+    layout_reader(move |info: LayoutInfo| {
+        let w = info.constraints.max_w;
+        let width = |s: &str, b: Button| {
+            crate::primitives::display_width::str_width(s) as u16 + u16::from(f.focused == Some(b))
+        };
+        let (save_w, cancel_w) = (
+            width(&f.save, Button::Save),
+            width(&f.cancel, Button::Cancel),
+        );
+        let (reset_w, layer_w, edit_w) = (
+            width(&f.reset, Button::Reset),
+            width(&f.layer, Button::Layer),
+            width(&f.edit, Button::Edit),
+        );
+        let gap = 2u16;
+        let min = save_w + gap + cancel_w;
+        let show_reset = w >= reset_w + gap + min;
+        let show_layer = w >= layer_w + gap + reset_w + gap + min;
+        let show_edit = w >= edit_w + gap + layer_w + gap + reset_w + gap + min;
+
+        let mut kids: Vec<Node<UiMsg>> = Vec::new();
+        if show_edit {
+            kids.push(button(&f, Button::Edit, &f.edit));
+            kids.push(text("  ").theme(ink()));
+        }
+        // The hints, between `[ Edit ]` and the right-hand group. The painter
+        // worked out the gap's start and end from whichever buttons it had
+        // decided to show and clipped the text to it; a flexible child between
+        // them is the same gap, and it elides rather than being cut.
+        kids.extend(keyhints(&f.help));
+        kids.push(row().flex(1));
+        for (on, b, label) in [
+            (show_layer, Button::Layer, &f.layer),
+            (show_reset, Button::Reset, &f.reset),
+            (true, Button::Save, &f.save),
+            (true, Button::Cancel, &f.cancel),
+        ] {
+            if on {
+                kids.push(button(&f, b, label));
+                if b != Button::Cancel {
+                    kids.push(text("  ").theme(ink()));
+                }
+            }
+        }
+        row().h(Sizing::Cells(1)).children(kids)
+    })
+    .h(Sizing::Cells(1))
+}
+
+/// `Key:Action  Key:Action` as runs: the key reverse-videoed, the action dim.
+fn keyhints(text_: &str) -> Vec<Node<UiMsg>> {
+    let key = pair("ui.popup_text_fg", "ui.split_separator_fg");
+    let desc = pair("ui.line_number_fg", "ui.popup_bg");
+    let mut out: Vec<Node<UiMsg>> = Vec::new();
+    for (i, seg) in text_.split("  ").enumerate() {
+        let seg = seg.trim();
+        if seg.is_empty() {
+            continue;
+        }
+        if i > 0 {
+            out.push(text(" ").theme(desc.clone()));
+        }
+        match seg.find(':') {
+            Some(at) => {
+                out.push(text(format!(" {} ", &seg[..at])).theme(key.clone()));
+                out.push(text(seg[at + 1..].to_string()).theme(desc.clone()));
+            }
+            None => out.push(text(seg.to_string()).theme(desc.clone())),
+        }
+    }
+    out
+}
+
+fn button(f: &Footer, b: Button, label: &str) -> Node<UiMsg> {
+    let focused = f.focused == Some(b);
+    let theme = match (focused, f.hovered == Some(b)) {
+        (true, _) => attrs("ui.menu_highlight_fg", "ui.menu_highlight_bg", &["bold"]),
+        (false, true) => pair("ui.menu_hover_fg", "ui.menu_hover_bg"),
+        (false, false) => ink(),
+    };
+    let marker = match focused {
+        true => ">",
+        false => "",
+    };
+    gesture(text(format!("{marker}{label}")).theme(theme))
+        .key(footer_key(b))
+        .on(
+            GestureKind::Press,
+            Rc::new(move |e: &Event| {
+                if e.button != MouseButton::Left {
+                    return None;
+                }
+                e.stop();
+                Some(UiMsg::Ui(UiFact::SettingsButton(b)))
+            }),
+        )
+        .on_enter(Rc::new(move |_: &Event| {
+            Some(UiMsg::Ui(UiFact::SettingsButtonHover(Some(b))))
+        }))
+        .on_leave(Rc::new(move |_: &Event| {
+            Some(UiMsg::Ui(UiFact::SettingsButtonHover(None)))
+        }))
 }
 
 /// What a press on one of the settings dialogs asks for.
@@ -484,6 +690,7 @@ mod tests {
         Chrome {
             title: " Settings [user] ".into(),
             search: Search::Hint(vec![Span::new("Press / to search settings...", dim)]),
+            footer: Some(footer()),
         }
     }
 
@@ -516,6 +723,20 @@ mod tests {
                     pair("ui.line_number_fg", "ui.popup_bg"),
                 )],
             },
+            footer: Some(footer()),
+        }
+    }
+
+    fn footer() -> Footer {
+        Footer {
+            layer: "[ user ]".into(),
+            reset: "[ Reset ]".into(),
+            save: "[ Save ]".into(),
+            cancel: "[ Cancel ]".into(),
+            edit: "[ Edit ]".into(),
+            focused: None,
+            hovered: None,
+            help: "Enter:Edit  Esc:Close".into(),
         }
     }
 
@@ -866,5 +1087,95 @@ mod tests {
                 .any(|f| matches!(f, UiFact::ModalPointer(Slot::Settings))),
             "the slot answers: {got:?}"
         );
+    }
+
+    /// **The footer's five buttons sit where the painter put them**: `[ Edit ]`
+    /// flush left, the rest flush right, on the second-to-last row.
+    #[test]
+    fn the_footer_buttons_are_left_and_right_aligned() {
+        let ui = laid_out(200, 60, None);
+        let b = ui.rect_of(ui.find_by_key(&key()).expect("the box"));
+        let at = |x: Button| ui.rect_of(ui.find_by_key(&footer_key(x)).expect("a button"));
+        let edit = at(Button::Edit);
+        let cancel = at(Button::Cancel);
+        assert_eq!(edit.y, b.y + b.h as i32 - 2, "the row above the border");
+        assert_eq!(cancel.y, edit.y, "all on one row");
+        assert_eq!(edit.x, b.x + 1, "flush left inside the border");
+        assert_eq!(
+            cancel.x + cancel.w as i32,
+            b.x + b.w as i32 - 1,
+            "and Cancel flush right"
+        );
+        assert!(at(Button::Save).x < cancel.x, "Save before Cancel");
+        assert!(at(Button::Reset).x < at(Button::Save).x);
+        assert!(at(Button::Layer).x < at(Button::Reset).x);
+    }
+
+    /// **Which buttons fit is a rule, and it drops them in order.** The
+    /// painter summed the widths and hid Edit, then Layer, then Reset as the
+    /// room ran out; Save and Cancel are the two that always stay.
+    #[test]
+    fn a_narrow_footer_drops_its_buttons_in_order() {
+        // 66 wide leaves 64 inside the border, which is enough for everything.
+        let wide = laid_out(74, 60, None);
+        assert!(wide.find_by_key(&footer_key(Button::Edit)).is_some());
+        // Narrow enough that the two widest optional ones have to go.
+        let tight = laid_out(46, 60, None);
+        assert!(
+            tight.find_by_key(&footer_key(Button::Save)).is_some()
+                && tight.find_by_key(&footer_key(Button::Cancel)).is_some(),
+            "these two always stay"
+        );
+        assert!(
+            tight.find_by_key(&footer_key(Button::Edit)).is_none(),
+            "Edit is the first to go"
+        );
+        assert!(
+            tight.find_by_key(&footer_key(Button::Layer)).is_none(),
+            "then Layer"
+        );
+    }
+
+    /// Each answers its own press, and reports its own hover — five rectangles
+    /// the painter filed for `SettingsLayout::hit_test`.
+    #[test]
+    fn each_footer_button_answers_its_own_press() {
+        for b in [
+            Button::Edit,
+            Button::Layer,
+            Button::Reset,
+            Button::Save,
+            Button::Cancel,
+        ] {
+            let mut ui = laid_out(200, 60, None);
+            let r = ui.rect_of(ui.find_by_key(&footer_key(b)).expect("a button"));
+            let got = facts(ui.dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(r.x + 1, r.y),
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            )));
+            assert!(got.contains(&UiFact::SettingsButton(b)), "{b:?}: {got:?}");
+        }
+    }
+
+    /// The key hints ride between `[ Edit ]` and the right-hand group, with
+    /// the key reverse-videoed — `Key:Action`, split on the double space.
+    #[test]
+    fn the_footer_shows_its_key_hints() {
+        let ui = laid_out(200, 60, None);
+        let painted: Vec<String> = ui
+            .spec()
+            .layers()
+            .iter()
+            .filter_map(|i| match &i.draw {
+                fresh_ui::Draw::Lines(l) => {
+                    Some(l.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert!(painted.iter().any(|r| r.contains("Enter")), "{painted:?}");
+        assert!(painted.iter().any(|r| r.contains("Edit")), "{painted:?}");
     }
 }

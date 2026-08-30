@@ -259,6 +259,7 @@ fn render_horizontal_layout(
     }
 
     // Render footer with buttons (horizontal layout)
+    // The wide footer is the tree's; only the narrow one still paints.
     render_footer(frame, modal_area, state, theme, layout, false);
 }
 
@@ -1938,6 +1939,14 @@ fn render_button(
 
 /// Render footer with action buttons
 /// When `vertical` is true, buttons are stacked vertically (for narrow mode)
+/// The **narrow** layout's footer: seven rows with the buttons stacked.
+///
+/// The wide one — two rows, a separator and five buttons flush right of an
+/// `[ Edit ]` — is the tree's (`view::shell::settings::Footer`), and its five
+/// recorded rectangles went with it. What was here summed the buttons' widths
+/// to decide which of them fit and then filed a rectangle per button for
+/// `SettingsLayout::hit_test` to compare a cell against; the rule survives,
+/// resolved against the width layout gives.
 fn render_footer(
     frame: &mut Frame,
     modal_area: Rect,
@@ -1946,284 +1955,13 @@ fn render_footer(
     layout: &mut SettingsLayout,
     vertical: bool,
 ) {
-    use super::layout::SettingsHit;
-    use super::state::FocusPanel;
-
     // Guard against too-small modal
     if modal_area.height < 4 || modal_area.width < 10 {
         return;
     }
-
     if vertical {
         render_footer_vertical(frame, modal_area, state, theme, layout);
-        return;
     }
-
-    let footer_y = modal_area.y + modal_area.height.saturating_sub(2);
-    let footer_width = modal_area.width.saturating_sub(2);
-    let footer_area = Rect::new(modal_area.x + 1, footer_y, footer_width, 1);
-
-    // Draw separator line (only if we have room above footer)
-    if footer_y > modal_area.y {
-        let sep_y = footer_y.saturating_sub(1);
-        let sep_area = Rect::new(modal_area.x + 1, sep_y, footer_width, 1);
-        let sep_line: String = "─".repeat(sep_area.width as usize);
-        frame.render_widget(
-            Paragraph::new(sep_line).style(Style::default().fg(theme.split_separator_fg)),
-            sep_area,
-        );
-    }
-
-    // Check if footer has keyboard focus
-    let footer_focused = state.focus_panel() == FocusPanel::Footer;
-
-    // Determine hover and keyboard focus states for buttons
-    // Button indices: 0=Layer, 1=Reset, 2=Save, 3=Cancel, 4=Edit (on left, for advanced users)
-    let layer_hovered = matches!(state.hover_hit, Some(SettingsHit::LayerButton));
-    let reset_hovered = matches!(state.hover_hit, Some(SettingsHit::ResetButton));
-    let save_hovered = matches!(state.hover_hit, Some(SettingsHit::SaveButton));
-    let cancel_hovered = matches!(state.hover_hit, Some(SettingsHit::CancelButton));
-    let edit_hovered = matches!(state.hover_hit, Some(SettingsHit::EditButton));
-
-    let layer_focused = footer_focused && state.footer_button_index == 0;
-    let reset_focused = footer_focused && state.footer_button_index == 1;
-    let save_focused = footer_focused && state.footer_button_index == 2;
-    let cancel_focused = footer_focused && state.footer_button_index == 3;
-    let edit_focused = footer_focused && state.footer_button_index == 4;
-
-    // Get translated button labels
-    // Use "Inherit" label instead of "Reset" when current item is nullable and explicitly set
-    let current_is_nullable_set = state
-        .current_item()
-        .map(|item| item.nullable && !item.is_null)
-        .unwrap_or(false);
-    let save_label = t!("settings.btn_save").to_string();
-    let cancel_label = t!("settings.btn_cancel").to_string();
-    let reset_label = if current_is_nullable_set {
-        t!("settings.btn_inherit").to_string()
-    } else {
-        t!("settings.btn_reset").to_string()
-    };
-    let edit_label = t!("settings.btn_edit").to_string();
-
-    // Build button text with brackets (layer button uses layer name)
-    let layer_text = format!("[ {} ]", state.target_layer_name());
-    let layer_text_focused = format!(">[ {} ]", state.target_layer_name());
-    let save_text = format!("[ {} ]", save_label);
-    let save_text_focused = format!(">[ {} ]", save_label);
-    let cancel_text = format!("[ {} ]", cancel_label);
-    let cancel_text_focused = format!(">[ {} ]", cancel_label);
-    let reset_text = format!("[ {} ]", reset_label);
-    let reset_text_focused = format!(">[ {} ]", reset_label);
-    let edit_text = format!("[ {} ]", edit_label);
-    let edit_text_focused = format!(">[ {} ]", edit_label);
-
-    // Calculate button widths using display width (handles unicode)
-    let cancel_width = str_width(if cancel_focused {
-        &cancel_text_focused
-    } else {
-        &cancel_text
-    }) as u16;
-    let save_width = str_width(if save_focused {
-        &save_text_focused
-    } else {
-        &save_text
-    }) as u16;
-    let reset_width = str_width(if reset_focused {
-        &reset_text_focused
-    } else {
-        &reset_text
-    }) as u16;
-    let layer_width = str_width(if layer_focused {
-        &layer_text_focused
-    } else {
-        &layer_text
-    }) as u16;
-    let edit_width = str_width(if edit_focused {
-        &edit_text_focused
-    } else {
-        &edit_text
-    }) as u16;
-    let gap: u16 = 2;
-
-    // Calculate total width needed for all buttons
-    // Minimum needed: Save + Cancel
-    let min_buttons_width = save_width + gap + cancel_width;
-    // Full buttons: Edit + Layer + Reset + Save + Cancel with gaps
-    let all_buttons_width =
-        edit_width + gap + layer_width + gap + reset_width + gap + save_width + gap + cancel_width;
-
-    // Determine which buttons to show based on available width
-    let available = footer_area.width;
-    let show_edit = available >= all_buttons_width;
-    let show_layer = available >= (layer_width + gap + reset_width + gap + min_buttons_width);
-    let show_reset = available >= (reset_width + gap + min_buttons_width);
-
-    // Calculate X positions using saturating_sub to prevent overflow
-    let cancel_x = footer_area
-        .x
-        .saturating_add(footer_area.width.saturating_sub(cancel_width));
-    let save_x = cancel_x.saturating_sub(save_width + gap);
-    let reset_x = if show_reset {
-        save_x.saturating_sub(reset_width + gap)
-    } else {
-        0
-    };
-    let layer_x = if show_layer {
-        reset_x.saturating_sub(layer_width + gap)
-    } else {
-        0
-    };
-    let edit_x = footer_area.x; // Left-aligned
-
-    // Render buttons using helper function
-    // Layer button (conditionally shown)
-    if show_layer {
-        let layer_area = Rect::new(layer_x, footer_y, layer_width, 1);
-        render_button(
-            frame,
-            layer_area,
-            &layer_text,
-            &layer_text_focused,
-            layer_focused,
-            layer_hovered,
-            theme,
-            false,
-        );
-        layout.layer_button = Some(layer_area);
-    }
-
-    // Reset button (conditionally shown)
-    if show_reset {
-        let reset_area = Rect::new(reset_x, footer_y, reset_width, 1);
-        render_button(
-            frame,
-            reset_area,
-            &reset_text,
-            &reset_text_focused,
-            reset_focused,
-            reset_hovered,
-            theme,
-            false,
-        );
-        layout.reset_button = Some(reset_area);
-    }
-
-    // Save button (always shown)
-    let save_area = Rect::new(save_x, footer_y, save_width, 1);
-    render_button(
-        frame,
-        save_area,
-        &save_text,
-        &save_text_focused,
-        save_focused,
-        save_hovered,
-        theme,
-        false,
-    );
-    layout.save_button = Some(save_area);
-
-    // Cancel button (always shown)
-    let cancel_area = Rect::new(cancel_x, footer_y, cancel_width, 1);
-    render_button(
-        frame,
-        cancel_area,
-        &cancel_text,
-        &cancel_text_focused,
-        cancel_focused,
-        cancel_hovered,
-        theme,
-        false,
-    );
-    layout.cancel_button = Some(cancel_area);
-
-    // Edit button (on left, for advanced users, conditionally shown)
-    if show_edit {
-        let edit_area = Rect::new(edit_x, footer_y, edit_width, 1);
-        render_button(
-            frame,
-            edit_area,
-            &edit_text,
-            &edit_text_focused,
-            edit_focused,
-            edit_hovered,
-            theme,
-            true, // dimmed for advanced option
-        );
-        layout.edit_button = Some(edit_area);
-    }
-
-    // Help text (between Edit button and main buttons)
-    // Calculate position based on which buttons are visible
-    let help_start_x = if show_edit {
-        edit_x + edit_width + 2
-    } else {
-        footer_area.x
-    };
-    let help_end_x = if show_layer {
-        layer_x
-    } else if show_reset {
-        reset_x
-    } else {
-        save_x
-    };
-    let help_width = help_end_x.saturating_sub(help_start_x + 1);
-
-    // Get translated help text
-    let help = if state.search_active {
-        t!("settings.help_search").to_string()
-    } else if footer_focused {
-        t!("settings.help_footer").to_string()
-    } else if state.is_editing_dual_list() {
-        // The generic "Enter:Edit" line is actively wrong once the
-        // two-column picker has the keyboard — Enter no longer starts
-        // an edit, and none of the keys that do move items appear in
-        // it.
-        t!("settings.help_duallist").to_string()
-    } else {
-        t!("settings.help_default").to_string()
-    };
-    // Render help text with reverse-video styling for key hints
-    // Parse "Key:Action  Key:Action" format
-    let help_line = build_keyhint_line(&help, theme);
-    frame.render_widget(
-        Paragraph::new(help_line),
-        Rect::new(help_start_x, footer_y, help_width, 1),
-    );
-}
-
-/// Build a Line with reverse-video styled key hints from "Key:Action  Key:Action" format
-fn build_keyhint_line<'a>(text: &str, theme: &Theme) -> Line<'a> {
-    let key_style = Style::default()
-        .fg(theme.popup_text_fg)
-        .bg(theme.split_separator_fg);
-    let desc_style = Style::default().fg(theme.line_number_fg);
-    let sep_style = Style::default().fg(theme.line_number_fg);
-
-    let mut spans: Vec<Span<'a>> = Vec::new();
-
-    // Split by double-space to get individual key hints
-    for (i, segment) in text.split("  ").enumerate() {
-        let segment = segment.trim();
-        if segment.is_empty() {
-            continue;
-        }
-        if i > 0 {
-            spans.push(Span::styled(" ", sep_style));
-        }
-        // Split by first ":" to separate key from description
-        if let Some(colon_pos) = segment.find(':') {
-            let key = &segment[..colon_pos];
-            let action = &segment[colon_pos + 1..];
-            spans.push(Span::styled(format!(" {} ", key), key_style));
-            spans.push(Span::styled(action.to_string(), desc_style));
-        } else {
-            // No colon - just render as text
-            spans.push(Span::styled(segment.to_string(), desc_style));
-        }
-    }
-
-    Line::from(spans)
 }
 
 /// Render footer with buttons stacked vertically (for narrow mode)

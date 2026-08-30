@@ -374,6 +374,10 @@ pub enum UiFact {
     SettingsDialog(super::settings::Target),
     /// The pointer entered or left one of them.
     SettingsDialogHover(Option<super::settings::Target>),
+    /// A press on one of the settings modal's footer buttons.
+    SettingsButton(super::settings::Button),
+    /// The pointer entered or left one of them.
+    SettingsButtonHover(Option<super::settings::Button>),
 }
 
 /// What a menu-bar navigation step does to the open chain.

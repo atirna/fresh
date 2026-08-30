@@ -2179,7 +2179,59 @@ impl Editor {
                 }
             }
         };
+        // The footer, in the wide layout only: the narrow one is seven rows
+        // rather than two and stacks its buttons, which has not crossed. The
+        // box's own width decides, the way `inner_area.width < 60` did.
+        let wide = self
+            .panel_rect(&st::key())
+            .is_some_and(|r| r.width.saturating_sub(2) >= 60);
+        let footer = wide.then(|| {
+            let nullable_set = s
+                .current_item()
+                .map(|i| i.nullable && !i.is_null)
+                .unwrap_or(false);
+            let focused = (s.focus_panel() == crate::view::settings::state::FocusPanel::Footer)
+                .then(|| match s.footer_button_index {
+                    0 => st::Button::Layer,
+                    1 => st::Button::Reset,
+                    2 => st::Button::Save,
+                    3 => st::Button::Cancel,
+                    _ => st::Button::Edit,
+                });
+            use crate::view::settings::layout::SettingsHit;
+            st::Footer {
+                layer: format!("[ {} ]", s.target_layer_name()),
+                reset: format!(
+                    "[ {} ]",
+                    match nullable_set {
+                        true => t!("settings.btn_inherit").to_string(),
+                        false => t!("settings.btn_reset").to_string(),
+                    }
+                ),
+                save: format!("[ {} ]", t!("settings.btn_save")),
+                cancel: format!("[ {} ]", t!("settings.btn_cancel")),
+                edit: format!("[ {} ]", t!("settings.btn_edit")),
+                help: match (s.search_active, focused.is_some(), s.is_editing_dual_list()) {
+                    (true, _, _) => t!("settings.help_search").to_string(),
+                    (_, true, _) => t!("settings.help_footer").to_string(),
+                    // "Enter:Edit" is actively wrong once the two-column
+                    // picker has the keyboard.
+                    (_, _, true) => t!("settings.help_duallist").to_string(),
+                    _ => t!("settings.help_default").to_string(),
+                },
+                focused,
+                hovered: match s.hover_hit {
+                    Some(SettingsHit::LayerButton) => Some(st::Button::Layer),
+                    Some(SettingsHit::ResetButton) => Some(st::Button::Reset),
+                    Some(SettingsHit::SaveButton) => Some(st::Button::Save),
+                    Some(SettingsHit::CancelButton) => Some(st::Button::Cancel),
+                    Some(SettingsHit::EditButton) => Some(st::Button::Edit),
+                    _ => None,
+                },
+            }
+        });
         Some(st::Chrome {
+            footer,
             title: match s.has_changes() {
                 true => format!(" Settings [{}] • (modified) ", s.target_layer_name()),
                 false => format!(" Settings [{}] ", s.target_layer_name()),

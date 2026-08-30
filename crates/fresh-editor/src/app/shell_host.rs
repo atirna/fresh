@@ -1468,6 +1468,55 @@ impl Editor {
                     };
                 }
             }
+            // **The footer's five buttons.** Each was a rectangle the painter
+            // filed and `SettingsLayout::hit_test` compared a cell against.
+            UiFact::SettingsButton(b) => {
+                use crate::view::shell::settings::Button;
+                match b {
+                    Button::Layer => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            s.cycle_target_layer();
+                        }
+                    }
+                    Button::Save => self.close_settings(true),
+                    Button::Cancel => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            match s.has_changes() {
+                                true => {
+                                    s.showing_confirm_dialog = true;
+                                    s.confirm_dialog_selection = 0;
+                                }
+                                false => s.visible = false,
+                            }
+                        }
+                    }
+                    Button::Reset => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            s.reset_current_to_default();
+                        }
+                    }
+                    Button::Edit => {
+                        if let Some(layer) = self.settings_state.as_ref().map(|s| s.target_layer) {
+                            // Best-effort: the file may not exist yet.
+                            #[allow(clippy::let_underscore_must_use)]
+                            let _ = self.open_config_file(layer);
+                        }
+                    }
+                }
+            }
+            UiFact::SettingsButtonHover(b) => {
+                use crate::view::settings::layout::SettingsHit;
+                use crate::view::shell::settings::Button;
+                if let Some(s) = self.settings_state.as_mut() {
+                    s.hover_hit = b.map(|b| match b {
+                        Button::Layer => SettingsHit::LayerButton,
+                        Button::Reset => SettingsHit::ResetButton,
+                        Button::Save => SettingsHit::SaveButton,
+                        Button::Cancel => SettingsHit::CancelButton,
+                        Button::Edit => SettingsHit::EditButton,
+                    });
+                }
+            }
             UiFact::KeybindingSearch => {
                 if let Some(e) = self.keybinding_editor.as_mut() {
                     e.start_search();
