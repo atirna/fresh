@@ -182,6 +182,10 @@ pub struct Frame {
     /// The full-screen modal that has the pointer, if any. At most one: the
     /// capture band this replaces stopped at the first taker in rank order.
     pub modal: Option<super::modal::Slot>,
+    /// Whether the settings dialog is open. As `keybinding`: the tree carries
+    /// the box its twenty-odd recorded rectangles are measured from, and
+    /// nothing else of it yet.
+    pub settings: bool,
     /// Whether the keybinding editor is open. Its *interior* is still a
     /// painter's — a table with its own scrollbar and ten recorded
     /// rectangles — so what the tree carries is the box those rectangles are
@@ -235,6 +239,7 @@ impl Default for Frame {
             browser: None,
             trust: None,
             modal: None,
+            settings: false,
             keybinding: false,
             calibration: None,
             splits: None,
@@ -491,6 +496,13 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     let frame = match f.modal {
         Some(slot) => frame.child(super::modal::layer(slot)),
         None => frame,
+    };
+    // The settings dialog's box. Like the keybinding editor's below it, this
+    // contributes a rectangle and nothing else — `PointerMode::Ignore`, so the
+    // modal slot behind it is still the one asked.
+    let frame = match f.settings {
+        true => frame.child(super::settings::layer()),
+        false => frame,
     };
     // The keybinding editor's box, over the modal slot that routes its
     // pointer — the same order and for the same reason as the floating panel

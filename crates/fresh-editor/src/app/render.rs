@@ -2939,6 +2939,7 @@ impl Editor {
             browser,
             trust,
             modal,
+            settings: self.settings_state.as_ref().is_some_and(|s| s.visible),
             keybinding: self.keybinding_editor.is_some(),
             calibration: self.calibration_description(),
             splits,
@@ -3386,13 +3387,29 @@ impl Editor {
                 }
             } else if settings_state.visible {
                 settings_state.update_focus_states();
-                let settings_layout = crate::view::settings::render_settings(
-                    frame,
-                    area,
-                    settings_state,
-                    &self.theme.read().unwrap(),
-                );
-                self.active_chrome_mut().settings_layout = Some(settings_layout);
+            }
+        }
+        // **The box is the tree's.** `view::shell::settings` places it —
+        // ninety percent of the chrome area, capped at 160, centred beside the
+        // dock — and this reads the answer. The centring arithmetic here added
+        // `area.x` back by hand, and the comment beside it said why: without
+        // it the modal landed at the frame origin and the dock over-drew its
+        // left edge.
+        if draw_settings {
+            let modal_area = self.panel_rect(&crate::view::shell::settings::key());
+            let open = self.settings_state.as_ref().is_some_and(|s| s.visible);
+            if open {
+                let theme = self.theme.read().unwrap().clone();
+                if let Some(ref mut settings_state) = self.settings_state {
+                    let settings_layout = crate::view::settings::render_settings(
+                        frame,
+                        area,
+                        modal_area.unwrap_or(ratatui::layout::Rect::ZERO),
+                        settings_state,
+                        &theme,
+                    );
+                    self.active_chrome_mut().settings_layout = Some(settings_layout);
+                }
             }
         }
 

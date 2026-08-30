@@ -66,14 +66,27 @@ fn truncate_display_width_with_ellipsis(s: &str, max_width: usize) -> String {
 }
 
 /// Render the settings modal
+/// Render the settings dialog into the box the tree placed.
+///
+/// `modal_area` used to be computed here — ninety percent of `area`, capped at
+/// 160 columns, centred with `area.x` and `area.y` added back so the dock did
+/// not over-draw its left edge — and then filed in `SettingsLayout::modal_area`
+/// for the mouse handler to measure every other rectangle from. It is
+/// `view::shell::settings`'s now, and this is handed the answer.
+///
+/// `area` is still needed for one thing: the too-small message, which is not
+/// the dialog and does not go where the dialog would have.
 pub fn render_settings(
     frame: &mut Frame,
     area: Rect,
+    modal_area: Rect,
     state: &mut SettingsState,
     theme: &Theme,
 ) -> SettingsLayout {
-    // Minimum size guard — prevent panics from zero-sized layout arithmetic
-    if area.width < 40 || area.height < 10 {
+    // Minimum size guard — prevent panics from zero-sized layout arithmetic.
+    // The tree applies the same guard by placing no box; this is what it looks
+    // like when it did.
+    if modal_area.width == 0 || modal_area.height == 0 {
         let msg = "[Terminal too small for settings]";
         let x = area.x + area.width.saturating_sub(msg.len() as u16) / 2;
         let y = area.y + area.height / 2;
@@ -85,19 +98,6 @@ pub fn render_settings(
         }
         return SettingsLayout::new(Rect::ZERO);
     }
-
-    // Calculate modal size (90% of screen width, 90% height to fill most of available space)
-    let modal_width = (area.width * 90 / 100).min(160);
-    let modal_height = area.height * 90 / 100;
-    // Offsets must be ABSOLUTE — `area.x` / `area.y` are not assumed to be
-    // zero (this is the full frame today, but the modal must centre in
-    // whatever rect it is handed). Centring with bare `area.width / 2` placed
-    // the modal at the FRAME origin, where the dock then over-drew its left
-    // edge — hiding the title bar and clipping the rounded top-left corner.
-    let modal_x = area.x + (area.width.saturating_sub(modal_width)) / 2;
-    let modal_y = area.y + (area.height.saturating_sub(modal_height)) / 2;
-
-    let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
 
     // Clear the modal area and draw border
     frame.render_widget(Clear, modal_area);
