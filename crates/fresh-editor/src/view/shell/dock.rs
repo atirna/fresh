@@ -92,17 +92,14 @@ fn column() -> Node<UiMsg> {
 /// One transparent column of the panel's width with the grip in its last cell.
 ///
 /// The grip paints nothing: the column's right border is the legacy painter's,
-/// and this only claims the presses that land on it.
+/// and this only claims the pointer that lands on it — and then keeps it,
+/// through every move and the release, because a resize drag leaves the grip's
+/// own cell on its first step.
 fn grip_strip() -> Node<UiMsg> {
-    let grip = gesture(row()).w(Sizing::Cells(1)).key(grip_key()).on(
-        GestureKind::Press,
-        Rc::new(|e: &Event| {
-            if e.button != MouseButton::Left {
-                return None;
-            }
-            e.stop();
-            Some(UiMsg::Ui(UiFact::DockResizeBegin))
-        }),
+    let grip = super::grip::draggable(
+        super::msg::Grip::DockWidth,
+        row().w(Sizing::Cells(1)).key(grip_key()),
+        Rc::new(|_: &Event| Some(UiMsg::Ui(UiFact::DockResizeBegin))),
     );
     row()
         .pointer_mode(PointerMode::Transparent)

@@ -222,24 +222,18 @@ fn grip_ink(hovered: bool) -> Node<UiMsg> {
 }
 
 fn grip_strip(e: &Explorer) -> Node<UiMsg> {
-    let grip = gesture(grip_ink(e.grip_hovered))
-        .w(Sizing::Cells(1))
-        .key(grip_key())
-        .on(
-            GestureKind::Press,
-            Rc::new(|e: &Event| {
-                if e.button != fresh_ui::MouseButton::Left {
-                    return None;
-                }
-                e.stop();
-                Some(UiMsg::Ui(UiFact::ExplorerResizeBegin {
-                    x: e.pos.x.max(0) as u16,
-                    y: e.pos.y.max(0) as u16,
-                }))
-            }),
-        )
-        .on_enter(hover_msg(Some(HoverTarget::FileExplorerBorder)))
-        .on_leave(hover_msg(None));
+    let grip = super::grip::draggable(
+        super::msg::Grip::ExplorerWidth,
+        grip_ink(e.grip_hovered).w(Sizing::Cells(1)).key(grip_key()),
+        Rc::new(|e: &Event| {
+            Some(UiMsg::Ui(UiFact::ExplorerResizeBegin {
+                x: e.pos.x.max(0) as u16,
+                y: e.pos.y.max(0) as u16,
+            }))
+        }),
+    )
+    .on_enter(hover_msg(Some(HoverTarget::FileExplorerBorder)))
+    .on_leave(hover_msg(None));
     // A one-cell tail below the strip, so the grip spans the panel's *wall* and
     // stops above `┘`. The corners belong to the frame that drew them: the old
     // post-pass walked `0..explorer_area.height` and recoloured both of them,
