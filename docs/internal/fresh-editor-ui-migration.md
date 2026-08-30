@@ -616,8 +616,8 @@ So a marker channel on `Draw::Scrollbar` would carry a column the editor compute
 | ~~**F.5**~~ **Done** ([#3108](https://github.com/sinelaw/fresh/pull/3108)). | **`Persisted` / `Store` / `PERSISTENCE_SCOPE` had zero tests and zero uses in the library**, and the demo under `tests/support/demo/` is single-document. 0.3 and 0.5 both rest on behaviour nobody has run. | A multi-document scenario in the demo — two documents, a switch, per-document incidental state that survives it — and unit tests for the four things that are currently assumptions: that `teardown` fires when a *key change* discards a subtree (not only on `Ui` drop); that it fires before the replacement's `attach`; that **deferred disposal** does not reorder those two; and that a `Persisted` under the wrong scope is detectable. | Adopting it on the strength of the doc comment. It is a good doc comment. |
 | ~~**F.4**~~ **Done** ([#3108](https://github.com/sinelaw/fresh/pull/3108)). | Nothing tied an **identity boundary** to a **persistence scope**. A subtree can be keyed without providing a `PersistenceScope`, or scoped without a key, and both mistakes are silent. | A single primitive that does both — `scope(id, child)` — so the invariant cannot be half-declared. Goal 2's spirit: derive it from structure rather than ask every author to remember two things that are always used together. | Documenting the pairing instead. 0.5 is the first place it matters and it will not be the last. |
 
-**Two library bugs the migration surfaced, both fixed** — recorded because
-neither presents as the thing it is, and the second was hiding behind the
+**Three library bugs the migration surfaced, all fixed** — recorded because
+none presents as the thing it is, and the second was hiding behind the
 first.
 
 * **A keyboard-owning layer did not confine focus traversal.** `focus_scope`'s
@@ -633,10 +633,22 @@ first.
   one dismissing layer is the editor's completion popup, which is the whole of
   "Left/Right are swallowed" and "Shift+Tab is silently consumed".
 
-Neither looks like a focus bug from the editor: both present as "this modal
-eats arrow keys and Tab". The tell for the second was that after the first was
-fixed the scope was correctly `[the one focusable]` and the key was *still*
-claimed. Conformance states both.
+* **`Draw::scrollbar_thumb` floored the thumb's length.** `(t*t)/content` is
+  integer division, so a window showing 28 of 434 rows — 6.5% of a 28-cell
+  track — got a thumb of one cell claiming 3.6%. The editor's own scrollbar
+  had always *ceiled* the same ratio, so this is one of the few places the
+  library was simply less correct than what it replaced. It presents as a
+  scroll bug rather than a paint bug: a one-cell thumb is the hardest thing
+  on the bar to hit, so the row the user aims at lands on the track and
+  page-jumps the viewport. `hit.rs` hit-tests through the same function, so
+  paint and hit were consistently one row short together — which is why no
+  test caught a *mismatch*. Now `div_ceil`: the thumb never claims less of
+  the track than the window actually shows.
+
+The first two do not look like focus bugs from the editor: both present as
+"this modal eats arrow keys and Tab". The tell for the second was that after
+the first was fixed the scope was correctly `[the one focusable]` and the key
+was *still* claimed. Conformance states all three.
 
 ### G. Not a gap
 
