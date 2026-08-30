@@ -4289,48 +4289,45 @@ impl Editor {
     /// the bindings instead puts them on the popup, where nothing is in front
     /// of them.
     fn popup_keys(&self) -> crate::view::shell::popup::Keys {
-        use crate::input::keybindings::{Action, KeyContext};
         use crate::view::popup::PopupKind;
         let kind = self.topmost_popup_kind().unwrap_or(PopupKind::Action);
         let mut bound = Vec::new();
         if let Ok(kb) = self.keybindings.read() {
-            // The `completion` section first, so a key bound in both wins
-            // there — `completion_popup_action` ran ahead of the popup's own
-            // handler for the same reason.
-            let sections = match kind {
-                PopupKind::Completion => vec![KeyContext::Completion, KeyContext::Popup],
-                _ => vec![KeyContext::Popup],
-            };
-            for ctx in sections {
-                for ((code, mods), action) in kb.bindings_in_context(ctx) {
-                    // Only the actions that are *about* the popup. A binding
-                    // for anything else in these sections is the base layer's
-                    // and reaches it the ordinary way.
-                    if !matches!(
-                        action,
-                        Action::PopupConfirm
-                            | Action::PopupCancel
-                            | Action::PopupFocus
-                            | Action::CompletionAccept
-                            | Action::CompletionDismiss
-                    ) {
-                        continue;
-                    }
-                    let Some(code) = crate::view::shell::input::key_code(code) else {
-                        continue;
-                    };
-                    let key = fresh_ui::KeyPress {
-                        code,
-                        mods: crate::view::shell::input::mods(mods),
-                    };
-                    if bound
-                        .iter()
-                        .any(|(k, _): &(fresh_ui::KeyPress, _)| *k == key)
-                    {
-                        continue;
-                    }
-                    bound.push((key, action));
+            // **One section per kind, and only the actions that section is
+            // for.** A completion list reads `completion` and takes only
+            // accept and dismiss from it; every other kind reads `popup`.
+            //
+            // Adding `popup` to the completion list's sections looked
+            // harmless and was not: that section binds Enter to
+            // `popup_confirm`, so Enter over a completion list accepted the
+            // selected row — and Enter there means "close this and insert a
+            // newline", which is the whole reason the layer declares no
+            // `Confirm` intent. `completion_popup_action` never consulted
+            // `popup` for exactly this reason ("only `CompletionAccept` and
+            // `CompletionDismiss` are recognised here"), and dropping that
+            // restriction put the confirm back in through the side door.
+            let (ctx, wanted) = crate::view::shell::popup::key_section(kind);
+            for ((code, mods), action) in kb.bindings_in_context(ctx) {
+                // Only the actions that section is *for*. A binding for
+                // anything else in it is the base layer's and reaches it the
+                // ordinary way.
+                if !wanted.contains(&action) {
+                    continue;
                 }
+                let Some(code) = crate::view::shell::input::key_code(code) else {
+                    continue;
+                };
+                let key = fresh_ui::KeyPress {
+                    code,
+                    mods: crate::view::shell::input::mods(mods),
+                };
+                if bound
+                    .iter()
+                    .any(|(k, _): &(fresh_ui::KeyPress, _)| *k == key)
+                {
+                    continue;
+                }
+                bound.push((key, action));
             }
         }
         crate::view::shell::popup::Keys { kind, bound }
