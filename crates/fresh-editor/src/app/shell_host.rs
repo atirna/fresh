@@ -1470,6 +1470,40 @@ impl Editor {
             }
             // **The footer's five buttons.** Each was a rectangle the painter
             // filed and `SettingsLayout::hit_test` compared a cell against.
+            // The category tree's three answers. Each body is the arm
+            // `handle_settings_mouse` ran for the matching `SettingsHit`;
+            // what is gone is the five families of rectangle that decided
+            // *which* arm, and the walk over them.
+            UiFact::SettingsCategory(idx) => {
+                use crate::view::settings::state::FocusPanel;
+                if let Some(s) = self.settings_state.as_mut() {
+                    s.focus.set(FocusPanel::Categories);
+                    s.selected_category = idx;
+                    s.selected_item = 0;
+                    s.scroll_panel = crate::view::ui::ScrollablePanel::new();
+                    s.sub_focus = None;
+                    // A click lands the cursor on the category row itself,
+                    // even after auto-expand reveals its sections — which is
+                    // where keyboard Up/Down arrives too.
+                    s.tree_cursor_section = None;
+                    s.auto_expand_current_category();
+                }
+            }
+            UiFact::SettingsCategorySection(cat, section) => {
+                use crate::view::settings::state::FocusPanel;
+                if let Some(s) = self.settings_state.as_mut() {
+                    s.jump_to_section(cat, section);
+                    // `jump_to_section` also serves search and the keyboard,
+                    // where moving focus to the body is right; a click in the
+                    // tree keeps the tree focused.
+                    s.focus.set(FocusPanel::Categories);
+                }
+            }
+            UiFact::SettingsCategoryDisclosure(idx) => {
+                if let Some(s) = self.settings_state.as_mut() {
+                    s.toggle_category_expanded(idx);
+                }
+            }
             UiFact::SettingsButton(b) => {
                 use crate::view::shell::settings::Button;
                 match b {

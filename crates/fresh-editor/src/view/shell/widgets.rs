@@ -2303,7 +2303,7 @@ mod tests {
         const H: usize = 64;
         let mut grid: Vec<Vec<char>> = vec![vec![' '; WIDTH as usize]; H];
         let mut bottom: Option<usize> = None;
-        let mut put =
+        let put =
             |grid: &mut Vec<Vec<char>>, bottom: &mut Option<usize>, x: i32, y: i32, c: char| {
                 if x < 0 || y < 0 || y as usize >= H || x >= WIDTH as i32 {
                     return;

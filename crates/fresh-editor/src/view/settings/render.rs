@@ -80,6 +80,7 @@ pub fn render_settings(
     frame: &mut Frame,
     area: Rect,
     modal_area: Rect,
+    panel_area: Option<Rect>,
     state: &mut SettingsState,
     theme: &Theme,
 ) -> SettingsLayout {
@@ -158,7 +159,15 @@ pub fn render_settings(
         render_vertical_layout(frame, content_area, modal_area, state, theme, &mut layout);
     } else {
         // Horizontal layout: categories left, items right
-        render_horizontal_layout(frame, content_area, modal_area, state, theme, &mut layout);
+        render_horizontal_layout(
+            frame,
+            content_area,
+            modal_area,
+            panel_area,
+            state,
+            theme,
+            &mut layout,
+        );
     }
 
     // Determine the topmost dialog layer and apply dimming to layers below
@@ -214,6 +223,7 @@ fn render_horizontal_layout(
     frame: &mut Frame,
     content_area: Rect,
     modal_area: Rect,
+    panel: Option<Rect>,
     state: &mut SettingsState,
     theme: &Theme,
     layout: &mut SettingsLayout,
@@ -227,12 +237,14 @@ fn render_horizontal_layout(
     ])
     .split(content_area);
 
-    let categories_area = chunks[0];
     let divider_area = chunks[1];
-    let settings_area = chunks[2];
-
-    // Render category list (left panel)
-    render_categories(frame, categories_area, state, theme, layout);
+    // **The tree is the tree's** (`view::shell::settings::categories`): a
+    // `widgets::List` in the window it scrolls in, with the rows answering
+    // their own presses. `render_categories` and the five families of
+    // rectangle it filed are gone with it. What is left of the split here is
+    // the divider between the two panes and the fallback for the frame the
+    // description has not been laid out on yet.
+    let settings_area = panel.unwrap_or(chunks[2]);
 
     // Single straight vertical line dividing categories from settings.
     let divider_style = Style::default().fg(theme.split_separator_fg);
@@ -415,7 +427,7 @@ fn render_categories_horizontal(
 /// already relies on, so terminal font fallback can always supply
 /// them. The Nerd Font set is used only when `editor.nerd_font_icons`
 /// is enabled.
-fn category_icon(name: &str, nerd_fonts: bool) -> &'static str {
+pub fn category_icon(name: &str, nerd_fonts: bool) -> &'static str {
     let name = name.to_lowercase();
     if nerd_fonts {
         return match name.as_str() {
@@ -447,245 +459,6 @@ fn category_icon(name: &str, nerd_fonts: bool) -> &'static str {
         "warnings" => "\u{26a0} ",      // ⚠ warning sign
         "keybindings" => "\u{2328} ",   // ⌨ keyboard
         _ => "\u{2022} ",               // • bullet as fallback
-    }
-}
-
-/// Render the category tree (categories + expanded sections) in the left panel.
-///
-/// Rows are flattened by [`SettingsState::visible_tree`] and rendered through
-/// [`ScrollablePanel`], which handles partial-row clipping and the scrollbar.
-/// Per-row Rects are recorded on `layout` for hit-testing.
-fn render_categories(
-    frame: &mut Frame,
-    area: Rect,
-    state: &mut SettingsState,
-    theme: &Theme,
-    layout: &mut SettingsLayout,
-) {
-    use super::state::{FocusPanel, TreeRow};
-
-    layout.categories_panel_area = Some(area);
-
-    let rows = state.visible_tree();
-    state.categories_scroll.set_viewport(area.height);
-    state
-        .categories_scroll
-        .update_content_height(&rows, area.width);
-
-    let focus_panel = state.focus_panel();
-    let selected_category = state.selected_category;
-    // Where the keyboard cursor lives in the tree. `None` = on the
-    // category row; `Some(s_idx)` = on the s-th section row inside the
-    // currently-selected category. This is the single source of truth
-    // for the `>` indicator and the row-bg highlight.
-    let tree_cursor = state.tree_cursor_section;
-
-    // Snapshot the data each row needs so we don't hold a borrow on `state`
-    // through the render callback.
-    struct RowData {
-        chevron: &'static str,
-        is_expandable: bool,
-        is_selected: bool,
-        has_changes: bool,
-        indent_cols: u16,
-        is_category: bool,
-        is_plugin_category: bool,
-        cat_idx: Option<usize>,
-        section_idx: Option<usize>,
-        label: String,
-        icon: Option<&'static str>,
-    }
-    let nerd_fonts = state.nerd_font_icons_enabled();
-    let row_data: Vec<RowData> = rows
-        .iter()
-        .map(|row| match *row {
-            TreeRow::Category {
-                idx,
-                expandable,
-                expanded,
-            } => {
-                let page = &state.pages[idx];
-                RowData {
-                    chevron: if expandable {
-                        if expanded {
-                            "▼"
-                        } else {
-                            "▶"
-                        }
-                    } else {
-                        " "
-                    },
-                    is_expandable: expandable,
-                    // Category row is "selected" iff the keyboard cursor
-                    // is sitting on it (no section is the cursor target).
-                    is_selected: idx == selected_category && tree_cursor.is_none(),
-                    has_changes: state.page_has_pending_changes(idx),
-                    indent_cols: 0,
-                    is_category: true,
-                    is_plugin_category: page.name.starts_with("Plugin: "),
-                    cat_idx: Some(idx),
-                    section_idx: None,
-                    label: page.name.clone(),
-                    icon: Some(category_icon(&page.name, nerd_fonts)),
-                }
-            }
-            TreeRow::Section {
-                cat_idx,
-                section_idx,
-            } => {
-                let section = &state.pages[cat_idx].sections[section_idx];
-                // Section row is "selected" iff the explicit tree cursor
-                // points at it. The cursor follows the user's keyboard
-                // navigation AND syncs to body scroll (handled by the
-                // sync-on-scroll path), so this single check covers
-                // both keyboard and wheel-driven highlight updates.
-                let is_current = cat_idx == selected_category && tree_cursor == Some(section_idx);
-                RowData {
-                    chevron: " ",
-                    is_expandable: false,
-                    is_selected: is_current,
-                    has_changes: false,
-                    indent_cols: 4,
-                    is_category: false,
-                    is_plugin_category: false,
-                    cat_idx: Some(cat_idx),
-                    section_idx: Some(section_idx),
-                    label: section.name.clone(),
-                    icon: None,
-                }
-            }
-        })
-        .collect();
-
-    // Render through ScrollablePanel so we get scrollbar + clipping.
-    let panel_layout = state.categories_scroll.render(
-        frame,
-        area,
-        &rows,
-        |frame, info, row| {
-            // Find this row's snapshot. `rows` and `row_data` are 1:1 by index.
-            let idx = info.index;
-            let data = &row_data[idx];
-            let row_area = info.area;
-
-            // Only the cursor row paints a bg — no separate hover-bg
-            // path. Hover bg in addition to the cursor bg produced two
-            // visually-highlighted rows simultaneously (with two
-            // *different* colors, since hover and selection use
-            // different theme keys), which violates the single-cursor
-            // invariant. The OS mouse cursor itself is the user's
-            // "where am I" indicator; we don't need an in-app one.
-            let row_bg = if data.is_selected {
-                if focus_panel == FocusPanel::Categories {
-                    Some(theme.menu_highlight_bg)
-                } else {
-                    Some(theme.selection_bg)
-                }
-            } else {
-                None
-            };
-            if let Some(bg) = row_bg {
-                frame.render_widget(
-                    Paragraph::new(" ".repeat(row_area.width as usize))
-                        .style(Style::default().bg(bg)),
-                    row_area,
-                );
-            }
-
-            let fg = if data.is_selected {
-                if focus_panel == FocusPanel::Categories {
-                    theme.menu_highlight_fg
-                } else {
-                    theme.menu_fg
-                }
-            } else {
-                theme.popup_text_fg
-            };
-            let bg = row_bg.unwrap_or(theme.popup_bg);
-            let style = Style::default().fg(fg).bg(bg);
-
-            let mut spans: Vec<Span> = Vec::with_capacity(8);
-            // Selection indicator (">" when this row is the focused one in
-            // the categories panel) lives in col 0 before any indentation.
-            // The category-selection-indicator-visible test asserts on this.
-            let selected_marker = if data.is_selected && focus_panel == FocusPanel::Categories {
-                ">"
-            } else {
-                " "
-            };
-            spans.push(Span::styled(selected_marker.to_string(), style));
-            if data.indent_cols > 0 {
-                spans.push(Span::styled(" ".repeat(data.indent_cols as usize), style));
-            }
-            // Chevron occupies one column; followed by a space for breathing room.
-            spans.push(Span::styled(format!("{} ", data.chevron), style));
-            if data.has_changes {
-                spans.push(Span::styled(
-                    "● ",
-                    Style::default().fg(theme.menu_highlight_fg).bg(bg),
-                ));
-            } else {
-                spans.push(Span::styled("  ", style));
-            }
-            if let Some(icon) = data.icon {
-                spans.push(Span::styled(
-                    icon.to_string(),
-                    Style::default().fg(theme.popup_border_fg).bg(bg),
-                ));
-            } else {
-                spans.push(Span::styled(" ", style));
-            }
-            let label = if data.is_plugin_category {
-                let prefix_width: usize = spans
-                    .iter()
-                    .map(|span| str_width(span.content.as_ref()))
-                    .sum();
-                let label_width = row_area.width as usize;
-                let label_width = label_width.saturating_sub(prefix_width);
-                truncate_display_width_with_ellipsis(&data.label, label_width)
-            } else {
-                data.label.clone()
-            };
-            spans.push(Span::styled(label, style));
-
-            frame.render_widget(Paragraph::new(Line::from(spans)), row_area);
-
-            // Hand back the row identity so we can register hit-test areas
-            // after rendering.
-            (
-                row_area,
-                data.is_category,
-                data.is_expandable,
-                data.cat_idx,
-                data.section_idx,
-                data.indent_cols,
-                *row,
-            )
-        },
-        theme,
-    );
-
-    // Translate per-row Rects into hit-test entries.
-    for layout_info in panel_layout.item_layouts.iter() {
-        let (row_area, is_category, is_expandable, cat_idx, section_idx, indent_cols, _row) =
-            layout_info.layout;
-        if is_category {
-            if let Some(idx) = cat_idx {
-                layout.add_category(idx, row_area);
-                if is_expandable {
-                    // Chevron sits one column after the selection-indicator
-                    // marker plus any indent for nested rows.
-                    let chevron_x = row_area.x.saturating_add(1 + indent_cols);
-                    let chevron_area = Rect::new(chevron_x, row_area.y, 1, 1);
-                    layout.add_category_disclosure(idx, chevron_area);
-                }
-            }
-        } else if let (Some(c), Some(s)) = (cat_idx, section_idx) {
-            layout.add_section(c, s, row_area);
-        }
-    }
-    if let Some(scrollbar) = panel_layout.scrollbar_area {
-        layout.categories_scrollbar_area = Some(scrollbar);
     }
 }
 

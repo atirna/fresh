@@ -2270,8 +2270,73 @@ impl Editor {
                 },
             }
         });
+        // The category tree, in the wide layout and while no search is
+        // running: the narrow layout lays its categories as a horizontal
+        // strip, and a search replaces the whole body with its results.
+        //
+        // **And not while the entry-dialog stack is up**, which is the same
+        // rule `keybinding_table_description` states for its table: the stack
+        // is still the painter's, the tree is folded after every painter, so
+        // a described tree would be drawn *over* the dialog covering it. The
+        // five prompts that have crossed are layers and land the right way
+        // round; this one is under the dialog, so it waits for it.
+        let categories = (wide && !s.search_active && !s.showing_entry_dialog()).then(|| {
+            use crate::view::settings::state::{FocusPanel, TreeRow};
+            let nerd = s.nerd_font_icons_enabled();
+            let cursor = s.tree_cursor_section;
+            let rows: Vec<st::CatRow> = s
+                .visible_tree()
+                .iter()
+                .map(|r| match *r {
+                    TreeRow::Category {
+                        idx,
+                        expandable,
+                        expanded,
+                    } => {
+                        let page = &s.pages[idx];
+                        st::CatRow::Category {
+                            idx,
+                            chevron: match (expandable, expanded) {
+                                (false, _) => " ",
+                                (true, true) => "▼",
+                                (true, false) => "▶",
+                            },
+                            expandable,
+                            dirty: s.page_has_pending_changes(idx),
+                            icon: crate::view::settings::render::category_icon(&page.name, nerd),
+                            label: page.name.clone(),
+                            elide: page.name.starts_with("Plugin: "),
+                        }
+                    }
+                    TreeRow::Section {
+                        cat_idx,
+                        section_idx,
+                    } => st::CatRow::Section {
+                        cat: cat_idx,
+                        section: section_idx,
+                        label: s.pages[cat_idx].sections[section_idx].name.clone(),
+                    },
+                })
+                .collect();
+            // **One index, where the painter asked every row.** It compared
+            // `idx == selected_category && tree_cursor.is_none()` on a
+            // category and `cat_idx == selected_category && tree_cursor ==
+            // Some(section_idx)` on a section; the list wants the position.
+            let selected = rows.iter().position(|r| match r {
+                st::CatRow::Category { idx, .. } => *idx == s.selected_category && cursor.is_none(),
+                st::CatRow::Section { cat, section, .. } => {
+                    *cat == s.selected_category && cursor == Some(*section)
+                }
+            });
+            st::Categories {
+                rows,
+                selected,
+                focused: s.focus_panel() == FocusPanel::Categories,
+            }
+        });
         Some(st::Chrome {
             footer,
+            categories,
             title: match s.has_changes() {
                 true => format!(" Settings [{}] • (modified) ", s.target_layer_name()),
                 false => format!(" Settings [{}] ", s.target_layer_name()),
@@ -4142,6 +4207,17 @@ impl Editor {
                 settings_state.update_focus_states();
             }
         }
+        // The page a `PgUp` moves the category cursor by: the tree's own
+        // height, read from the box the tree placed. It was
+        // `categories_scroll.set_viewport(area.height)`, filed by the painter
+        // as it drew the rows — so the page and the window it pages through
+        // came from two statements of the same rectangle.
+        if let (Some(r), Some(s)) = (
+            self.panel_rect(&crate::view::shell::settings::categories_key()),
+            self.settings_state.as_mut(),
+        ) {
+            s.categories_scroll.scroll.viewport = r.height;
+        }
         // **The box is the tree's.** `view::shell::settings` places it —
         // ninety percent of the chrome area, capped at 160, centred beside the
         // dock — and this reads the answer. The centring arithmetic here added
@@ -4150,6 +4226,10 @@ impl Editor {
         // left edge.
         if draw_settings {
             let modal_area = self.panel_rect(&crate::view::shell::settings::key());
+            // The body band right of the divider — the tree lays the three
+            // columns out, so the panel's rectangle is read rather than split
+            // for a second time. See `settings::panel_key`.
+            let panel_area = self.panel_rect(&crate::view::shell::settings::panel_key());
             let open = self.settings_state.as_ref().is_some_and(|s| s.visible);
             if open {
                 let theme = self.theme.read().unwrap().clone();
@@ -4158,6 +4238,7 @@ impl Editor {
                         frame,
                         area,
                         modal_area.unwrap_or(ratatui::layout::Rect::ZERO),
+                        panel_area,
                         settings_state,
                         &theme,
                     );
