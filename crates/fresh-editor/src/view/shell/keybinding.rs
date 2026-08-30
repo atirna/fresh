@@ -19,7 +19,7 @@
 //! than geometry recorded from a paint. `view::shell::calibration` does the
 //! same thing for the same reason.
 
-use fresh_ui::{layout_reader, row, Align, Anchor, LayoutInfo, Modality, Node, Place, Sizing};
+use fresh_ui::{layout_reader, row, Align, Anchor, LayoutInfo, Node, Place, PointerMode, Sizing};
 
 use super::msg::UiMsg;
 
@@ -50,21 +50,40 @@ pub fn fit(info: LayoutInfo) -> (u16, u16) {
     (width, height)
 }
 
-/// The editor's box as a layer: centred beside the dock, and exclusive.
+/// The editor's box as a layer: centred beside the dock, and **invisible to
+/// the pointer**.
 ///
 /// It paints nothing — the interior still does, and a layer is in the overlay
 /// band, so anything drawn here would land on top of the painter that owns the
 /// surface. What it contributes is the rectangle, which the painter reads back
-/// instead of computing, and the claim.
+/// instead of computing.
+///
+/// **And only the rectangle.** `hit_paths` returns the first layer with any
+/// path at the point, so a box that merely *existed* over the modal slot would
+/// take every press inside itself and the slot behind it — the one that routes
+/// to `handle_keybinding_editor_mouse` — would never be asked. That is not a
+/// missing handler, it is a surface that swallows every click in the editor it
+/// is standing in for. `PointerMode::Ignore` takes the subtree out of
+/// hit-testing entirely, which is what "a rectangle, not a surface" means.
+///
+/// The exclusivity is the slot's, not this layer's, for the same reason: two
+/// claims to the same modality is one too many, and the slot is the one that
+/// carries the routing.
 pub fn layer() -> Node<UiMsg> {
     fresh_ui::layer()
         .within(super::frame::chrome_key())
         .anchor(Anchor::Screen(Align::Center))
         .place(Place::Over)
-        .modality(Modality::Exclusive)
+        // On the layer, not only on the box inside it: the layer node is a box
+        // of its own and would produce the path by itself.
+        .pointer_mode(PointerMode::Ignore)
         .child(layout_reader(|info: LayoutInfo| {
             let (w, h) = fit(info);
-            row().w(Sizing::Cells(w)).h(Sizing::Cells(h)).key(key())
+            row()
+                .w(Sizing::Cells(w))
+                .h(Sizing::Cells(h))
+                .pointer_mode(PointerMode::Ignore)
+                .key(key())
         }))
 }
 
@@ -136,16 +155,71 @@ mod tests {
         );
     }
 
-    /// Nothing behind it is interactive: the modal's capture band is
-    /// `Modality::Exclusive` here.
+    /// **The box is a rectangle, not a surface.** Its interior is still the
+    /// painter's — a table, a search bar, three dialogs, all hit-tested
+    /// against rectangles it records — so a press inside it has to reach the
+    /// modal slot that routes to `handle_keybinding_editor_mouse`. A layer
+    /// that answered would be the first one with a path at the point and the
+    /// slot behind it would never be asked, which is a surface that swallows
+    /// every click in the editor it is standing in for.
     #[test]
-    fn nothing_behind_the_box_takes_a_press() {
-        let mut ui = laid_out(200, 60, None);
+    fn a_press_inside_the_box_reaches_the_modal_router() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            frame_tree(Frame {
+                keybinding: true,
+                modal: Some(crate::view::shell::modal::Slot::KeybindingEditor),
+                menu_bar: false,
+                status_bar: false,
+                ..Frame::default()
+            }),
+            Size::new(200, 60),
+        );
+        let r = ui.rect_of(ui.find_by_key(&key()).expect("the box"));
+        let got = ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(r.x + 4, r.y + 4),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        ));
+        assert!(
+            got.msgs.iter().any(|m| matches!(
+                m,
+                UiMsg::Ui(crate::view::shell::msg::UiFact::ModalPointer(
+                    crate::view::shell::modal::Slot::KeybindingEditor
+                ))
+            )),
+            "the slot behind it answers: {:?}",
+            got.msgs
+        );
+    }
+
+    /// And a press *outside* the box is the modal's too — the capture band
+    /// consumed everything, and `Modality::Exclusive` on the slot is that.
+    #[test]
+    fn a_press_outside_the_box_is_still_the_modals() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            frame_tree(Frame {
+                keybinding: true,
+                modal: Some(crate::view::shell::modal::Slot::KeybindingEditor),
+                menu_bar: false,
+                status_bar: false,
+                ..Frame::default()
+            }),
+            Size::new(200, 60),
+        );
         let got = ui.dispatch(fresh_ui::Input::press(
             fresh_ui::Point::new(2, 2),
             fresh_ui::MouseButton::Left,
             fresh_ui::Mods::NONE,
         ));
-        assert!(got.msgs.is_empty(), "{:?}", got.msgs);
+        assert!(
+            got.msgs.iter().any(|m| matches!(
+                m,
+                UiMsg::Ui(crate::view::shell::msg::UiFact::ModalPointer(_))
+            )),
+            "consumed by the modal: {:?}",
+            got.msgs
+        );
     }
 }
