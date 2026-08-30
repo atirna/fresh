@@ -196,7 +196,7 @@ provided at is the scope they belong to.
 |---|---|---|---|
 | A.1 | ~~`context_menu`~~, ~~`menu`~~, ~~`popups`~~ done; `base` and `prompt` still implement `on_layer_key`. | The surface declares `focusable()` / `focus_scope()`; its bindings ride down as `Shortcut { key, intent }` data and the library's Shortcuts → Intents → Actions chain resolves them. **The menu closed the gap that kept a surface half-migrated**: its navigation had been intents since decision 1, but a whole input handler stayed alive to *swallow* the keys it declined, because `Modality` was one knob for two channels and the chain could not take the keyboard without taking the pointer from the bar it hangs off. `Modality::Keyboard` says the one without the other; `blocks_pointer` and `owns_keyboard` are what the framework now asks, per channel, at each site. **The popups then needed the opposite** — a layer that owns the keyboard and can still step out of the way of one key — which is `Dismiss::passing_through` beating the modal claim, and is what a completion list's Enter has always meant. `view/ui/menu_input.rs`, `view/popup_input.rs`, `view/popup/input/` (four files), `Menu::on_layer_key` and the three capturing rungs of `dispatch_popup_keys` are gone. | Resolving key → action *before* dispatch and handing the tree an `Action`. §6.2 decision 1 settled this the other way: bindings flow down as data, the tree resolves. |
 | A.2 | `dock` + `floating_modal` `on_layer_key` hand the key to the widget dispatcher. | Rides with C. | Migrating them early behind a shim that calls the old dispatcher from a `GestureKind::Key` handler. That is the walk with a new caller. |
-| A.3 | The four `modals` `on_layer_key` hand it to painter interiors. | Rides with B. | As A.2. |
+| ~~A.3~~ **Done.** | The four `modals` handed the key to painter interiors through a capture-all `on_layer_key` apiece, offered in `layer_rank` order. | Containment, the same way the pointer crossed: each is a `Modality::Exclusive` layer, so it owns the keyboard, focus goes inside it, and `modal::keys` — an `on_key` at the top of that subtree — sees what the subtree declined. `UiFact::ModalKey(KeySlot)` names the surface; the interior is unchanged, which is the ruling that let `ModalPointer` cross the same seam. **The claim goes on every exclusive layer the surface can raise**, not only the band underneath: with a dialog or an entry level up, the band is no longer on the focus path. And on the *trust* prompt it is gated by `Trust::captures`, because an exclusive layer with nobody listening inside it stops a key rather than routing it — whether to claim has to be decided where the claim is made. |
 | A.4 | `layer_rank` — a central ordered list of surfaces. | Delete it. Precedence is *derived*: layer order, `Modality::Exclusive`, focus-scope containment — all already in the tree. | A `key_rank` property on layers, or a `Behavior` that walks them in order. Goal 2 forbids the central list by name; a renamed one is the same list. |
 | A.5 | `KeyContext` — the mode enum the walk keyed on, and the largest remnant by reference count. | "Which bindings apply" becomes *where focus is*: a scope provides its shortcut set as an ambient, resolution walks the focus path up. | Keeping `KeyContext` as an ambient. That is the enum with a new home; the point is that containment already answers it. |
 
@@ -768,6 +768,18 @@ are described.** The wide settings layout was being told apart from the narrow
 one by "are the categories described" — true until a search takes the tree
 away without making the box narrow, at which point the wide layout's search
 results were laid out at the box's left edge. `Chrome::wide` says it.
+
+**An exclusive layer with nobody listening inside it is a trap.** Once a
+modal layer owns the keys it declines, a surface that declared exclusivity for
+the *pointer* alone silently starts swallowing its own keyboard — and it does
+so only when something inside it happens to be focusable, so the failure
+appears the day an unrelated list stops passing `focusable(false)`. The rule
+that falls out: **a layer that takes a channel has to say where that channel
+goes.** Every exclusive layer in the editor now carries a key claim, on every
+level it can raise (a dialog over a dialog is a new topmost scope, and the
+band underneath is no longer on the focus path), and the one that is
+conditionally listening says so at the point of the claim rather than after
+the key arrives.
 
 **A property that is only ever read one way is not yet a property.** The
 popup's keyboard needed the *opposite* of the menu's: a layer that owns every

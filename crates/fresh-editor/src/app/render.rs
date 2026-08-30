@@ -3302,6 +3302,7 @@ impl Editor {
         };
         let triggers = self.workspace_trust_markers.join(", ");
         Some(Trust {
+            captures: self.popups_capture_keys(),
             selected: self.current_workspace_trust_selection(),
             title: fresh_i18n::t!("trust.dialog.security_warning").into_owned(),
             can_execute: fresh_i18n::t!("trust.dialog.can_execute").into_owned(),

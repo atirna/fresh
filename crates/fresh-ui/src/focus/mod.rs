@@ -576,6 +576,15 @@ impl<M: 'static> Ui<M> {
 
     /// Whether focus sits inside a layer that owns the keyboard.
     ///
+    /// A host with its own input pipeline behind this tree asks this about the
+    /// keys the tree has no vocabulary for: it cannot route them, and letting
+    /// them past a modal surface would reach what the modal is covering.
+    pub fn keyboard_owned(&self) -> bool {
+        self.key_stops_at_modal()
+    }
+
+    /// Whether focus sits inside a layer that owns the keyboard.
+    ///
     /// The chain is the focused element's ancestors, and a layer's element is
     /// one of them, so this asks the same containment question traversal does
     /// — no separate stack of "who owns the keyboard" and no ranking of

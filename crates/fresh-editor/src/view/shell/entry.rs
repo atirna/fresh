@@ -149,24 +149,30 @@ pub fn layer(d: &Dialog) -> Node<UiMsg> {
         .place(Place::Over)
         .modality(Modality::Exclusive)
         .scrim(Some(Scrim::Dim))
-        .child(layout_reader(move |info: LayoutInfo| {
-            // The painter's own figures, against the settings box it centres
-            // in: eighty-five percent of the width between fifty and ninety,
-            // ninety percent of the height with a floor of fifteen.
-            let w = (info.constraints.max_w * 85 / 100).clamp(50, 90);
-            let h = (info.constraints.max_h * 90 / 100).max(15);
-            let ring = match d.dirty {
-                true => pair("ui.diagnostic_warning_fg", "ui.popup_bg"),
-                false => pair("ui.popup_border_fg", "ui.popup_bg"),
-            };
-            col()
-                .w(Sizing::Cells(w))
-                .h(Sizing::Cells(h))
-                .key(key(d.level))
-                .theme(ring)
-                .border()
-                .child(body(&d))
-        }))
+        // The stack's topmost level is where focus is, so each level carries
+        // the claim; they all name the settings slot because the settings
+        // dispatcher is what answers an entry dialog's keys.
+        .child(super::modal::keys(
+            super::modal::KeySlot::Settings,
+            layout_reader(move |info: LayoutInfo| {
+                // The painter's own figures, against the settings box it centres
+                // in: eighty-five percent of the width between fifty and ninety,
+                // ninety percent of the height with a floor of fifteen.
+                let w = (info.constraints.max_w * 85 / 100).clamp(50, 90);
+                let h = (info.constraints.max_h * 90 / 100).max(15);
+                let ring = match d.dirty {
+                    true => pair("ui.diagnostic_warning_fg", "ui.popup_bg"),
+                    false => pair("ui.popup_border_fg", "ui.popup_bg"),
+                };
+                col()
+                    .w(Sizing::Cells(w))
+                    .h(Sizing::Cells(h))
+                    .key(key(d.level))
+                    .theme(ring)
+                    .border()
+                    .child(body(&d))
+            }),
+        ))
 }
 
 /// Everything inside the border: the fields in their window, then the three

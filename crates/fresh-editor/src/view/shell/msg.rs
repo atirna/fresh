@@ -430,6 +430,22 @@ pub enum UiFact {
     /// still a painter's and hit-tests rectangles that painter recorded. The
     /// event itself never left the host — see `shell::modal`.
     ModalPointer(super::modal::Slot),
+    /// A key belongs to this surface, whose interior owns what it means.
+    ///
+    /// **The keyboard's half of `ModalPointer`, and the same seam.** Each of
+    /// these had a `ChromeComponent::on_layer_key` that the ranked overlay
+    /// walk offered every key to while its layer was up — a capture-all with
+    /// a bespoke dispatcher apiece, ordered by `layer_rank`. Which surface a
+    /// key belongs to is containment now: the layer owns the keyboard, focus
+    /// is inside it, and no rank decides anything. What the key *means* is
+    /// still the interior's, which is the ruling that let the pointer cross
+    /// the same seam.
+    ///
+    /// The event does not travel with the fact, for the reason `shell::modal`
+    /// gives about the pointer: the editor already has the crossterm event,
+    /// and the tree's own `KeyPress` is a smaller vocabulary than the one the
+    /// interiors read.
+    ModalKey(super::modal::KeySlot),
     /// A press on one of the keybinding editor's dialogs.
     ///
     /// **The dialogs answer for themselves, the table does not — yet.** Five

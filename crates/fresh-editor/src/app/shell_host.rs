@@ -1796,6 +1796,29 @@ impl Editor {
                 }
                 self.keybinding_editor = Some(e);
             }
+            // **Which surface a key belongs to is containment; what it means
+            // is the surface's.** Each of these had a `ChromeComponent`
+            // offering it every key in `layer_rank` order; the layer owns the
+            // keyboard, focus is inside it, and a key nothing inside answered
+            // arrives here.
+            UiFact::ModalKey(slot) => {
+                use crate::view::shell::modal::KeySlot;
+                let Some(ev) = self.shell_key_event else {
+                    return;
+                };
+                match slot {
+                    KeySlot::Settings => self.dispatch_settings_key(&ev),
+                    KeySlot::KeybindingEditor => {
+                        let _ = self.handle_keybinding_editor_input(&ev);
+                    }
+                    KeySlot::Calibration => {
+                        let _ = self.handle_calibration_input(&ev);
+                    }
+                    KeySlot::WorkspaceTrust => {
+                        let _ = self.handle_workspace_trust_key(&ev);
+                    }
+                }
+            }
             UiFact::ModalPointer(slot) => {
                 use crate::view::shell::modal::Slot;
                 let Some((ev, _)) = self.shell_pointer_event else {
