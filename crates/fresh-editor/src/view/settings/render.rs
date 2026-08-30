@@ -81,6 +81,7 @@ pub fn render_settings(
     area: Rect,
     modal_area: Rect,
     panel_area: Option<Rect>,
+    items_area: Option<Rect>,
     state: &mut SettingsState,
     theme: &Theme,
 ) -> SettingsLayout {
@@ -159,7 +160,15 @@ pub fn render_settings(
         render_vertical_layout(frame, content_area, state, theme, &mut layout);
     } else {
         // Horizontal layout: categories left, items right
-        render_horizontal_layout(frame, content_area, panel_area, state, theme, &mut layout);
+        render_horizontal_layout(
+            frame,
+            content_area,
+            panel_area,
+            items_area,
+            state,
+            theme,
+            &mut layout,
+        );
     }
 
     // Determine the topmost dialog layer and apply dimming to layers below
@@ -215,6 +224,7 @@ fn render_horizontal_layout(
     frame: &mut Frame,
     content_area: Rect,
     panel: Option<Rect>,
+    items: Option<Rect>,
     state: &mut SettingsState,
     theme: &Theme,
     layout: &mut SettingsLayout,
@@ -258,7 +268,7 @@ fn render_horizontal_layout(
     if state.search_active && !state.search_results.is_empty() {
         render_search_results(frame, settings_inner, state, theme, layout);
     } else {
-        render_settings_panel(frame, settings_inner, state, theme, layout);
+        render_settings_panel(frame, settings_inner, items, state, theme, layout);
     }
 
     // **Both footers are the tree's** (`view::shell::settings`): one row of
@@ -318,7 +328,7 @@ fn render_vertical_layout(
     if state.search_active && !state.search_results.is_empty() {
         render_search_results(frame, settings_area, state, theme, layout);
     } else {
-        render_settings_panel(frame, settings_area, state, theme, layout);
+        render_settings_panel(frame, settings_area, None, state, theme, layout);
     }
 }
 
@@ -467,6 +477,7 @@ struct RenderContext<'a> {
 fn render_settings_panel(
     frame: &mut Frame,
     area: Rect,
+    items: Option<Rect>,
     state: &mut SettingsState,
     theme: &Theme,
     layout: &mut SettingsLayout,
@@ -476,50 +487,59 @@ fn render_settings_panel(
         None => return,
     };
 
-    let mut y = area.y;
-    let header_start_y = y;
-
-    // Right-panel page title is the full context fallback for sidebar labels,
-    // which are width-clamped because plugin names are external input.
-    if area.height > 0 && area.width > 0 {
-        let title = truncate_display_width_with_ellipsis(&page_title, area.width as usize);
-        let title_style = Style::default()
-            .fg(theme.editor_fg)
-            .add_modifier(Modifier::BOLD);
-        frame.render_widget(
-            Paragraph::new(title).style(title_style),
-            Rect::new(area.x, y, area.width, 1),
-        );
-        y += 1;
-    }
-
-    // "Clear" button for nullable categories (e.g., Option<LanguageConfig>)
-    if page_nullable && state.current_category_has_values() {
-        let btn_text = format!("[{}]", t!("settings.btn_clear_category"));
-        let btn_len = btn_text.len() as u16;
-        let is_hovered = matches!(state.hover_hit, Some(SettingsHit::ClearCategoryButton));
-        let btn_style = if is_hovered {
-            Style::default()
-                .fg(theme.menu_hover_fg)
-                .bg(theme.menu_hover_bg)
-        } else {
-            Style::default().fg(theme.line_number_fg)
-        };
-        let btn_area = Rect::new(area.x, y, btn_len, 1);
-        frame.render_widget(Paragraph::new(btn_text).style(btn_style), btn_area);
-        layout.clear_category_button = Some(btn_area);
-        y += 1;
-    } else {
-        layout.clear_category_button = None;
-    }
-
-    y += 1; // Blank line
-
-    let header_height = (y - header_start_y) as usize;
-    let items_start_y = y;
-
-    // Calculate available height for items
-    let available_height = area.height.saturating_sub(header_height as u16);
+    // **In the wide layout the header is the tree's**
+    // (`view::shell::settings::page_header`): the page's title and the
+    // `[Clear …]` a nullable category offers, with the button answering its
+    // own press, and the band under it is layout's answer rather than
+    // `area.height - (y - header_start_y)` — a height counted from rows this
+    // function had just drawn.
+    //
+    // The **narrow** layout has not crossed — its categories are a horizontal
+    // strip and the tree lays out no band for it — so it still paints its own
+    // header here, and still files the button's rectangle. Same boundary its
+    // category strip sits on.
+    let (items_start_y, available_height) = match items {
+        Some(r) => {
+            layout.clear_category_button = None;
+            (r.y, r.height)
+        }
+        None => {
+            let mut y = area.y;
+            let header_start_y = y;
+            if area.height > 0 && area.width > 0 {
+                let title = truncate_display_width_with_ellipsis(&page_title, area.width as usize);
+                let title_style = Style::default()
+                    .fg(theme.editor_fg)
+                    .add_modifier(Modifier::BOLD);
+                frame.render_widget(
+                    Paragraph::new(title).style(title_style),
+                    Rect::new(area.x, y, area.width, 1),
+                );
+                y += 1;
+            }
+            if page_nullable && state.current_category_has_values() {
+                let btn_text = format!("[{}]", t!("settings.btn_clear_category"));
+                let btn_len = btn_text.len() as u16;
+                let is_hovered = matches!(state.hover_hit, Some(SettingsHit::ClearCategoryButton));
+                let btn_style = if is_hovered {
+                    Style::default()
+                        .fg(theme.menu_hover_fg)
+                        .bg(theme.menu_hover_bg)
+                } else {
+                    Style::default().fg(theme.line_number_fg)
+                };
+                let btn_area = Rect::new(area.x, y, btn_len, 1);
+                frame.render_widget(Paragraph::new(btn_text).style(btn_style), btn_area);
+                layout.clear_category_button = Some(btn_area);
+                y += 1;
+            } else {
+                layout.clear_category_button = None;
+            }
+            y += 1; // Blank line
+            let header_height = y - header_start_y;
+            (y, area.height.saturating_sub(header_height))
+        }
+    };
 
     // The body panel width is the full width of the area allocated to items.
     // Items size themselves against this width directly via the ScrollItem

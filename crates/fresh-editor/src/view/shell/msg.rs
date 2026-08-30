@@ -391,6 +391,10 @@ pub enum UiFact {
     /// per expandable row, filed so a chain of `point_in_rect` could tell the
     /// chevron from the label beside it.
     SettingsCategoryDisclosure(usize),
+    /// A press on the settings panel header's `[Clear …]`. It was
+    /// `layout.clear_category_button` — a rectangle the painter filed as it
+    /// drew the button, for a chain of `point_in_rect` to find again.
+    SettingsClearCategory,
 }
 
 /// What a menu-bar navigation step does to the open chain.

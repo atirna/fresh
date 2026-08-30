@@ -131,7 +131,10 @@ pub fn layer(c: Option<&Chrome>) -> Node<UiMsg> {
                         col().w(Sizing::Cells(CATEGORY_COLS)).child(categories(t)),
                         // The divider column, which the painter draws.
                         row().w(Sizing::Cells(1)),
-                        row().flex(1).key(panel_key()),
+                        match &c.page {
+                            Some(p) => col().flex(1).key(panel_key()).child(page_header(p)),
+                            None => row().flex(1).key(panel_key()),
+                        },
                     ]),
                 };
                 let mut rows: Vec<Node<UiMsg>> = vec![
@@ -276,6 +279,60 @@ pub fn categories(c: &Categories) -> Node<UiMsg> {
     fresh_ui::ComponentExt::node(list).key(categories_key())
 }
 
+pub fn clear_key() -> fresh_ui::Key {
+    fresh_ui::Key::Str("settings_clear_category".into())
+}
+
+/// The band the settings themselves are painted into.
+///
+/// The painter derived it by counting the header rows it had just drawn —
+/// `header_height = y - header_start_y`, then `available_height = area.height
+/// - header_height`. The header is a description now, so the band under it is
+/// layout's answer and this is the key to read it back by.
+pub fn items_key() -> fresh_ui::Key {
+    fresh_ui::Key::Str("settings_items".into())
+}
+
+/// The settings panel's header, and the band under it the painter still owns.
+///
+/// **The `[Clear …]` button answers its own press.** It was
+/// `layout.clear_category_button` — a rectangle filed as the painter drew it,
+/// for `hit_test` to compare a cell against.
+fn page_header(p: &Page) -> Node<UiMsg> {
+    let mut rows: Vec<Node<UiMsg>> = vec![line(
+        p.title.clone(),
+        attrs("ui.editor_fg", "ui.popup_bg", &["bold"]),
+    )];
+    if let Some(label) = &p.clear {
+        let theme = match p.clear_hovered {
+            true => pair("ui.menu_hover_fg", "ui.menu_hover_bg"),
+            false => pair("ui.line_number_fg", "ui.popup_bg"),
+        };
+        rows.push(
+            row().h(Sizing::Cells(1)).children([
+                gesture(text(label.clone()).theme(theme))
+                    .key(clear_key())
+                    .on(
+                        GestureKind::Press,
+                        Rc::new(|e: &Event| {
+                            if e.button != MouseButton::Left {
+                                return None;
+                            }
+                            e.stop();
+                            Some(UiMsg::Ui(UiFact::SettingsClearCategory))
+                        }),
+                    ),
+                row().flex(1),
+            ]),
+        );
+    }
+    // The painter's blank row between the header and the first card, and then
+    // the band it fills.
+    rows.push(row().h(Sizing::Cells(1)));
+    rows.push(row().flex(1).key(items_key()));
+    col().children(rows)
+}
+
 /// One row: the cursor's `>`, the indent, the chevron, the dirty dot, the
 /// icon and the label — the painter's own span order.
 fn cat_row(r: &CatRow, selected: bool, focused: bool) -> Node<UiMsg> {
@@ -418,6 +475,20 @@ pub struct Chrome {
     /// layout, whose categories are a horizontal strip, and while a search is
     /// running, when the painter replaces the whole body with its results.
     pub categories: Option<Categories>,
+    /// The page's own header, above the settings. `None` under the same two
+    /// conditions as the tree.
+    pub page: Option<Page>,
+}
+
+/// The settings panel's header: the page's title, and the button that clears
+/// a nullable category.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Page {
+    pub title: String,
+    /// `[Clear …]`, offered on a nullable category that has values.
+    pub clear: Option<String>,
+    /// True while the pointer is on that button.
+    pub clear_hovered: bool,
 }
 
 /// The category tree: the rows, the keyboard cursor, and whether that cursor
@@ -980,6 +1051,11 @@ mod tests {
             search: Search::Hint(vec![Span::new("Press / to search settings...", dim)]),
             footer: Some(footer()),
             categories: Some(tree()),
+            page: Some(Page {
+                title: "General".into(),
+                clear: Some("[Clear]".into()),
+                clear_hovered: false,
+            }),
         }
     }
 
@@ -1051,9 +1127,11 @@ mod tests {
                     pair("ui.line_number_fg", "ui.popup_bg"),
                 )],
             },
-            // A search replaces the body, so the tree is not described.
+            // A search replaces the body, so neither the tree nor the page
+            // header is described.
             footer: Some(footer()),
             categories: None,
+            page: None,
         }
     }
 
@@ -1181,6 +1259,34 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// **The `[Clear …]` answers its own press**, where the painter filed a
+    /// rectangle for it as it drew, and the band under the header is layout's
+    /// answer rather than a height counted back from the rows just painted.
+    #[test]
+    fn the_page_header_sits_above_the_band_the_painter_fills() {
+        let mut ui = laid_out(200, 60, None);
+        let panel = ui.rect_of(ui.find_by_key(&panel_key()).expect("the panel"));
+        let items = ui.rect_of(ui.find_by_key(&items_key()).expect("the item band"));
+        assert_eq!(items.x, panel.x, "the band is the panel's width");
+        assert_eq!(
+            items.y,
+            panel.y + 3,
+            "title, clear button, blank — then the band"
+        );
+        assert!(items.h > 0, "and it has room to fill");
+
+        let at = ui.rect_of(ui.find_by_key(&clear_key()).expect("the clear button"));
+        let got = facts(ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(at.x, at.y),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        assert!(
+            got.contains(&UiFact::SettingsClearCategory),
+            "the button is its own target, got {got:?}"
+        );
     }
 
     /// **Below sixty columns the five buttons stack**, which is the whole of

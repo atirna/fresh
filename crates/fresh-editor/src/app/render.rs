@@ -2334,9 +2334,29 @@ impl Editor {
                 focused: s.focus_panel() == FocusPanel::Categories,
             }
         });
+        // The settings panel's own header: the page title, and the `[Clear …]`
+        // a nullable category with values offers. Described under the same two
+        // conditions as the tree — the narrow layout paints its own, and a
+        // search replaces the body.
+        let page = categories.is_some().then(|| {
+            let p = s.current_page();
+            st::Page {
+                title: p.map(|p| p.name.clone()).unwrap_or_default(),
+                clear: p
+                    .is_some_and(|p| p.nullable)
+                    .then(|| s.current_category_has_values())
+                    .unwrap_or(false)
+                    .then(|| format!("[{}]", t!("settings.btn_clear_category"))),
+                clear_hovered: matches!(
+                    s.hover_hit,
+                    Some(crate::view::settings::SettingsHit::ClearCategoryButton)
+                ),
+            }
+        });
         Some(st::Chrome {
             footer,
             categories,
+            page,
             title: match s.has_changes() {
                 true => format!(" Settings [{}] • (modified) ", s.target_layer_name()),
                 false => format!(" Settings [{}] ", s.target_layer_name()),
@@ -4230,6 +4250,9 @@ impl Editor {
             // columns out, so the panel's rectangle is read rather than split
             // for a second time. See `settings::panel_key`.
             let panel_area = self.panel_rect(&crate::view::shell::settings::panel_key());
+            // And the band under that panel's header, which the header itself
+            // sizes. See `settings::items_key`.
+            let items_area = self.panel_rect(&crate::view::shell::settings::items_key());
             let open = self.settings_state.as_ref().is_some_and(|s| s.visible);
             if open {
                 let theme = self.theme.read().unwrap().clone();
@@ -4239,6 +4262,7 @@ impl Editor {
                         area,
                         modal_area.unwrap_or(ratatui::layout::Rect::ZERO),
                         panel_area,
+                        items_area,
                         settings_state,
                         &theme,
                     );

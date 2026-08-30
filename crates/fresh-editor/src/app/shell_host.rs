@@ -1522,6 +1522,11 @@ impl Editor {
                 self.settings_jump_to_section(cat, section)
             }
             UiFact::SettingsCategoryDisclosure(idx) => self.settings_toggle_category(idx),
+            UiFact::SettingsClearCategory => {
+                if let Some(s) = self.settings_state.as_mut() {
+                    s.clear_current_category();
+                }
+            }
             UiFact::SettingsButton(b) => {
                 use crate::view::shell::settings::Button;
                 match b {
