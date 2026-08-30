@@ -264,12 +264,12 @@ two subsystem replacements plus the deletions they unblock.
 
 #### B.1 in full: what is left of the settings dialog
 
-**Crossed**: the box, the search row, both footers, five of the seven dialogs,
-the **category tree** — which took five families of recorded rectangle with it
+**Crossed**: the box, the search row, both footers, all seven dialogs, the
+**category tree** — which took five families of recorded rectangle with it
 (`categories`, `sections`, `category_disclosures`, `categories_panel_area`,
 `categories_scrollbar_area`), the wheel arm that routed through one of them,
 and `categories_scroll`'s double life as both the window and the page — the
-page header with its `[Clear …]`, and now the **body**.
+page header with its `[Clear …]`, the **body**, and the **entry-edit stack**.
 
 The body was the bulk, and what went with it was the second layout tree:
 
@@ -293,29 +293,38 @@ The body was the bulk, and what went with it was the second layout tree:
   scroll methods became. That is what removed `ensure_focused_visible`'s copy
   of every height and `topmost_visible_item_index`'s walk of them.
 
-**Two decisions it made, both stated in the commit that made them.**
+The **entry-edit stack** was the same shape one surface in, and worse: the
+button row existed *three* times — the renderer laid it out, the hover
+handler laid it out again to find which button a cell was on, and the click
+handler a third time — and the field walk twice, with the hover copy omitting
+the section headers the renderer drew, so hover had been two rows out per
+section for as long as sections had existed. A layer per level replaces
+`apply_dimming` in a loop; the fields are a `col` in a `viewport`; and the
+worst of it goes with `handle_text_list_click`, which had to decide whether a
+press landed on a row's trailing `[x]` and carried its own apology —
+"computing the exact column would need the actual_field_width, which we don't
+carry here" — followed by a guess and a fallback guess. The row is built by
+`widget_map`, so `widget_map::text_list_target` answers from the constants
+that build it.
+
+**Three decisions it made, all stated in the commits that made them.**
 
 * *The open dropdown floats.* The painter drew an open `Dropdown`'s options
   inline, reserving rows through `SettingControl::height` and growing the
   card; the widget adapter surfaces the same list as the screen-level pop-over
-  every other dropdown in the editor opens — a plugin panel's, the web's. One
-  dropdown everywhere is the answer, and
-  `test_settings_dropdown_button_click_opens_options` asserts the new form.
-* *The selection band is the whole control's, not the label row's.* The
-  painter drew a highlighted row and painted the control's cells over it, and
-  the cells whose background was unset let the band through. A description has
-  no "already": every run carries both halves, so the band is the background
-  the control's rows are built from (`Ctx::surface`). For a scalar that is the
-  same row it always was; for a multi-row control the band now covers the
-  control rather than its first line. The description under it stays on the
-  dialog's own ground, which is what the original comment was protecting.
+  every other dropdown in the editor opens. One dropdown everywhere.
+* *The selection band is the whole control's, not the label row's.* A
+  description has no "whatever was already in the cell" to let a band through:
+  every run carries both halves, so the band is the background the control's
+  rows are built from (`Ctx::surface`). For a scalar that is the same row it
+  always was.
+* *The entry dialog's legend came inside its border.* The painter wrote it at
+  `button_y + 1`, which is the box's own bottom border row, so the border lost
+  its bottom edge under the text every time one was open.
 
-**Left**: the entry-dialog stack (~2,431 lines), and the narrow layout's
-horizontal category strip. Both are painted, and the body waits for neither —
-but while the entry dialog is up the tree stands down entirely (`Chrome::items`
-is `None`), because the tree folds *after* every painter and a described body
-would be drawn over the dialog covering it. The band behind it is blank for
-now, exactly as the category tree's has been since it crossed.
+**Left**: the narrow layout's horizontal category strip, which is three
+painted rows and the one family of rectangle (`layout.categories`) still
+filed for them.
 
 #### C.1 in full: the nineteen variants, and where each one lands
 

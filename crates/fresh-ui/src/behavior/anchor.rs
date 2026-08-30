@@ -30,6 +30,9 @@ pub(crate) enum Command {
     RevealKey(crate::key::Key),
     /// Move the window so that the descendant with this key is at its top.
     TopKey(crate::key::Key),
+    /// Move the window so that one row *inside* the keyed descendant is in
+    /// it: `(key, rows from that band's top)`.
+    RevealKeyAt(crate::key::Key, u32),
 }
 
 #[derive(Debug, Default)]
@@ -98,6 +101,20 @@ impl Anchor {
     /// tight viewport clips it away entirely.
     pub fn top_key(&self, key: impl Into<crate::key::Key>) {
         self.queue.borrow_mut().push(Command::TopKey(key.into()));
+    }
+
+    /// Move the target's window so that the row `row` rows into the keyed
+    /// descendant's band is inside it.
+    ///
+    /// **For an offset the caller owns inside content the framework placed.**
+    /// A text editor knows its caret is on its own line seventeen; it does
+    /// not know, and should not compute, which row of the column that lands
+    /// on. Naming the band and the offset within it splits the question at
+    /// the one place each side has an answer for.
+    pub fn reveal_key_at(&self, key: impl Into<crate::key::Key>, row: u32) {
+        self.queue
+            .borrow_mut()
+            .push(Command::RevealKeyAt(key.into(), row));
     }
 }
 

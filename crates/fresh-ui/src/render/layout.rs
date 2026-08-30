@@ -722,6 +722,22 @@ impl<M: 'static> Ui<M> {
                         };
                         Point::new(scroll.x, top)
                     }
+                    // A row inside the band, which is one cell tall wherever
+                    // the band starts.
+                    Command::RevealKeyAt(k, at) => {
+                        let Some((top, h)) = self.keyed_band(id, r, &k, arranged_at) else {
+                            continue;
+                        };
+                        let want = top + (at as i32).min(h.saturating_sub(1).max(0));
+                        let y = if want < scroll.y {
+                            want
+                        } else if want >= scroll.y + rows {
+                            want - rows + 1
+                        } else {
+                            scroll.y
+                        };
+                        Point::new(scroll.x, y)
+                    }
                     Command::RevealKey(k) => {
                         let Some((top, h)) = self.keyed_band(id, r, &k, arranged_at) else {
                             continue;

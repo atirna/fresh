@@ -1030,7 +1030,7 @@ impl Editor {
                     u32::MAX,
                 );
                 crate::widgets::WidgetTextClickGeometry::from_render_output(&out, 0)
-                    .map(|g| g.value_byte_at(col))
+                    .map(|g| g.value_byte_in_cell(hit.byte_start, col))
             }),
             _ => None,
         };
@@ -1187,6 +1187,12 @@ impl Editor {
                         self.settings_widget_hit(&hit, at);
                         return;
                     }
+                    // The same, one surface in: an entry dialog's fields are
+                    // its own, not the page's.
+                    crate::view::shell::widgets::Slot::SettingsEntry => {
+                        self.settings_entry_widget_hit(&hit, at);
+                        return;
+                    }
                 };
                 if let Some(panel_key) = self.panel(slot).map(|p| p.panel_key.clone()) {
                     self.deliver_widget_hit(&panel_key, &hit, None);
@@ -1211,6 +1217,38 @@ impl Editor {
                 if let Some(s) = self.settings_state.as_mut() {
                     s.hover_hit = Some(crate::view::settings::SettingsHit::ControlInherit(idx));
                 }
+            }
+            UiFact::SettingsEntryItem(idx) => self.entry_dialog_select_item(idx),
+            UiFact::SettingsEntryItemHover(idx) => {
+                if let Some(d) = self
+                    .settings_state
+                    .as_mut()
+                    .and_then(|s| s.entry_dialog_mut())
+                {
+                    d.hover_item = idx;
+                }
+            }
+            UiFact::SettingsEntryButton(i) => {
+                let kind = self
+                    .settings_state
+                    .as_ref()
+                    .and_then(|s| s.entry_dialog())
+                    .map(|d| Self::entry_button_kind(d, i));
+                if let Some(kind) = kind {
+                    self.entry_dialog_activate_button(kind);
+                }
+            }
+            UiFact::SettingsEntryButtonHover(i) => {
+                if let Some(d) = self
+                    .settings_state
+                    .as_mut()
+                    .and_then(|s| s.entry_dialog_mut())
+                {
+                    d.hover_button = i;
+                }
+            }
+            UiFact::SettingsEntryFieldAction(item, action) => {
+                self.entry_dialog_field_action(item, action);
             }
             UiFact::PanelClosed => {
                 self.dismiss_floating_panel_with_cancel(crate::app::PanelSlot::Floating);

@@ -2210,6 +2210,157 @@ impl Editor {
         if moved {
             s.sync_tree_cursor_to_body_scroll();
         }
+        // Each entry dialog's window, on the same terms. Its offset is read
+        // rather than kept: the keyboard moves it by asking, and what it
+        // ended up at is the window's answer.
+        for (level, d) in s.entry_dialog_stack.iter_mut().enumerate() {
+            if let Some(vp) = ui.find_by_key(&st::entry_items_key(level)) {
+                d.scroll_offset = ui.scroll(vp).0.y.max(0) as usize;
+            }
+        }
+    }
+
+    /// What a field offers at the right of its first row.
+    ///
+    /// A nullable field that is already unset shows the badge *only when the
+    /// unset value really does inherit* something — a clear-only field just
+    /// reads as not set (#2345). Otherwise it offers the actions that lead
+    /// somewhere different from where the value already is.
+    fn entry_affordance(
+        d: &crate::view::settings::entry_dialog::EntryDialogState,
+        index: usize,
+        item: &crate::view::settings::items::SettingItem,
+        focused: bool,
+    ) -> Option<crate::view::shell::entry::Affordance> {
+        use crate::view::shell::entry as e;
+        use fresh_i18n::t;
+        if item.read_only {
+            return None;
+        }
+        if item.nullable && item.is_null {
+            let inherits = d
+                .inheritable_fields
+                .contains(item.path.trim_start_matches('/'));
+            return inherits
+                .then(|| e::Affordance::Badge(t!("settings.inherited_badge").to_string()));
+        }
+        let buttons = d.field_action_buttons(index);
+        if buttons.is_empty() {
+            return None;
+        }
+        let cursor = focused.then_some(d.field_button_focus).flatten();
+        Some(e::Affordance::Actions(
+            buttons
+                .into_iter()
+                .enumerate()
+                .map(|(i, (_, label))| e::Action {
+                    label,
+                    focused: cursor == Some(i),
+                })
+                .collect(),
+        ))
+    }
+
+    /// The settings entry-edit dialog stack.
+    ///
+    /// **One description per level.** The painter drew them in a loop with
+    /// `apply_dimming` between, and every one of the three mouse paths behind
+    /// them recomputed the box, the button row and the field positions from
+    /// the modal area. Each level is a layer with its own scrim; each field,
+    /// button and per-field action answers its own press.
+    fn settings_entry_description(&self) -> Vec<crate::view::shell::entry::Dialog> {
+        use crate::view::shell::entry as e;
+        use fresh_i18n::t;
+
+        let Some(s) = self.settings_state.as_ref() else {
+            return Vec::new();
+        };
+        s.entry_dialog_stack
+            .iter()
+            .enumerate()
+            .map(|(level, d)| {
+                let label_width = d.label_column();
+                let first_editable = d.first_editable_index;
+                let divider_at =
+                    (first_editable > 0 && first_editable < d.items.len()).then_some(first_editable);
+                let items = d
+                    .items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        let focused =
+                            !item.read_only && !d.focus_on_buttons && d.selected_item == index;
+                        e::Item {
+                            index,
+                            divider_above: divider_at == Some(index),
+                            section: item
+                                .section
+                                .clone()
+                                .filter(|_| item.is_section_start),
+                            spec: crate::view::settings::widget_map::setting_control_to_widget_aligned(
+                                &item.path,
+                                &item.control,
+                                label_width,
+                            ),
+                            focus_key: match item.control.is_editing() {
+                                true => item.path.clone(),
+                                false => String::new(),
+                            },
+                            focused,
+                            hovered: !item.read_only && d.hover_item == Some(index),
+                            modified: item.modified,
+                            read_only: item.read_only,
+                            // A composite control's cursor walks its own rows,
+                            // and the `>` goes where the cursor is.
+                            cursor_row: match item.control.is_composite() {
+                                true => item.control.focused_sub_row(),
+                                false => 0,
+                            },
+                            affordance: Self::entry_affordance(d, index, item, focused),
+                        }
+                    })
+                    .collect();
+                let mut buttons = vec![
+                    e::Button {
+                        label: "[ Save ]".into(),
+                        focused: d.focus_on_buttons && d.focused_button == 0,
+                        hovered: d.hover_button == Some(0),
+                        destructive: false,
+                    },
+                    e::Button {
+                        label: "[ Cancel ]".into(),
+                        focused: d.focus_on_buttons && d.focused_button == 1,
+                        hovered: d.hover_button == Some(1),
+                        destructive: false,
+                    },
+                ];
+                if !d.is_new && !d.no_delete {
+                    buttons.push(e::Button {
+                        label: crate::view::settings::render::entry_delete_button_label(d),
+                        focused: d.focus_on_buttons && d.focused_button == 2,
+                        hovered: d.hover_button == Some(2),
+                        destructive: true,
+                    });
+                }
+                let (legend, warn) = d.legend_line();
+                e::Dialog {
+                    level,
+                    title: match d.is_dirty() {
+                        true => format!(" {} • {} ", d.title, t!("settings.modified_suffix")),
+                        false => format!(" {} ", d.title),
+                    },
+                    dirty: d.is_dirty(),
+                    items,
+                    buttons,
+                    helper: d.helper_line(),
+                    legend: match warn {
+                        true => e::Legend::Warn(legend),
+                        false => e::Legend::Keys(legend),
+                    },
+                    anchor: Some(d.body_anchor.clone()),
+                }
+            })
+            .collect()
     }
 
     /// The settings page's cards.
@@ -2429,13 +2580,12 @@ impl Editor {
         // running: the narrow layout lays its categories as a horizontal
         // strip, and a search replaces the whole body with its results.
         //
-        // **And not while the entry-dialog stack is up**, which is the same
-        // rule `keybinding_table_description` states for its table: the stack
-        // is still the painter's, the tree is folded after every painter, so
-        // a described tree would be drawn *over* the dialog covering it. The
-        // five prompts that have crossed are layers and land the right way
-        // round; this one is under the dialog, so it waits for it.
-        let categories = (wide && !s.search_active && !s.showing_entry_dialog()).then(|| {
+        // **And it no longer stands down for the entry-dialog stack.** That
+        // stack was the painter's, the tree folds after every painter, and a
+        // described tree would have been drawn *over* the dialog covering it
+        // — so the band behind an open dialog was blank. The stack is a layer
+        // now (`view::shell::entry`), which lands the right way round.
+        let categories = (wide && !s.search_active).then(|| {
             use crate::view::settings::state::{FocusPanel, TreeRow};
             let nerd = s.nerd_font_icons_enabled();
             let cursor = s.tree_cursor_section;
@@ -2493,7 +2643,7 @@ impl Editor {
         // a nullable category with values offers. In either layout — the
         // narrow one's categories are a painted strip, but its page is the
         // tree's like the wide one's.
-        let page = (!s.search_active && !s.showing_entry_dialog()).then(|| {
+        let page = (!s.search_active).then(|| {
             let p = s.current_page();
             st::Page {
                 title: p.map(|p| p.name.clone()).unwrap_or_default(),
@@ -2510,7 +2660,7 @@ impl Editor {
         });
         // The cards. Described in either layout — the narrow one's categories
         // are a painted strip, but its page is the tree's like the wide one's.
-        let items = (!s.search_active && !s.showing_entry_dialog())
+        let items = (!s.search_active)
             .then(|| Self::settings_cards(s))
             .flatten();
         Some(st::Chrome {
@@ -3938,6 +4088,7 @@ impl Editor {
             event_debug: self.event_debug_description(),
             settings: self.settings_chrome_description(),
             settings_dialog: self.settings_dialog_description(),
+            settings_entry: self.settings_entry_description(),
             keybinding: self.keybinding_chrome_description(),
             keybinding_table: self.keybinding_table_description(),
             keybinding_dialog: self.keybinding_dialog_description(),

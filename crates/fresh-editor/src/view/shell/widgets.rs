@@ -61,6 +61,9 @@ pub enum Slot {
     /// `WidgetSpec`s, on a different surface, whose hits become
     /// `SettingsHit`s rather than reaching a plugin's `widget_event`.
     Settings,
+    /// A settings entry-edit dialog's field. The same again, one surface in:
+    /// its item indices are the dialog's, not the page's.
+    SettingsEntry,
 }
 
 /// What a panel's widgets need beyond their spec.
@@ -1688,9 +1691,9 @@ fn float_route(n: Node<UiMsg>, slot: Slot) -> Node<UiMsg> {
             (Slot::Dock, _) => None,
             // The settings dialog is a modal too, and its own box already
             // routes everything the tree does not answer for to that slot.
-            (Slot::Settings, _) => Some(UiMsg::Ui(super::msg::UiFact::ModalPointer(
-                super::modal::Slot::Settings,
-            ))),
+            (Slot::Settings | Slot::SettingsEntry, _) => Some(UiMsg::Ui(
+                super::msg::UiFact::ModalPointer(super::modal::Slot::Settings),
+            )),
         }
     };
     let mut n = fresh_ui::gesture(n);
