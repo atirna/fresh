@@ -57,6 +57,10 @@ pub fn panel_surface() -> Ink {
 pub enum Slot {
     Dock,
     Floating,
+    /// The settings dialog's card body. Not a plugin panel — the same
+    /// `WidgetSpec`s, on a different surface, whose hits become
+    /// `SettingsHit`s rather than reaching a plugin's `widget_event`.
+    Settings,
 }
 
 /// What a panel's widgets need beyond their spec.
@@ -827,6 +831,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                         // the list's selection.
                         owner_key: Some(list_key.clone()),
                     },
+                    at: None,
                 }))
             }));
             let list = match sel >= 0 {
@@ -967,6 +972,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                         event_type: "select",
                         owner_key: Some(list_key.clone()),
                     },
+                    at: None,
                 }))
             }));
             let list = match sel >= 0 {
@@ -1682,6 +1688,11 @@ fn float_route(n: Node<UiMsg>, slot: Slot) -> Node<UiMsg> {
                 }))
             }
             (Slot::Dock, _) => None,
+            // The settings dialog is a modal too, and its own box already
+            // routes everything the tree does not answer for to that slot.
+            (Slot::Settings, _) => Some(UiMsg::Ui(super::msg::UiFact::ModalPointer(
+                super::modal::Slot::Settings,
+            ))),
         }
     };
     let mut n = fresh_ui::gesture(n);
@@ -1779,6 +1790,7 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
             Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
                 slot,
                 hit: hit.clone(),
+                at: Some(e.local.x.max(0) as u16),
             }))
         }),
     )
@@ -2517,7 +2529,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let UiFact::WidgetHit { slot, hit } = got.first().expect("a hit") else {
+        let UiFact::WidgetHit { slot, hit, .. } = got.first().expect("a hit") else {
             panic!("expected a widget hit, got {got:?}");
         };
         assert_eq!(*slot, Slot::Floating);

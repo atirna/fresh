@@ -289,7 +289,7 @@ impl Editor {
                     state.focus.set(FocusPanel::Categories);
                     state.selected_category = idx;
                     state.selected_item = 0;
-                    state.scroll_panel = crate::view::ui::ScrollablePanel::new();
+                    state.body_anchor.scroll_to(fresh_ui::Point::ZERO);
                     state.sub_focus = None;
                     state.tree_cursor_section = None;
                     state.auto_expand_current_category();

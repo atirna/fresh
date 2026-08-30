@@ -47,6 +47,14 @@ pub enum UiFact {
     WidgetHit {
         slot: super::widgets::Slot,
         hit: crate::widgets::HitArea,
+        /// The column the press landed on, within the hit's own piece.
+        ///
+        /// A press on a text field means "put the caret here", and the runtime
+        /// answered that by comparing the screen column against geometry the
+        /// painter had stamped. The piece the gesture is on *is* that
+        /// geometry, so the offset inside it is what is left to say. `None`
+        /// for a hit that arrived without a pointer behind it.
+        at: Option<u16>,
     },
     /// The floating plugin panel's `[×]` was pressed.
     ///
@@ -395,6 +403,18 @@ pub enum UiFact {
     /// `layout.clear_category_button` — a rectangle the painter filed as it
     /// drew the button, for a chain of `point_in_rect` to find again.
     SettingsClearCategory,
+    /// A press on a settings card — anywhere on it that a control did not
+    /// answer for. It selects the item, which is what `SettingsHit::Item` did.
+    SettingsItem(usize),
+    /// The pointer entered a card, or left the one it was on. The painter
+    /// learned this by hit-testing the pointer's cell against every item's
+    /// rectangle on every move; entering and leaving are the two things that
+    /// actually happen.
+    SettingsItemHover(Option<usize>),
+    /// A press on a nullable setting's `[Inherit]`, which unsets it.
+    SettingsInherit(usize),
+    /// The pointer is on that button.
+    SettingsInheritHover(usize),
 }
 
 /// What a menu-bar navigation step does to the open chain.

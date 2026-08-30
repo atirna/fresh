@@ -360,7 +360,67 @@ pub enum SettingControl {
     },
 }
 
+/// The label column a page aligns its scalar controls' value cells against:
+/// the widest label among them, and `None` when the page has none.
+///
+/// Only single-row controls take part — a multi-row control puts its label on
+/// a line of its own, so padding it would move nothing.
+pub fn page_label_width(items: &[SettingItem]) -> Option<u16> {
+    use crate::primitives::display_width::str_width;
+    items
+        .iter()
+        .filter_map(|item| match &item.control {
+            SettingControl::Toggle(s) => Some(str_width(&s.label) as u16),
+            SettingControl::Number(s) => Some(str_width(&s.label) as u16),
+            SettingControl::Dropdown(s) => Some(str_width(&s.label) as u16),
+            SettingControl::Text(s) => Some(str_width(&s.label) as u16),
+            _ => None,
+        })
+        .max()
+}
+
 impl SettingControl {
+    /// Whether the control should be rendered as the *focused* widget — which
+    /// is what makes it paint its caret and its focus band.
+    ///
+    /// **Editing, not mere selection.** Outside edit mode ↑↓ walks the
+    /// settings list, so a caret drawn inside a field would promise a movement
+    /// the arrows do not make. The three controls that have a caret to draw
+    /// are the ones that answer here; every other kind draws its own
+    /// selection chrome and never wants the widget ring.
+    pub fn is_editing(&self) -> bool {
+        match self {
+            Self::Text(s) => s.editing,
+            Self::Json(s) => s.focus == crate::view::controls::FocusState::Focused,
+            Self::DualList(s) => s.editing,
+            _ => false,
+        }
+    }
+
+    /// The tree key of the row a `sub_focus` id names, for a control whose
+    /// rows are a `List`.
+    ///
+    /// The ids are the ones [`ScrollItem::focus_regions`] hands out: `0` is
+    /// the control's label row, `1 + i` its `i`th entry, and the one past
+    /// the last entry its `[+] Add new` sentinel. `None` means "no row of its
+    /// own" — the label row is the card's own top, and a control whose rows
+    /// are not a `List` (a dual list, a JSON editor) has nothing finer than
+    /// the card to move the window to.
+    pub fn sub_row_key(&self, path: &str, sub: usize) -> Option<fresh_ui::Key> {
+        let n = match self {
+            Self::TextList(s) => s.items.len(),
+            Self::Map(s) => s.entries.len(),
+            Self::ObjectArray(s) => s.bindings.len(),
+            _ => return None,
+        };
+        let name = match sub {
+            0 => return None,
+            i if i <= n => format!("{path}::list::{}", i - 1),
+            _ => format!("{path}::add::0"),
+        };
+        Some(fresh_ui::Key::Str(name.into()))
+    }
+
     /// Calculate the height needed for this control (in lines)
     pub fn control_height(&self) -> u16 {
         match self {

@@ -800,10 +800,16 @@ fn list_of(
     selected: i32,
 ) -> WidgetSpec {
     let visible = rows.len().max(1) as u32;
+    // A key per row, so the row is addressable from outside the control: it
+    // is what `SettingControl::sub_row_key` names when the keyboard's
+    // sub-focus walks into a map, and what the body's window is moved to.
+    let item_keys = (0..rows.len())
+        .map(|i| format!("{field_key}::{suffix}::{i}"))
+        .collect();
     WidgetSpec::List {
         items: rows,
         item_specs: Vec::new(),
-        item_keys: Vec::new(),
+        item_keys,
         selected_index: selected,
         visible_rows: Some(visible),
         focusable: true,

@@ -28,9 +28,11 @@ pub(crate) enum Command {
     Reveal(u32),
     /// Move the window so that the descendant with this key is inside it.
     RevealKey(crate::key::Key),
+    /// Move the window so that the descendant with this key is at its top.
+    TopKey(crate::key::Key),
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Anchor {
     bound: Cell<Option<ElementId>>,
     queue: RefCell<Vec<Command>>,
@@ -85,6 +87,19 @@ impl Anchor {
         self.queue
             .borrow_mut()
             .push(Command::RevealKey(key.into()));
+    }
+
+    /// Move the target's window so that the descendant carrying `key` is at
+    /// the *top* of it, however far that is.
+    ///
+    /// The difference from [`Anchor::reveal_key`] is what "show me this" means
+    /// when the caller is jumping rather than following. Revealing moves as
+    /// little as possible, which leaves the target at the bottom edge — right
+    /// for a cursor that walked there, wrong for "take me to this section",
+    /// where everything under the heading is what the reader wants and a
+    /// tight viewport clips it away entirely.
+    pub fn top_key(&self, key: impl Into<crate::key::Key>) {
+        self.queue.borrow_mut().push(Command::TopKey(key.into()));
     }
 }
 

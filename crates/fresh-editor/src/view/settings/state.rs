@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::config_io::ConfigLayer;
 use crate::view::controls::text_input::TextInputState;
 use crate::view::controls::FocusState;
-use crate::view::ui::{FocusManager, ScrollItem, ScrollablePanel};
+use crate::view::ui::{FocusManager, ScrollablePanel};
 use std::collections::HashMap;
 
 /// Set a value at a JSON pointer path, creating intermediate objects as
@@ -74,6 +74,33 @@ pub enum FocusPanel {
     Settings,
     /// Footer buttons (Reset/Save/Cancel)
     Footer,
+}
+
+/// What the settings body's window is, read back from the tree after each
+/// layout.
+///
+/// **Read, never computed.** `ScrollablePanel` kept these numbers by walking
+/// `SettingItem::layout_box` over every item on the page — the same
+/// arithmetic the painter used to draw the cards, in a second place, which is
+/// exactly what goal 5 forbids. The cards are a `col` in a `viewport` now:
+/// the column measures each of them once, and this is what it measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BodyWindow {
+    /// How far down the column the window starts.
+    pub offset: u16,
+    /// How tall the window is.
+    pub height: u16,
+    /// How tall the column is.
+    pub content: u16,
+    /// The card the window starts on.
+    pub top_item: Option<usize>,
+}
+
+impl BodyWindow {
+    /// The furthest the window can move before its bottom meets the column's.
+    pub fn max_offset(&self) -> u16 {
+        self.content.saturating_sub(self.height)
+    }
 }
 
 /// The state of the settings UI
@@ -150,8 +177,23 @@ pub struct SettingsState {
     pub entry_delete_target_is_array_item: bool,
     /// Whether the help overlay is showing
     pub showing_help: bool,
-    /// Scrollable panel for settings items
-    pub scroll_panel: ScrollablePanel,
+    /// What the body's window *is*, read back from the tree after each
+    /// layout.
+    ///
+    /// **Read, never computed.** `ScrollablePanel` kept the same three numbers
+    /// by re-deriving every item's height from `SettingItem::layout_box` —
+    /// the second layout tree this migration exists to remove. The column in
+    /// the `viewport` measures the cards once; these are what it measured.
+    pub body: BodyWindow,
+    /// The body window's handle.
+    ///
+    /// **The window is the tree's; this is how the keyboard reaches it.** The
+    /// cards are a `col` in a `viewport`, so their heights are layout's answer
+    /// and so is how far the window has moved. What the keyboard still owns is
+    /// *which card* should be on screen — and that is one call
+    /// (`Anchor::reveal_key`) rather than a second copy of every item's
+    /// height, which is what `ScrollablePanel::ensure_focused_visible` needed.
+    pub body_anchor: std::rc::Rc<fresh_ui::behavior::Anchor>,
     /// Sub-focus index within the selected item (for TextList/Map navigation)
     pub sub_focus: Option<usize>,
     /// Whether we're in text editing mode (for TextList controls)
@@ -178,10 +220,6 @@ pub struct SettingsState {
     /// When a user "resets" a setting, we remove it from the delta rather than
     /// setting it to the schema default.
     pub pending_deletions: std::collections::HashSet<String>,
-    /// Last known layout width for the body panel. Set during render so input
-    /// handlers (which run between renders) can recompute scroll math without
-    /// access to the frame area.
-    pub layout_width: u16,
     /// Visual style applied to every item in this state. Toggle with
     /// [`Self::set_item_style`] to swap between card / flat presentation.
     pub item_style: super::items::ItemBoxStyle,
@@ -189,8 +227,8 @@ pub struct SettingsState {
     /// tree view. Only categories with `sections.len() > 1` are eligible —
     /// a category with zero or one section stays flat.
     pub expanded_categories: std::collections::HashSet<usize>,
-    /// Scroll state for the categories panel itself, separate from the body
-    /// panel's `scroll_panel`. Drives mouse-wheel + page-up/down on the left.
+    /// Scroll state for the categories panel itself, separate from the body's
+    /// window. Drives mouse-wheel + page-up/down on the left.
     pub categories_scroll: ScrollablePanel,
     /// Cursor position inside the currently-selected category's tree row.
     /// `None` = cursor is on the category row itself (the category row
@@ -362,7 +400,8 @@ impl SettingsState {
             entry_delete_target_name: String::new(),
             entry_delete_target_is_array_item: false,
             showing_help: false,
-            scroll_panel: ScrollablePanel::new(),
+            body: BodyWindow::default(),
+            body_anchor: fresh_ui::behavior::Anchor::new(),
             sub_focus: None,
             editing_text: false,
             available_status_bar_tokens,
@@ -372,7 +411,6 @@ impl SettingsState {
             target_layer,
             layer_sources,
             pending_deletions: std::collections::HashSet::new(),
-            layout_width: 0,
             item_style: super::items::ItemBoxStyle::default(),
             expanded_categories: std::collections::HashSet::new(),
             categories_scroll: ScrollablePanel::new(),
@@ -410,7 +448,7 @@ impl SettingsState {
         self.footer_button_index = 2; // Default to Save button (0=Layer, 1=Reset, 2=Save, 3=Cancel)
         self.selected_category = 0;
         self.selected_item = 0;
-        self.scroll_panel = ScrollablePanel::new();
+        self.body_anchor.scroll_to(fresh_ui::Point::ZERO);
         self.sub_focus = None;
         // Reset all dialog states so re-opening settings starts clean
         self.showing_confirm_dialog = false;
@@ -540,26 +578,16 @@ impl SettingsState {
         self.pages.get_mut(self.selected_category)
     }
 
-    /// Index of the item currently sitting at the top of the body
-    /// viewport, computed from the scroll offset and per-item heights. The
-    /// left-panel section indicator follows this so scrolling visibly moves
-    /// the highlight in the tree, not just keyboard navigation.
+    /// Index of the item currently sitting at the top of the body window.
+    /// The left-panel section indicator follows this so scrolling visibly
+    /// moves the highlight in the tree, not just keyboard navigation.
+    ///
+    /// It used to be computed here, from the scroll offset and a walk of
+    /// every item's `ScrollItem::height` — the same heights the painter
+    /// planned each card with, kept in step by hand. The cards are laid out
+    /// once now, and this is which one the window is showing.
     pub fn topmost_visible_item_index(&self) -> Option<usize> {
-        let page = self.pages.get(self.selected_category)?;
-        if page.items.is_empty() {
-            return None;
-        }
-        let target = self.scroll_panel.scroll.offset;
-        let width = self.layout_width;
-        let mut y: u16 = 0;
-        for (idx, item) in page.items.iter().enumerate() {
-            let h = <SettingItem as ScrollItem>::height(item, width);
-            if y + h > target {
-                return Some(idx);
-            }
-            y += h;
-        }
-        Some(page.items.len() - 1)
+        self.body.top_item
     }
 
     /// Section currently displayed in the body — the section whose item
@@ -634,7 +662,7 @@ impl SettingsState {
                 self.selected_item = 0;
                 self.tree_cursor_section = None;
                 if idx != prev_category {
-                    self.scroll_panel = ScrollablePanel::new();
+                    self.body_anchor.scroll_to(fresh_ui::Point::ZERO);
                 }
                 self.sub_focus = None;
                 self.update_control_focus(true);
@@ -648,7 +676,7 @@ impl SettingsState {
                 self.selected_item = first;
                 self.tree_cursor_section = Some(section_idx);
                 if cat_idx != prev_category {
-                    self.scroll_panel = ScrollablePanel::new();
+                    self.body_anchor.scroll_to(fresh_ui::Point::ZERO);
                 }
                 self.sub_focus = None;
                 self.init_map_focus(true);
@@ -660,37 +688,26 @@ impl SettingsState {
         // each one as you pass over it — that would balloon the tree
         // every time the user holds Down. Auto-expand fires on
         // deliberate visits (click, search-jump, Enter on a section).
-        let width = self.layout_width;
-        if let Some(page) = self.pages.get(self.selected_category) {
-            // When the cursor lands on a section, snap the body's scroll
-            // to that section's first item — same UX as clicking a
-            // section in the tree. Without this, `ensure_focused_visible`
-            // would only scroll *just enough* for the item to be in
-            // view, leaving `topmost_visible_item_index` pointing at an
-            // earlier section and making the cursor visually "stick" on
-            // the previous section row.
-            if matches!(rows[target], TreeRow::Section { .. }) {
-                self.scroll_panel.update_content_height(&page.items, width);
-                let content_width = self.scroll_panel.content_width(width);
-                let item_y =
-                    self.scroll_panel
-                        .item_y_offset(&page.items, self.selected_item, content_width);
-                self.scroll_panel.scroll.offset = item_y;
-            } else {
-                let selected_item = self.selected_item;
-                let sub_focus = self.sub_focus;
-                self.scroll_panel.ensure_focused_visible(
-                    &page.items,
-                    selected_item,
-                    sub_focus,
-                    width,
-                );
-            }
+        // When the cursor lands on a section, take the body to that
+        // section's first item — same UX as clicking a section in the tree.
+        // Merely *revealing* it would scroll just enough for it to be in
+        // view, leaving `topmost_visible_item_index` on an earlier section
+        // and making the cursor visually "stick" on the previous row.
+        let key = super::super::shell::settings::card_key(self.selected_item);
+        match matches!(rows[target], TreeRow::Section { .. }) {
+            true => self.body_anchor.top_key(key),
+            false => self.body_anchor.reveal_key(key),
         }
         let new_rows = self.visible_tree();
         let new_cur = self.tree_cursor_index(&new_rows);
-        self.categories_scroll
-            .ensure_focused_visible(&new_rows, new_cur, None, width);
+        // A tree row is one line tall whatever the width, so the tree's own
+        // column is the honest number to measure it against.
+        self.categories_scroll.ensure_focused_visible(
+            &new_rows,
+            new_cur,
+            None,
+            super::super::shell::settings::CATEGORY_COLS,
+        );
     }
 
     /// Find the visible-tree index for the current selection. Prefers the
@@ -766,21 +783,12 @@ impl SettingsState {
         self.selected_item = target_item;
         self.tree_cursor_section = Some(section_idx);
         self.focus.set(FocusPanel::Settings);
-        let width = self.layout_width;
-        if let Some(page) = self.pages.get(self.selected_category) {
-            self.scroll_panel.update_content_height(&page.items, width);
-            let content_width = self.scroll_panel.content_width(width);
-            // Snap the body to the top of the section. `ensure_visible`
-            // would only scroll *just enough* to bring the target item
-            // into view, which puts it at the bottom of the viewport
-            // (and on tight viewports clips its body below the footer);
-            // jumping to a section instead means "show this section at
-            // the top".
-            let item_y = self
-                .scroll_panel
-                .item_y_offset(&page.items, target_item, content_width);
-            self.scroll_panel.scroll.offset = item_y;
-        }
+        // Take the body to the top of the section. Revealing it would move
+        // just enough to bring the target into view, which puts it at the
+        // *bottom* of the window — and on a tight one clips its body below
+        // the footer. Jumping to a section means "show this section".
+        self.body_anchor
+            .top_key(super::super::shell::settings::card_key(target_item));
         self.sub_focus = None;
         self.init_map_focus(true);
         self.update_control_focus(true);
@@ -981,7 +989,7 @@ impl SettingsState {
 
     /// Move selection down by a page (viewport height worth of items)
     pub fn select_next_page(&mut self) {
-        let page_size = self.scroll_panel.viewport_height().max(1);
+        let page_size = self.body.height.max(1);
         for _ in 0..page_size {
             self.select_next();
         }
@@ -989,7 +997,7 @@ impl SettingsState {
 
     /// Move selection up by a page (viewport height worth of items)
     pub fn select_prev_page(&mut self) {
-        let page_size = self.scroll_panel.viewport_height().max(1);
+        let page_size = self.body.height.max(1);
         for _ in 0..page_size {
             self.select_prev();
         }
@@ -1066,21 +1074,26 @@ impl SettingsState {
             return;
         }
 
-        // Need to avoid borrowing self for both page and scroll_panel
-        let selected_item = self.selected_item;
-        let sub_focus = self.sub_focus;
-        let width = self.layout_width;
-        let prev_offset = self.scroll_panel.scroll.offset;
-        if let Some(page) = self.pages.get(self.selected_category) {
-            self.scroll_panel
-                .ensure_focused_visible(&page.items, selected_item, sub_focus, width);
-        }
-        // If body Up/Down moved the scroll, the tree cursor must follow
-        // so the left-panel highlight tracks the section the user is
-        // looking at — same contract as wheel/scrollbar scroll.
-        if self.scroll_panel.scroll.offset != prev_offset {
-            self.sync_tree_cursor_to_body_scroll();
-        }
+        // **One call, where a copy of every height used to be.**
+        // `ensure_focused_visible` re-derived each item's rows to find where
+        // the cursor's card started and how tall it was, and walked its
+        // `focus_regions` again for the sub-row inside it. Both are bands the
+        // layout already measured; the window is asked to hold the innermost
+        // one that has a key.
+        let key = self
+            .current_item()
+            .and_then(|it| {
+                self.sub_focus
+                    .and_then(|sub| it.control.sub_row_key(&it.path, sub))
+            })
+            .unwrap_or_else(|| {
+                super::super::shell::settings::card_key(self.selected_item)
+            });
+        self.body_anchor.reveal_key(key);
+        // The tree cursor follows the body's window, and the window has not
+        // moved yet — the request is applied between frames. It is synced
+        // from what the window turns out to be, once per frame, rather than
+        // guessed here.
     }
 
     /// Record a pending change for a setting
@@ -1639,7 +1652,7 @@ impl SettingsState {
         self.selected_item = item_index;
         self.focus.set(FocusPanel::Settings);
         // Reset scroll offset but preserve viewport for ensure_visible
-        self.scroll_panel.scroll.offset = 0;
+        self.body_anchor.scroll_to(fresh_ui::Point::ZERO);
         self.sub_focus = None;
         self.init_map_focus(true);
 
@@ -2233,45 +2246,45 @@ impl SettingsState {
         self.pending_deletions.insert(path);
     }
 
-    /// Get the maximum scroll offset for the current page (in rows)
+    /// The furthest the body's window can move (in rows).
     pub fn max_scroll(&self) -> u16 {
-        self.scroll_panel.scroll.max_offset()
+        self.body.max_offset()
+    }
+
+    /// Move the body's window to an absolute row, and say whether that is
+    /// anywhere new.
+    ///
+    /// **The move is a request, not a write.** The window belongs to the
+    /// element that owns it; this asks for it by handle and the framework
+    /// applies it between frames. What comes back is `self.body` on the next
+    /// layout, so nothing here has to guess where the window ended up.
+    fn scroll_body_to(&mut self, y: u16) -> bool {
+        let y = y.min(self.body.max_offset());
+        if y == self.body.offset {
+            return false;
+        }
+        self.body_anchor
+            .scroll_to(fresh_ui::Point::new(0, y as i32));
+        true
     }
 
     /// Scroll up by a given number of rows
     /// Returns true if the scroll offset changed
     pub fn scroll_up(&mut self, delta: usize) -> bool {
-        let old = self.scroll_panel.scroll.offset;
-        self.scroll_panel.scroll_up(delta as u16);
-        let changed = old != self.scroll_panel.scroll.offset;
-        if changed {
-            self.sync_tree_cursor_to_body_scroll();
-        }
-        changed
+        self.scroll_body_to(self.body.offset.saturating_sub(delta as u16))
     }
 
     /// Scroll down by a given number of rows
     /// Returns true if the scroll offset changed
     pub fn scroll_down(&mut self, delta: usize) -> bool {
-        let old = self.scroll_panel.scroll.offset;
-        self.scroll_panel.scroll_down(delta as u16);
-        let changed = old != self.scroll_panel.scroll.offset;
-        if changed {
-            self.sync_tree_cursor_to_body_scroll();
-        }
-        changed
+        self.scroll_body_to(self.body.offset.saturating_add(delta as u16))
     }
 
     /// Scroll to a position based on a ratio (0.0 to 1.0)
     /// Returns true if the scroll offset changed
     pub fn scroll_to_ratio(&mut self, ratio: f32) -> bool {
-        let old = self.scroll_panel.scroll.offset;
-        self.scroll_panel.scroll_to_ratio(ratio);
-        let changed = old != self.scroll_panel.scroll.offset;
-        if changed {
-            self.sync_tree_cursor_to_body_scroll();
-        }
-        changed
+        let max = self.body.max_offset() as f32;
+        self.scroll_body_to((ratio.clamp(0.0, 1.0) * max).round() as u16)
     }
 
     /// After the body scroll position changes, snap the tree cursor to
@@ -2279,7 +2292,7 @@ impl SettingsState {
     /// left-panel highlight follows wheel/scrollbar interaction in both
     /// directions, and a subsequent Up/Down on the tree resumes from
     /// the section the user is actually looking at.
-    pub(super) fn sync_tree_cursor_to_body_scroll(&mut self) {
+    pub(crate) fn sync_tree_cursor_to_body_scroll(&mut self) {
         if let Some(section_idx) = self.current_section_index() {
             self.tree_cursor_section = Some(section_idx);
         }
@@ -2946,16 +2959,13 @@ impl SettingsState {
             }
         }
 
-        // When dropdown opens, update content height and ensure it's visible
+        // An open dropdown makes its card taller; the window is asked to hold
+        // the taller card, which is the same request as any other reveal —
+        // there is no content height to update, because the column measures
+        // the card with its options in it.
         if opened {
-            // Update content height since item is now taller
-            let selected_item = self.selected_item;
-            let width = self.layout_width;
-            if let Some(page) = self.pages.get(self.selected_category) {
-                // Ensure the dropdown item is visible with its new expanded height
-                self.scroll_panel
-                    .ensure_focused_visible(&page.items, selected_item, None, width);
-            }
+            self.body_anchor
+                .reveal_key(super::super::shell::settings::card_key(self.selected_item));
         }
     }
 
