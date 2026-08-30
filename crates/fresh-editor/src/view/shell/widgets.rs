@@ -135,8 +135,6 @@ pub fn covered(spec: &WidgetSpec) -> bool {
         WidgetSpec::List { item_specs, .. } => item_specs.is_empty(),
         // A single-line field does not scroll; a multi-line one does.
         WidgetSpec::Text { rows, .. } => *rows <= 1,
-        // `Dropdown` carries a `scroll_offset` of its own: its open pop-over
-        // windows its options.
         // A tree is a *flat, controlled* list of pre-rendered rows — its
         // expansion is the plugin's — so it crosses on `widgets::List` too.
         // Multi-row items (`item_height > 1`, `card_borders`) have not: their
@@ -160,9 +158,14 @@ pub fn covered(spec: &WidgetSpec) -> bool {
         // `entry_row_hits` gives, and without it only the left column would
         // have answered.
         WidgetSpec::DualList { .. } => true,
-        // `Dropdown` carries a `scroll_offset` of its own: its open pop-over
-        // windows its options.
-        WidgetSpec::Dropdown { .. } => false,
+        // **`Dropdown`'s pop-over windows its options and paints no bar.** It
+        // has a `scroll_offset`, which is why it was held back with the
+        // scrollable kinds — but the boundary is the *scrollbar*, not the
+        // offset, and the host's pop-over pass draws a border and the rows and
+        // nothing else. `render_dropdown` clamps the scroll and slices, and
+        // hands over each visible row with its absolute index; describing that
+        // reproduces it exactly and loses nothing.
+        WidgetSpec::Dropdown { .. } => true,
 
         // `WindowEmbed` is a `Host` leaf by rule and never crosses.
         _ => false,
@@ -353,15 +356,21 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
                 _ => fresh_ui::Key::Str("popup".into()),
             };
             let slot = row().h(Sizing::Cells(0)).key(k.clone());
+            // **Panel-inner coordinates, and the panel is what they are inner
+            // to.** A description cannot turn one into a frame coordinate — it
+            // does not know where the panel is — so it anchors to the body and
+            // says how far inside. Which is also the difference `screen_space`
+            // names: both are positioned in the panel's space, and only one is
+            // *confined* to it.
             let l = fresh_ui::layer()
                 .place(fresh_ui::Place::Over)
-                .anchor(match anchor {
-                    // Panel-inner coordinates, which is what the anchor is
-                    // documented in.
-                    Some([r, c]) => fresh_ui::Anchor::Point(*c as u16, *r as u16),
-                    None => fresh_ui::Anchor::Node(k),
-                })
                 .fit(fresh_ui::Fit::CLAMP);
+            let l = match anchor {
+                Some([r, c]) => l
+                    .anchor(fresh_ui::Anchor::Node(super::panel::body_key()))
+                    .offset(*c as i16, *r as i16),
+                None => l.anchor(fresh_ui::Anchor::Node(k)),
+            };
             let l = match screen_space {
                 true => l,
                 false => l.within(super::panel::body_key()),
@@ -880,6 +889,15 @@ fn collected(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
 /// [`entry_row_hit`] turns into a gesture on a piece of that row. A row with
 /// no hit is a plain styled row; a row with several — a list's rows each carry
 /// their own — becomes as many pieces as there are ranges.
+///
+/// **The floats anchor to nodes, not to coordinates.** An overlay row and a
+/// dropdown's pop-over both name a position *inside this sub-render* — row 3
+/// of it, or the column the `[value ▼]` button starts at. Neither is a frame
+/// coordinate, and a description cannot turn one into a frame coordinate
+/// because it does not know where the panel is. So each hangs off the node it
+/// actually belongs to — the sub-render's own box, or the trigger's row — and
+/// `offset` says where inside that the real anchor is. That is also what makes
+/// the pop-over's flip correct: it flips clear of the trigger's row.
 fn rows_with_hits(
     entries: &[TextPropertyEntry],
     hits: &[crate::widgets::HitArea],
@@ -891,7 +909,7 @@ fn rows_with_hits(
     for (i, entry) in entries.iter().enumerate() {
         let mine: Vec<&crate::widgets::HitArea> =
             hits.iter().filter(|h| h.buffer_row as usize == i).collect();
-        kids.push(match mine.is_empty() {
+        let mut node = match mine.is_empty() {
             true => entry_row(entry),
             // **Every hit on the row, not the first.** A tree row has three
             // and a dual list's has two; keeping only one silently made the
@@ -904,82 +922,122 @@ fn rows_with_hits(
                     .map(|h| ((h.byte_start, h.byte_end), (*h).clone()))
                     .collect::<Vec<_>>(),
             ),
-        });
+        };
+        // An open dropdown's option list hangs off the row its trigger is on,
+        // one row down and at the button's own column.
+        for p in popups.iter().filter(|p| p.anchor_row as usize == i) {
+            node = row().h(Sizing::Cells(1)).children([node, popup_layer(p, cx)]);
+        }
+        kids.push(node);
     }
     let body = col().children(kids);
-    match overlays.is_empty() && popups.is_empty() {
-        true => body,
-        // Rows the collector floated: they anchor at a row of the body and
-        // paint over what is there, without having consumed its height. A
-        // layer says both.
-        false => {
-            let mut stack = vec![body];
-            for o in overlays {
-                stack.push(
-                    fresh_ui::layer()
-                        .anchor(fresh_ui::Anchor::Point(0, o.buffer_row as u16))
-                        .place(fresh_ui::Place::Over)
-                        .fit(fresh_ui::Fit::CLAMP)
-                        .child(entry_row(&o.entry)),
-                );
-            }
-            // An open dropdown's option list. **Not confined to the panel**:
-            // it "extends past the panel/modal border instead of
-            // growing/clipping it", which is a layer that names no region —
-            // the frame is its bounds. Each row selects an absolute option
-            // index, which is the payload the runtime's own hit carries.
-            for p in popups {
-                let rows: Vec<Node<UiMsg>> = p
-                    .entries
-                    .iter()
-                    .enumerate()
-                    .map(|(i, e)| match p.row_indices.get(i) {
-                        Some(idx) => entry_row_hit(
-                            e,
-                            (0, e.text.len()),
-                            cx.slot,
-                            crate::widgets::HitArea {
-                                row_target: true,
-                                context_click: false,
-                                overlay: true,
-                                widget_key: p.widget_key.clone(),
-                                widget_kind: "dropdown",
-                                buffer_row: i as u32,
-                                byte_start: 0,
-                                byte_end: e.text.len(),
-                                payload: serde_json::json!({ "index": idx }),
-                                event_type: "dropdown_select",
-                                owner_key: None,
-                            },
-                        ),
-                        None => entry_row(e),
-                    })
-                    .collect();
-                stack.push(
-                    fresh_ui::layer()
-                        .anchor(fresh_ui::Anchor::Point(
-                            p.anchor_col as u16,
-                            p.anchor_row as u16,
-                        ))
-                        .place(fresh_ui::Place::Below)
-                        .fit(fresh_ui::Fit::FLIP.or(fresh_ui::Fit::CLAMP))
-                        .child(
-                            col()
-                                .theme(
-                                    Ink::new(
-                                        Paint::key("ui.popup_border_fg"),
-                                        Paint::key("ui.popup_bg"),
-                                    )
-                                    .to_string(),
-                                )
-                                .border()
-                                .children(rows),
-                        ),
-                );
-            }
-            fresh_ui::stack().children(stack)
-        }
+    // A pop-over whose anchor row is past the collector's own rows has no row
+    // to hang off; it falls back to the body, which is where the runtime put
+    // it too (`inner.y + anchor_row`).
+    let stray: Vec<&crate::widgets::PanelPopup> = popups
+        .iter()
+        .filter(|p| p.anchor_row as usize >= entries.len())
+        .collect();
+    if overlays.is_empty() && stray.is_empty() {
+        return body;
     }
+    let mut stack = vec![body];
+    // Rows the collector floated: they anchor at a row of the sub-render and
+    // paint over what is there, without having consumed its height. A layer
+    // says both — and `offset` says which row, because a completion list runs
+    // past the rows its own sub-render has (a one-line text input's popup is
+    // anchored at rows 1..n) and there is no node at row 4 of a one-row box.
+    for o in overlays {
+        stack.push(
+            fresh_ui::layer()
+                .anchor(fresh_ui::Anchor::Parent)
+                .place(fresh_ui::Place::Over)
+                .offset(0, o.buffer_row as i16)
+                .fit(fresh_ui::Fit::CLAMP)
+                .child(
+                    row()
+                        .h(Sizing::Cells(1))
+                        .theme(
+                            Ink::new(Paint::key(BASE_FG), Paint::key("ui.popup_bg")).to_string(),
+                        )
+                        .child(entry_row(&o.entry)),
+                ),
+        );
+    }
+    for p in stray {
+        stack.push(
+            popup_layer(p, cx)
+                .anchor(fresh_ui::Anchor::Parent)
+                .place(fresh_ui::Place::Over)
+                .offset(p.anchor_col as i16, p.anchor_row as i16 + 1),
+        );
+    }
+    fresh_ui::stack().children(stack)
+}
+
+/// An open dropdown's option list, as a layer hanging off its trigger's row.
+///
+/// **Not confined to the panel**: it "extends past the panel/modal border
+/// instead of growing/clipping it", which is a layer that names no region —
+/// the frame is its bounds. Each row selects an absolute option index, which
+/// is the payload the runtime's own hit carries.
+///
+/// The rows arrive already windowed: `render_dropdown` clamps the scroll and
+/// slices, and `row_indices` carries the absolute index of each. So there is
+/// no scroll for the tree to own here and no bar to lose — which is why
+/// `Dropdown` crosses through the adapter rather than waiting for a
+/// substitution, unlike the kinds whose scrollbar the painter draws.
+fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
+    let rows: Vec<Node<UiMsg>> = p
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| match p.row_indices.get(i) {
+            Some(idx) => entry_row_hit(
+                e,
+                (0, e.text.len()),
+                cx.slot,
+                crate::widgets::HitArea {
+                    row_target: true,
+                    context_click: false,
+                    overlay: true,
+                    widget_key: p.widget_key.clone(),
+                    widget_kind: "dropdown",
+                    buffer_row: i as u32,
+                    byte_start: 0,
+                    byte_end: e.text.len(),
+                    payload: serde_json::json!({ "index": idx }),
+                    event_type: "dropdown_select",
+                    owner_key: None,
+                },
+            ),
+            None => entry_row(e),
+        })
+        .collect();
+    // A press anywhere in the box that is not on an option — its border — is
+    // swallowed rather than allowed through: "so the modal isn't dismissed and
+    // the list stays open". The runtime said that by testing the recorded
+    // `popup_rect` before anything else; here the box is the rectangle and
+    // taking the press is what claiming it means.
+    let box_node = fresh_ui::gesture(
+        col()
+            .theme(Ink::new(Paint::key("ui.popup_border_fg"), Paint::key("ui.popup_bg")).to_string())
+            .border()
+            .children(rows),
+    )
+    .on(
+        fresh_ui::GestureKind::Press,
+        std::rc::Rc::new(|e: &fresh_ui::Event| {
+            e.stop();
+            None
+        }),
+    );
+    fresh_ui::layer()
+        .anchor(fresh_ui::Anchor::Parent)
+        .place(fresh_ui::Place::Below)
+        .offset(p.anchor_col as i16, 0)
+        .fit(fresh_ui::Fit::FLIP.or(fresh_ui::Fit::CLAMP))
+        .child(box_node)
 }
 
 /// Wrap a widget's node so a press on it delivers the widget's own hit.
@@ -1875,15 +1933,17 @@ mod tests {
         }
     }
 
-    /// **The boundary, and why it is where it is.** The scrollable kinds
-    /// window their own rows and report the offset for the painter to draw a
-    /// bar from. The adapter turns rows into nodes and has nothing to say
-    /// about a bar, so describing one today would render it correctly and
-    /// silently lose its scrollbar — which is worse than painting it whole.
-    /// They cross when their state does (C.2), and this pins that they have
-    /// not yet.
+    /// **The boundary, and why it is where it is.** A kind whose *painter*
+    /// draws a scrollbar from a recorded offset cannot cross: the adapter
+    /// turns rows into nodes and has nothing to say about a bar, so describing
+    /// one would render it correctly and silently lose its scrollbar — worse
+    /// than painting it whole. Those cross when their state does (C.2).
+    ///
+    /// The boundary is the *bar*, not the offset, and that is why `Dropdown`
+    /// is on this side of it: its pop-over windows its options and the host
+    /// paints a border and the rows and nothing else.
     #[test]
-    fn the_scrollable_kinds_are_not_covered_yet() {
+    fn the_boundary_is_the_scrollbar_not_the_offset() {
         let list = WidgetSpec::List {
             items: vec![raw("one")],
             item_specs: Vec::new(),
@@ -1895,10 +1955,14 @@ mod tests {
         };
         assert!(covered(&list), "a plain list is `widgets::List` now");
 
-        // A tree still windows its own rows, so it has not crossed — and one
+        assert!(
+            covered(&dropdown(&["fast", "slow"], 0, true, 0)),
+            "an open dropdown's pop-over has no bar to lose"
+        );
+
+        // A multi-line text field still scrolls, with a bar over it — and one
         // uncovered node takes its panel with it.
-        // A multi-line text field, which still scrolls.
-        let tree = WidgetSpec::Text {
+        let multiline = WidgetSpec::Text {
             value: "a\nb\nc".into(),
             cursor_byte: -1,
             focused: false,
@@ -1919,7 +1983,7 @@ mod tests {
             key: Some("t2".into()),
         };
         assert!(
-            !covered(&tree),
+            !covered(&multiline),
             "a multi-line field still owns its own scroll"
         );
         assert!(
@@ -1928,7 +1992,7 @@ mod tests {
                     entries: vec![raw("x")],
                     key: None
                 },
-                tree
+                multiline
             ])),
             "and one of them takes its panel with it"
         );
@@ -2412,6 +2476,231 @@ mod tests {
             texts,
             vec!["ab".to_string(), "cd".to_string(), "ef".to_string()],
             "three runs, split where the overlay starts and ends"
+        );
+    }
+
+    fn dropdown(options: &[&str], selected: i32, open: bool, scroll: u32) -> WidgetSpec {
+        WidgetSpec::Dropdown {
+            options: options.iter().map(|o| (*o).into()).collect(),
+            selected_index: selected,
+            label: "Mode".into(),
+            focused: false,
+            label_width: 0,
+            open,
+            scroll_offset: scroll,
+            key: Some("mode".into()),
+        }
+    }
+
+    /// The runtime's own pop-over for a spec: the rows it windowed and the
+    /// absolute index each of them selects.
+    fn runtime_popup(spec: &WidgetSpec) -> crate::widgets::PanelPopup {
+        crate::widgets::render_spec(spec, &Default::default(), "", WIDTH as u32)
+            .popup
+            .expect("an open dropdown has a pop-over")
+    }
+
+    /// Every line the layers paint, grouped by row the way [`rows_of`] groups
+    /// the in-flow half.
+    fn layer_rows(ui: &Ui<UiMsg>) -> Vec<String> {
+        let mut pieces: Vec<(i32, i32, String)> = Vec::new();
+        for item in ui.spec().layers() {
+            if let fresh_ui::Draw::Lines(lines) = &item.draw {
+                for (i, l) in lines.iter().enumerate() {
+                    pieces.push((item.rect.y + i as i32, item.rect.x, l.to_string()));
+                }
+            }
+        }
+        pieces.sort_by_key(|(y, x, _)| (*y, *x));
+        let mut out: Vec<String> = Vec::new();
+        let mut at: Option<i32> = None;
+        for (y, _, s) in pieces {
+            match at {
+                Some(prev) if prev == y => out.last_mut().unwrap().push_str(&s),
+                _ => {
+                    out.push(s);
+                    at = Some(y);
+                }
+            }
+        }
+        out
+    }
+
+    fn facts(got: fresh_ui::Dispatch<UiMsg>) -> Vec<UiFact> {
+        got.msgs
+            .into_iter()
+            .filter_map(|m| match m {
+                UiMsg::Ui(f) => Some(f),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A closed dropdown is one row, and it is the row the runtime renders.
+    #[test]
+    fn a_closed_dropdown_is_the_trigger_row_the_runtime_renders() {
+        let spec = dropdown(&["fast", "slow"], 1, false, 0);
+        assert_eq!(tree_rows(&spec), runtime_rows(&spec));
+    }
+
+    /// Open, the trigger row is still the runtime's — the option list floats
+    /// rather than growing the panel, exactly as the runtime's does.
+    #[test]
+    fn an_open_dropdowns_trigger_row_is_still_the_runtimes() {
+        let spec = dropdown(&["fast", "slow", "off"], 0, true, 0);
+        assert_eq!(tree_rows(&spec), runtime_rows(&spec));
+    }
+
+    /// **The pop-over's rows are the collector's, verbatim.** The runtime is
+    /// the formatter here: it clamps the scroll, slices the window and renders
+    /// each option. What the tree adds is where the box goes and what a press
+    /// on a row means.
+    #[test]
+    fn the_pop_over_paints_the_rows_the_collector_windowed() {
+        let spec = dropdown(&["fast", "slow", "off"], 0, true, 0);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let want: Vec<String> = runtime_popup(&spec)
+            .entries
+            .iter()
+            .map(|e| {
+                let mut n = e.clone();
+                n.normalize_widths();
+                n.text.trim_end_matches('\n').to_string()
+            })
+            .collect();
+        let got = layer_rows(&ui);
+        assert_eq!(
+            got,
+            want.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
+            "the option rows, verbatim"
+        );
+    }
+
+    /// **The box hangs off the trigger's row, at the button's own column.**
+    /// The runtime worked this out in screen coordinates — `inner.y +
+    /// anchor_row + 1`, `inner.x + anchor_col` — from a rectangle it had
+    /// recorded at paint time. The description has neither, and does not need
+    /// them: the row is a node and the column within it is the collector's own
+    /// answer.
+    #[test]
+    fn the_pop_over_opens_under_the_trigger_at_the_buttons_column() {
+        let spec = dropdown(&["fast", "slow", "off"], 0, true, 0);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let boxes = ui.spec().layers();
+        let top = boxes
+            .iter()
+            .map(|i| i.rect)
+            .min_by_key(|r| (r.y, r.x))
+            .expect("a pop-over");
+        assert_eq!(top.y, 1, "the row after the trigger's");
+        assert_eq!(
+            top.x, runtime_popup(&spec).anchor_col as i32,
+            "the column the `[` is at"
+        );
+    }
+
+    /// A press on an option row delivers `dropdown_select` with the option's
+    /// **absolute** index — the window's offset is already in `row_indices`,
+    /// which is why a scrolled list selects the right thing.
+    #[test]
+    fn pressing_an_option_selects_its_absolute_index() {
+        let opts: Vec<String> = (0..12).map(|i| format!("opt{i}")).collect();
+        let refs: Vec<&str> = opts.iter().map(|s| s.as_str()).collect();
+        let spec = dropdown(&refs, 0, true, 4);
+        let popup = runtime_popup(&spec);
+        assert!(
+            popup.entries.len() < opts.len(),
+            "this list is windowed, or the test proves nothing"
+        );
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        // Row 0 of the box's interior: one row down and one column in from the
+        // box's own corner, because the box has a border.
+        let boxes = ui.spec().layers();
+        let top = boxes
+            .iter()
+            .map(|i| i.rect)
+            .min_by_key(|r| (r.y, r.x))
+            .expect("a pop-over");
+        let got = facts(ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(top.x + 1, top.y + 1),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        let UiFact::WidgetHit { hit, .. } = got.first().expect("a hit") else {
+            panic!("expected a widget hit, got {got:?}");
+        };
+        assert_eq!(hit.event_type, "dropdown_select");
+        assert_eq!(hit.widget_key, "mode");
+        assert_eq!(
+            hit.payload.get("index").and_then(|v| v.as_i64()),
+            Some(popup.row_indices[0] as i64),
+            "the first *visible* row's absolute index"
+        );
+    }
+
+    /// A press on the box's border is swallowed, not passed on. It selects
+    /// nothing and — the reason the runtime tested `popup_rect` before
+    /// anything else — it must not reach whatever dismissal is behind it.
+    #[test]
+    fn a_press_on_the_pop_overs_border_is_swallowed() {
+        let spec = dropdown(&["fast", "slow", "off"], 0, true, 0);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let top = ui
+            .spec()
+            .layers()
+            .iter()
+            .map(|i| i.rect)
+            .min_by_key(|r| (r.y, r.x))
+            .expect("a pop-over");
+        let got = ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(top.x, top.y),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        ));
+        assert!(got.claimed, "the box takes the press");
+        assert!(
+            !got.msgs
+                .iter()
+                .any(|m| matches!(m, UiMsg::Ui(UiFact::WidgetHit { .. }))),
+            "and does nothing with it: {:?}",
+            got.msgs
+        );
+    }
+
+    /// A press on the trigger toggles the list, which is the runtime's own
+    /// `dropdown_toggle` hit over the `[value ▼]` button and not the label.
+    #[test]
+    fn pressing_the_trigger_toggles_and_the_label_does_not() {
+        let spec = dropdown(&["fast", "slow"], 0, false, 0);
+        let out = crate::widgets::render_spec(&spec, &Default::default(), "", WIDTH as u32);
+        let h = out.hits.first().expect("a toggle hit");
+        assert_eq!(h.event_type, "dropdown_toggle");
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let on_button = facts(ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(h.byte_start as i32, 0),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        assert!(
+            matches!(
+                on_button.first(),
+                Some(UiFact::WidgetHit { hit, .. }) if hit.event_type == "dropdown_toggle"
+            ),
+            "the button toggles: {on_button:?}"
+        );
+        assert!(
+            facts(ui.dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(0, 0),
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            )))
+            .is_empty(),
+            "the label does not"
         );
     }
 }
