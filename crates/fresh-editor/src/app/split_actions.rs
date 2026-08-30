@@ -410,6 +410,25 @@ impl Editor {
         }
     }
 
+    /// The frame's separator rectangles, for tests.
+    ///
+    /// Reads `WindowLayoutCache::separator_areas`, which is
+    /// `view::shell::splits::separator_rects`' answer — the divider nodes'
+    /// own rectangles — rather than the second layout walk it used to be. The
+    /// e2e drag tests assert against this, so they are now asserting against
+    /// the tree.
+    pub fn get_separator_areas(
+        &self,
+    ) -> &[(
+        crate::model::event::ContainerId,
+        crate::model::event::SplitDirection,
+        u16,
+        u16,
+        u16,
+    )] {
+        &self.active_layout().separator_areas
+    }
+
     /// Get cached tab layouts for testing
     pub fn get_tab_layouts(
         &self,
