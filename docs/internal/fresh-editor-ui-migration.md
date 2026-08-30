@@ -204,7 +204,7 @@ provided at is the scope they belong to.
 
 | # | What | How | Avoid |
 |---|---|---|---|
-| B.1 | Settings (~20k lines) hit-tests rectangles its own painter recorded. **The box, its search row, its wide footer and five of its dialogs have moved** (`view::shell::settings`). The footer took its five recorded rectangles and the `hit_test` arms that compared a cell against each; which buttons fit is still the painter's rule — drop `[ Edit ]`, then the layer, then reset as the room runs out — resolved against the width layout gives rather than against a rectangle passed in. The search row is the first place the "B.1 rides on C.1" reading pays off literally: its query was *already* a `WidgetSpec::Text` rendered through `render_spec` — "instead of hand-rolled cursor spans", as the comment beside it said — so describing it is one call into the same adapter a plugin's field goes through, which is goal 1 in one line. The dialogs are — the unsaved-changes prompt, the reset prompt, the help overlay, and the entry dialog's discard and delete prompts. The last two sit *over* the entry stack, so a layer lands where they were even though the stack itself has not crossed; both answer a press now, which neither did before. The entry-dialog stack and the panels have not. The three that crossed took the worst duplication in the file with them: `get_confirm_dialog_button_at` **re-derived the painter's layout** to find which button a cell was on, carrying "same as in `render_confirm_dialog`" and "must match `render_confirm_dialog`" beside the copy — two statements of one layout, either of which could change without the other being wrong on its own. | Composition: it is a form, and the library ships button, toggle, radio group, number, text field, list, tree and dropdown. Its state becomes component state; its scroll a `viewport`; its double-click `Event::clicks`. | Mounting it as one `Host` and calling the wave done. That keeps every duplicate it owns and adds a leaf that never shrinks. |
+| ~~B.1~~ **Done.** | Settings (~20k lines) hit-tested rectangles its own painter recorded. **All of it is described now** (`view::shell::settings`, `view::shell::entry`) and `SettingsLayout` is gone: the box, the search row, both footers, all seven dialogs, the category tree, the page header, the body, the entry-edit stack, the narrow strip and the search results. | Composition: it is a form, and the library ships button, toggle, radio group, number, text field, list, tree and dropdown. Its state becomes component state; its scroll a `viewport`; its double-click `Event::clicks`. | Mounting it as one `Host` and calling the wave done. That keeps every duplicate it owns and adds a leaf that never shrinks. |
 | ~~B.2~~ **Done.** | The keybinding editor (~3.7k), with its own scrollbar and double-click semantics. **All of it is `view::shell::keybinding` now** — box, chrome, table and the three dialogs — and all ten of its recorded rectangles are gone, along with `handle_keybinding_editor_mouse` and `modal::Slot::KeybindingEditor`. `view/keybinding_editor.rs` keeps its keyboard and nothing else. | As B.1; its table is a `List`. The frame first, the interior after — C.6's order. **And the dialogs before the table, which is a paint-order fact rather than a preference**: the tree's overlay band is folded after every legacy painter, so a described dialog lands on top of the table the painter drew — where it belongs — while a described *table* would have covered the painter's dialogs. `apply_dimming` before two of them is a `Scrim`, and each field and button answers its own press, so `dialog_key_field`, `dialog_action_field`, `dialog_context_field`, `dialog_buttons` and `confirm_buttons` are gone from the record and the three `point_in_rect` chains with them. The autocomplete hangs off the action field with `Place::Below` and the base PR's `offset`, instead of `x + 12, y + 1`, and it scrolls: the painter windowed eight suggestions by hand and clipped the rest. **The table then went the same way**: `widgets::List` in a `viewport`, which is the window, the bar, the wheel and the drag at once — `table_area` and `table_first_row_y` existed so a mouse arm could turn a cell back into a row index, and `table_scrollbar` so a second one could drag a thumb the library already drags. The page a `PgUp` moves by comes from the box the tree placed (`keybinding::table_rows`), so the page and the window cannot disagree. `keybinding_modal_area`'s four lines (ninety percent, capped at 120, floored at 60×20, centred with `area.x` added back so it lands beside the dock) are a layer that names the region it may occupy; the painter and the mouse handler read one rectangle instead of computing and recording it. The cap has no property to be — `min_w` exists and `max_w` does not — so the width comes from a `layout_reader`, which is §4.4's sanctioned form. | — |
 | ~~B.3~~ **Done.** | The calibration wizard. | `view::shell::calibration`. It turned out to be the *whole* of its wave rather than a smaller B.1: it has no mouse — single letters drive it — and no recorded rectangles, so once the box became a description there was nothing left behind the seam. `apply_dimming` over the frame is `Scrim::Dim`; `Layout::vertical([Length(5), Min(8), Length(4)])` is a column; and the capture phase's `key_idx - available_height + 1`, with its `saturating_sub(2)` for two footer rows the painter knew it had drawn, is a `viewport` and one `Anchor::reveal`. **`modal::Slot::Calibration` retired with it** — a slot beside a described modal routes a pointer to a surface that never wanted one. | Keeping the slot "for symmetry". Three modals still need it; this one stopped. |
 | B.4 | `Editor::shell_pointer_event` — the event travels on the editor, not in the message. | Delete it. It exists because the interiors tell a drag from a move; the library routes drags by **pointer capture**, so they stop asking. | Generalising it into a typed side channel. "Routed, not transported" was a transitional apology, not a design. |
@@ -264,12 +264,25 @@ two subsystem replacements plus the deletions they unblock.
 
 #### B.1 in full: what is left of the settings dialog
 
-**Crossed**: the box, the search row, both footers, all seven dialogs, the
+**All of it.** The box, the search row, both footers, all seven dialogs, the
 **category tree** — which took five families of recorded rectangle with it
 (`categories`, `sections`, `category_disclosures`, `categories_panel_area`,
 `categories_scrollbar_area`), the wheel arm that routed through one of them,
 and `categories_scroll`'s double life as both the window and the page — the
-page header with its `[Clear …]`, the **body**, and the **entry-edit stack**.
+page header with its `[Clear …]`, the **body**, the **entry-edit stack**, the
+narrow layout's **category strip** and the **search results**.
+
+`SettingsLayout` is gone with them, and that is the measure of the wave:
+there is no longer a record the painter files as it draws and a `hit_test`
+that compares a cell against it in the order the painter happened to
+register. `view/settings/hit.rs` keeps the *vocabulary* — `SettingsHit` names
+an interaction rather than a cell — and both frontends still speak it, the
+TUI's nodes through `Editor::settings_widget_hit` and the web's `/settings`
+route by name, ending at the one `dispatch_settings_hit`. What is left of
+`render.rs` is the box (painted *under* the tree's overlay band, so it cannot
+be a node) and three shapes the tree asks it for, all of them domain
+knowledge rather than paint: what a search result reads as, what a category's
+icon is, and what a Delete button is called.
 
 The body was the bulk, and what went with it was the second layout tree:
 
@@ -322,9 +335,26 @@ that build it.
   `button_y + 1`, which is the box's own bottom border row, so the border lost
   its bottom edge under the text every time one was open.
 
-**Left**: the narrow layout's horizontal category strip, which is three
-painted rows and the one family of rectangle (`layout.categories`) still
-filed for them.
+The **search results** were the last, and they closed the loop on #2860 by
+construction. The painter windowed them by hand (`skip(scroll_offset)`, break
+at `height - 3`), drew its own bar beside them, and filed a rectangle per
+*visible* card — which is exactly why the hit had to carry the absolute index
+separately, since the position in the filed list is a viewport slot. A
+`widgets::List` is the window, the bar, the wheel and the drag at once, so
+`search_scroll_up`, `search_scroll_down`, `search_scroll_to_ratio`,
+`ensure_search_selection_visible` and both scrollbar handlers went together;
+`search_scroll_offset` and `search_max_visible` are read back off the window
+for the one thing that still needs them, the count row's "(4-6 of 12)".
+
+**And it found a real gap in the library rather than working around one.** A
+`viewport` in `ScrollMode::Items` counts its offset in items, but
+`apply_anchors` compared a `Reveal` index against the window's height in
+*cells* — the same number only while items are one cell tall, which every
+list in the editor had been until this one. A list of three-row cards
+therefore thought item 11 was already inside a "fifteen-row" window and never
+moved. The window's extent in the unit its offset counts is already recorded
+(`RenderData::window`), so the fix is to read that; the conformance suite now
+states it (`an_item_window_of_tall_rows_reveals_by_item_not_by_cell`).
 
 #### C.1 in full: the nineteen variants, and where each one lands
 
@@ -738,6 +768,19 @@ are described.** The wide settings layout was being told apart from the narrow
 one by "are the categories described" — true until a search takes the tree
 away without making the box narrow, at which point the wide layout's search
 results were laid out at the box's left edge. `Chrome::wide` says it.
+
+**A window's offset and its extent are counted in the same unit, and the
+unit is the window's, not the caller's.** `apply_anchors` read a `Reveal`
+index against the window's height in *cells* — right for a cell-scrolled
+window and right for an index-scrolled one only while its items are one cell
+tall, which every list in the editor was until the search results made cards
+three rows deep. Item 11 then read as "already inside" a window fifteen cells
+and five items tall, and the list never moved. The render object already
+records the window in its own unit (`RenderData::window`); the bug was a
+second derivation standing next to the fact. **Where a value exists in two
+units, name which one you are in at the point of comparison** — and when a
+list gains a shape no list had before, it is the framework's rule that has to
+be checked, not worked around at the call site.
 
 **A schema's newlines are for the file, not for the page.** The painter's
 `wrap_text` split on whitespace and dropped them; `fresh-ui`'s wrapping keeps

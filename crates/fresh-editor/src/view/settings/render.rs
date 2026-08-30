@@ -1,33 +1,21 @@
-//! Settings UI renderer
+//! What is left of the settings painter.
 //!
-//! Renders the settings modal with category navigation and setting controls.
+//! The dialog is a description now — `view::shell::settings` builds it and
+//! `view::shell::entry` builds its entry-edit stack. Two things stayed: the
+//! box, because it is drawn under the tree's overlay band rather than in it,
+//! and the shapes the tree asks this module for, which are domain knowledge
+//! (what a search result reads as, what a category's icon is, what a Delete
+//! button is called) rather than paint.
 
 use super::entry_dialog::EntryDialogState;
-use super::layout::{SettingsHit, SettingsLayout};
 use super::search::{DeepMatch, SearchResult};
 use super::state::SettingsState;
 use crate::view::theme::Theme;
-use crate::view::ui::scrollbar::{render_scrollbar, ScrollbarColors, ScrollbarState};
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-/// Truncate `s` to at most `max_chars` characters, appending `"..."` if it
-/// was actually shortened. Counts characters (not bytes) so non-ASCII
-/// inputs (CJK descriptions, emoji, etc.) don't byte-slice through a
-/// multi-byte UTF-8 sequence and panic — same class as #1718.
-fn truncate_chars_with_ellipsis(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        let kept: String = s.chars().take(max_chars.saturating_sub(3)).collect();
-        format!("{}...", kept)
-    }
-}
-
-/// Render the settings modal
 /// Render the settings dialog into the box the tree placed.
 ///
 /// `modal_area` used to be computed here — ninety percent of `area`, capped at
@@ -36,6 +24,10 @@ fn truncate_chars_with_ellipsis(s: &str, max_chars: usize) -> String {
 /// for the mouse handler to measure every other rectangle from. It is
 /// `view::shell::settings`'s now, and this is handed the answer.
 ///
+/// It is not a node itself because it is *under* everything: `Clear`, the
+/// popup ground and the border are painted before the tree's overlay band
+/// folds over them.
+///
 /// `area` is still needed for one thing: the too-small message, which is not
 /// the dialog and does not go where the dialog would have.
 pub fn render_settings(
@@ -43,10 +35,9 @@ pub fn render_settings(
     area: Rect,
     modal_area: Rect,
     panel_area: Option<Rect>,
-    items_area: Option<Rect>,
-    state: &mut SettingsState,
+    state: &SettingsState,
     theme: &Theme,
-) -> SettingsLayout {
+) {
     // Minimum size guard — prevent panics from zero-sized layout arithmetic.
     // The tree applies the same guard by placing no box; this is what it looks
     // like when it did.
@@ -60,7 +51,7 @@ pub fn render_settings(
                 Rect::new(x, y, msg.len() as u16, 1),
             );
         }
-        return SettingsLayout::new(Rect::ZERO);
+        return;
     }
 
     // Clear the modal area and draw border
@@ -88,168 +79,30 @@ pub fn render_settings(
         modal_area.height.saturating_sub(2),
     );
 
-    // Determine layout mode: vertical (narrow) vs horizontal (wide)
-    // Narrow mode when inner width < 60 columns
-    let narrow_mode = inner_area.width < 60;
-
-    // Always render search bar at the top (1 line height to avoid layout
-    // jump), with a 1-row blank gap below it so the bar reads as a header
-    // rather than running into the panels.
-    let search_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
-    let search_header_height = 1u16;
-    let search_gap = 1u16;
-    // **The search row is the tree's** (`view::shell::settings`): the query
-    // was already a `WidgetSpec::Text` rendered through `render_spec`, so it
-    // is a *node* now, through the same adapter a plugin's field goes through.
-    // `search_area` stays because everything below it is measured from here.
-    let _ = search_area;
-
-    // Footer height: 2 lines for horizontal (separator + buttons), 7 for vertical
-    let footer_height = if narrow_mode { 7 } else { 2 };
-    let chrome_height = search_header_height + search_gap + footer_height;
-    let content_area = Rect::new(
-        inner_area.x,
-        inner_area.y + search_header_height + search_gap,
-        inner_area.width,
-        inner_area.height.saturating_sub(chrome_height),
-    );
-
-    // Create layout tracker
-    let mut layout = SettingsLayout::new(modal_area);
-
-    if narrow_mode {
-        // Vertical layout: categories on top, items below
-        render_vertical_layout(frame, content_area, state, theme, &mut layout);
-    } else {
-        // Horizontal layout: categories left, items right
-        render_horizontal_layout(
-            frame,
-            content_area,
-            panel_area,
-            items_area,
-            state,
-            theme,
-            &mut layout,
-        );
+    // **Everything inside the box is the tree's.** The categories (a `List`
+    // down the left, or a strip across the top), the page header, the body's
+    // cards, the search's results, both footers, all seven dialogs and the
+    // entry-edit stack. What is left to paint is the box itself and the one
+    // column between its two panes.
+    //
+    // Narrow below sixty columns — the threshold the tree splits on too, and
+    // the only place the two layouts still differ here, because the wide one
+    // has a divider and the narrow one does not.
+    if inner_area.width >= 60 {
+        // `Layout::horizontal([Length(24), Length(1), Min(40)])`'s middle
+        // column. The tree lays the same three out and the panel's rectangle
+        // is read back rather than split a second time; this is the line
+        // between them.
+        let x = panel_area
+            .map(|p| p.x.saturating_sub(1))
+            .unwrap_or(inner_area.x + 24);
+        let top = inner_area.y + 2;
+        let bottom = inner_area.y + inner_area.height.saturating_sub(2);
+        let style = Style::default().fg(theme.split_separator_fg);
+        for y in top..bottom {
+            frame.render_widget(Paragraph::new("│").style(style), Rect::new(x, y, 1, 1));
+        }
     }
-
-    // Determine the topmost dialog layer and apply dimming to layers below
-    let has_confirm = state.showing_confirm_dialog;
-    let has_reset = state.showing_reset_dialog;
-    let has_entry = state.showing_entry_dialog();
-    let has_help = state.showing_help;
-
-    // **Nothing over the box is painted any more.** The confirm and reset
-    // prompts, the entry dialog's discard and delete prompts, the help
-    // overlay and now the entry stack itself are all layers
-    // (`view::shell::settings`, `view::shell::entry`), with `apply_dimming`
-    // as each one's `Scrim` and every button answering its own press. They
-    // had to stay painted while the stack was, because a described prompt
-    // would have been a layer over a painted dialog rather than under it;
-    // the stack crossing is what released them.
-    let _ = (has_confirm, has_reset, has_entry, has_help);
-
-    layout
-}
-
-/// Render horizontal layout (wide mode): categories left, items right
-fn render_horizontal_layout(
-    frame: &mut Frame,
-    content_area: Rect,
-    panel: Option<Rect>,
-    items: Option<Rect>,
-    state: &mut SettingsState,
-    theme: &Theme,
-    layout: &mut SettingsLayout,
-) {
-    // Layout: [left panel (categories)] | [right panel (settings)]
-    // 24 cols for categories, 1 col for the divider, the rest for settings.
-    let chunks = Layout::horizontal([
-        Constraint::Length(24),
-        Constraint::Length(1),
-        Constraint::Min(40),
-    ])
-    .split(content_area);
-
-    let divider_area = chunks[1];
-    // **The tree is the tree's** (`view::shell::settings::categories`): a
-    // `widgets::List` in the window it scrolls in, with the rows answering
-    // their own presses. `render_categories` and the five families of
-    // rectangle it filed are gone with it. What is left of the split here is
-    // the divider between the two panes and the fallback for the frame the
-    // description has not been laid out on yet.
-    let settings_area = panel.unwrap_or(chunks[2]);
-
-    // Single straight vertical line dividing categories from settings.
-    let divider_style = Style::default().fg(theme.split_separator_fg);
-    for y in 0..divider_area.height {
-        frame.render_widget(
-            Paragraph::new("│").style(divider_style),
-            Rect::new(divider_area.x, divider_area.y + y, 1, 1),
-        );
-    }
-
-    // 1-col gutter on each side of the settings panel for breathing room.
-    let horizontal_padding = 1u16;
-    let settings_inner = Rect::new(
-        settings_area.x + horizontal_padding,
-        settings_area.y,
-        settings_area.width.saturating_sub(horizontal_padding * 2),
-        settings_area.height,
-    );
-
-    // **The body is the tree's** (`view::shell::settings::items`): one card
-    // per setting, in the `viewport` that scrolls them. `render_settings_panel`
-    // and everything under it went with it — `ScrollablePanel`'s second walk
-    // of every item's height, the `ItemBox` plan and its five `_y()`
-    // accessors, the `BandViewport` each band was clipped against, and the
-    // `ControlLayoutInfo` filed per control so a later click could be compared
-    // against it. What is left here is the search, which replaces the body
-    // with its own results.
-    if state.search_active && !state.search_results.is_empty() {
-        render_search_results(frame, settings_inner, state, theme, layout);
-    }
-    let _ = items;
-
-    // **Both footers are the tree's** (`view::shell::settings`): one row of
-    // buttons across, or five down below sixty columns. `render_footer` and
-    // `render_footer_vertical` are gone, and with them the five rectangles
-    // the narrow one filed for `hit_test` to compare a cell against.
-}
-
-/// Render vertical layout (narrow mode): categories on top, items below
-///
-/// **Both of its halves are the tree's** — the horizontal category strip
-/// (`view::shell::settings::strip_band`, three rows and the rule under them,
-/// with each name answering its own press) and the page below it. What is
-/// left is the search results, which replace the page while a search runs.
-fn render_vertical_layout(
-    frame: &mut Frame,
-    content_area: Rect,
-    state: &mut SettingsState,
-    theme: &Theme,
-    layout: &mut SettingsLayout,
-) {
-    if !state.search_active || state.search_results.is_empty() {
-        return;
-    }
-    // The strip's three rows and its rule, which the tree lays out above the
-    // page — and the seven the narrow footer takes below it.
-    const STRIP_ROWS: u16 = 4;
-    const FOOTER_ROWS: u16 = 7;
-    let height = content_area.height.saturating_sub(STRIP_ROWS + FOOTER_ROWS);
-    render_search_results(
-        frame,
-        Rect::new(
-            content_area.x,
-            content_area.y + STRIP_ROWS,
-            content_area.width,
-            height,
-        ),
-        state,
-        theme,
-        layout,
-    );
 }
 
 /// Get an icon for a settings category name.
@@ -303,135 +156,22 @@ pub fn category_icon(name: &str, nerd_fonts: bool) -> &'static str {
 // entry-edit stack with its own scroll, its per-field controls and its three
 // bottom rows, and the widget adapter each of those controls painted through
 // — is `view::shell::settings` and `view::shell::entry`. What is left in this
-// file is the search results, which replace the body while a search runs, and
-// the narrow layout's horizontal category strip.
+// file is the shape of one search result, which is domain knowledge rather
+// than paint.
 
-/// Render search results with breadcrumbs
-fn render_search_results(
-    frame: &mut Frame,
-    area: Rect,
-    state: &mut SettingsState,
-    theme: &Theme,
-    layout: &mut SettingsLayout,
-) {
-    // **The window is the tree's** (`view::shell::settings::search_window`),
-    // computed from the box it places and set before this frame's description
-    // was built. It was computed here instead, from the rectangle this painter
-    // had been handed — which meant the search row's "(1-3 of 298)" was
-    // describing a window measured on the frame before it.
+/// One search result, as the three rows the tree draws it in.
+///
+/// **The formatting is domain knowledge and stays here.** What a result's
+/// name *is* depends on how it matched — a map's key, a map value with its
+/// key as breadcrumb, a text-list item, or the setting itself — and which
+/// characters the query hit is the matcher's answer. What went is the
+/// painting: three `Paragraph`s, a highlight band drawn row by row, and a
+/// rectangle filed per visible card.
+pub fn search_result_row(result: &SearchResult) -> crate::view::shell::settings::ResultRow {
+    use crate::app::shell_host::shell_theme::attrs;
+    use crate::view::shell::settings::ResultRow;
 
-    // Ensure scroll offset is valid
-    if state.search_scroll_offset >= state.search_results.len() {
-        state.search_scroll_offset = state.search_results.len().saturating_sub(1);
-    }
-
-    // Determine if we need a scrollbar
-    let needs_scrollbar = state.search_results.len() > state.search_max_visible;
-    let scrollbar_width = if needs_scrollbar { 1 } else { 0 };
-
-    // Reserve space for scrollbar on the right
-    let content_area = Rect::new(
-        area.x,
-        area.y,
-        area.width.saturating_sub(scrollbar_width),
-        area.height,
-    );
-
-    let mut y = content_area.y;
-
-    for (idx, result) in state
-        .search_results
-        .iter()
-        .enumerate()
-        .skip(state.search_scroll_offset)
-    {
-        if y >= content_area.y + content_area.height.saturating_sub(3) {
-            break;
-        }
-
-        let is_selected = idx == state.selected_search_result;
-        let is_hovered = matches!(state.hover_hit, Some(SettingsHit::SearchResult(i)) if i == idx);
-        let item_area = Rect::new(content_area.x, y, content_area.width, 3);
-
-        render_search_result_item(
-            frame,
-            item_area,
-            result,
-            idx,
-            is_selected,
-            is_hovered,
-            theme,
-            layout,
-        );
-        y += 3;
-    }
-
-    // Track search results area in layout for mouse wheel support
-    layout.search_results_area = Some(content_area);
-
-    // Render scrollbar if needed
-    if needs_scrollbar {
-        let scrollbar_area = Rect::new(
-            area.x + area.width - 1,
-            area.y,
-            1,
-            area.height.saturating_sub(3), // Leave space at bottom
-        );
-
-        let scrollbar_state = ScrollbarState::new(
-            state.search_results.len(),
-            state.search_max_visible,
-            state.search_scroll_offset,
-        );
-
-        let colors = ScrollbarColors::from_theme(theme);
-        render_scrollbar(
-            frame.buffer_mut(),
-            scrollbar_area,
-            &scrollbar_state,
-            &colors,
-        );
-
-        // Track scrollbar area in layout for click/drag support
-        layout.search_scrollbar_area = Some(scrollbar_area);
-    } else {
-        layout.search_scrollbar_area = None;
-    }
-}
-
-/// Render a single search result with breadcrumb. `result_index` is the
-/// absolute index into the state's `search_results` (needed for hit-testing
-/// because only the visible rows get registered in the layout).
-#[allow(clippy::too_many_arguments)]
-fn render_search_result_item(
-    frame: &mut Frame,
-    area: Rect,
-    result: &SearchResult,
-    result_index: usize,
-    is_selected: bool,
-    is_hovered: bool,
-    theme: &Theme,
-    layout: &mut SettingsLayout,
-) {
-    // Draw selection or hover highlight background
-    if is_selected {
-        // Use dedicated settings colors for selected items
-        let bg_style = Style::default().bg(theme.settings_selected_bg);
-        for row in 0..area.height.min(3) {
-            let row_area = Rect::new(area.x, area.y + row, area.width, 1);
-            frame.render_widget(Paragraph::new("").style(bg_style), row_area);
-        }
-    } else if is_hovered {
-        // Subtle hover highlight using menu hover colors
-        let bg_style = Style::default().bg(theme.menu_hover_bg);
-        for row in 0..area.height.min(3) {
-            let row_area = Rect::new(area.x, area.y + row, area.width, 1);
-            frame.render_widget(Paragraph::new("").style(bg_style), row_area);
-        }
-    }
-
-    // Determine display name and description based on deep match
-    let (display_name, display_desc) = match &result.deep_match {
+    let (name, desc) = match &result.deep_match {
         Some(DeepMatch::MapKey { key, .. }) => (key.clone(), Some(result.item.name.clone())),
         Some(DeepMatch::MapValue {
             matched_text, key, ..
@@ -444,116 +184,61 @@ fn render_search_result_item(
         }
         None => (result.item.name.clone(), result.item.description.clone()),
     };
-
-    // First line: Setting name with highlighting
-    let name_style = if is_selected {
-        Style::default().fg(theme.settings_selected_fg)
-    } else if is_hovered {
-        Style::default().fg(theme.menu_hover_fg)
-    } else {
-        Style::default().fg(theme.popup_text_fg)
-    };
-
-    // Build name with match highlighting, prefixed with selection indicator
-    let indicator = if is_selected { "▸ " } else { "  " };
-    let indicator_style = if is_selected {
-        Style::default()
-            .fg(theme.settings_selected_fg)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        name_style
-    };
-    let mut name_line = build_highlighted_text(
-        &display_name,
-        &result.name_matches,
-        name_style,
-        Style::default()
-            .fg(theme.diagnostic_warning_fg)
-            .add_modifier(Modifier::BOLD),
-    );
-    name_line
-        .spans
-        .insert(0, Span::styled(indicator, indicator_style));
-    frame.render_widget(
-        Paragraph::new(name_line),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
-
-    // Second line: Breadcrumb
-    let breadcrumb_style = Style::default()
-        .fg(theme.line_number_fg)
-        .add_modifier(Modifier::ITALIC);
-    let breadcrumb = format!("  {} > {}", result.breadcrumb, result.item.path);
-    let breadcrumb_line = Line::from(Span::styled(breadcrumb, breadcrumb_style));
-    frame.render_widget(
-        Paragraph::new(breadcrumb_line),
-        Rect::new(area.x, area.y + 1, area.width, 1),
-    );
-
-    // Third line: Description (if any). Counts characters (not bytes)
-    // when checking and truncating: descriptions can be localized (e.g.
-    // CJK translations) and a byte-based slice could land inside a
-    // multi-byte UTF-8 sequence and panic — same class as #1718.
-    if let Some(ref desc) = display_desc {
-        let desc_style = Style::default().fg(theme.line_number_fg);
-        let max_chars = (area.width as usize).saturating_sub(2);
-        let truncated_desc = format!("  {}", truncate_chars_with_ellipsis(desc, max_chars));
-        frame.render_widget(
-            Paragraph::new(truncated_desc).style(desc_style),
-            Rect::new(area.x, area.y + 2, area.width, 1),
-        );
+    ResultRow {
+        // The row's own theme carries selection and hover, so the plain runs
+        // name no colours of their own — only the matched characters do.
+        name: highlight_spans(
+            &name,
+            &result.name_matches,
+            String::new(),
+            attrs("ui.diagnostic_warning_fg", "ui.popup_bg", &["bold"]),
+        ),
+        breadcrumb: format!("{} > {}", result.breadcrumb, result.item.path),
+        desc,
     }
-
-    // Track this item in layout
-    layout.add_search_result(result_index, result.page_index, result.item_index, area);
 }
 
-/// Build a line with highlighted match positions
-fn build_highlighted_text(
+/// Split `text` at the matched character positions, so the matcher's answer
+/// becomes runs the tree can theme.
+fn highlight_spans(
     text: &str,
     matches: &[usize],
-    normal_style: Style,
-    highlight_style: Style,
-) -> Line<'static> {
+    plain: String,
+    hit: String,
+) -> Vec<crate::view::shell::settings::Span> {
+    use crate::view::shell::settings::Span as UiSpan;
     if matches.is_empty() {
-        return Line::from(Span::styled(text.to_string(), normal_style));
+        return vec![UiSpan::new(text.to_string(), plain)];
     }
-
-    let chars: Vec<char> = text.chars().collect();
     let mut spans = Vec::new();
     let mut current = String::new();
-    let mut in_highlight = false;
-
-    for (idx, ch) in chars.iter().enumerate() {
-        let should_highlight = matches.contains(&idx);
-
-        if should_highlight != in_highlight {
+    let mut lit = false;
+    for (idx, ch) in text.chars().enumerate() {
+        let on = matches.contains(&idx);
+        if on != lit {
             if !current.is_empty() {
-                let style = if in_highlight {
-                    highlight_style
-                } else {
-                    normal_style
-                };
-                spans.push(Span::styled(current, style));
-                current = String::new();
+                spans.push(UiSpan::new(
+                    std::mem::take(&mut current),
+                    match lit {
+                        true => hit.clone(),
+                        false => plain.clone(),
+                    },
+                ));
             }
-            in_highlight = should_highlight;
+            lit = on;
         }
-
-        current.push(*ch);
+        current.push(ch);
     }
-
-    // Push remaining
     if !current.is_empty() {
-        let style = if in_highlight {
-            highlight_style
-        } else {
-            normal_style
-        };
-        spans.push(Span::styled(current, style));
+        spans.push(UiSpan::new(
+            current,
+            match lit {
+                true => hit,
+                false => plain,
+            },
+        ));
     }
-
-    Line::from(spans)
+    spans
 }
 
 /// Compute the footer Delete-button label for an entry dialog.
@@ -581,38 +266,5 @@ pub(crate) fn entry_delete_button_label(dialog: &EntryDialogState) -> String {
             dialog.entry_key.clone()
         };
         format!("[ Delete \"{}\" ]", key)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn truncate_chars_with_ellipsis_ascii_fits() {
-        assert_eq!(truncate_chars_with_ellipsis("hi", 10), "hi");
-    }
-
-    #[test]
-    fn truncate_chars_with_ellipsis_ascii_truncates() {
-        assert_eq!(truncate_chars_with_ellipsis("hello world!", 8), "hello...");
-    }
-
-    #[test]
-    fn truncate_chars_with_ellipsis_multibyte_does_not_panic() {
-        // Regression: byte-slicing this string at `max - 3` would land
-        // inside the 3-byte UTF-8 sequence for `こ` and panic — same class
-        // as #1718.
-        let out = truncate_chars_with_ellipsis("こんにちは世界からのテスト", 8);
-        assert!(out.ends_with("..."));
-        // 5 kept chars + 3 ellipsis chars = 8 total chars.
-        assert_eq!(out.chars().count(), 8);
-    }
-
-    #[test]
-    fn truncate_chars_with_ellipsis_emoji_does_not_panic() {
-        let out = truncate_chars_with_ellipsis("📦📦📦📦📦📦📦📦", 5);
-        assert!(out.ends_with("..."));
-        assert_eq!(out.chars().count(), 5);
     }
 }

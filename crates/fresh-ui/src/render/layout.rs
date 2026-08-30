@@ -693,9 +693,18 @@ impl<M: 'static> Ui<M> {
                 let Some(r) = self.render_for(id) else {
                     continue;
                 };
+                // **The window in whatever unit the offset counts.** A
+                // cell-scrolled window's offset is a row, and its window is
+                // its own height; an index-scrolled one's offset is an item,
+                // and its window is however many items fit — which is not its
+                // height in cells unless the items are one cell tall. Reading
+                // the height for both put a list of three-row cards eleven
+                // items down inside a "fifteen-row" window and left it where
+                // it was.
                 let (scroll, max, rows) = {
                     let n = &self.render[r];
-                    (n.data.scroll, n.data.scroll_max, n.data.size.h as i32)
+                    let rows = n.data.window.map_or(n.data.size.h, |w| w.h) as i32;
+                    (n.data.scroll, n.data.scroll_max, rows)
                 };
                 let next = match cmd {
                     Command::ScrollTo(p) => p,

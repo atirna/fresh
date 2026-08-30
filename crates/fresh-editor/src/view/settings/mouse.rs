@@ -7,7 +7,7 @@ use crate::app::Editor;
 use anyhow::Result as AnyhowResult;
 
 use super::items::SettingControl;
-use super::{FocusPanel, SettingsHit, SettingsLayout};
+use super::{FocusPanel, SettingsHit};
 use crate::view::controls::DualListColumn;
 
 impl Editor {
@@ -15,7 +15,6 @@ impl Editor {
     pub(crate) fn handle_settings_mouse(
         &mut self,
         mouse_event: crossterm::event::MouseEvent,
-        is_double_click: bool,
     ) -> AnyhowResult<bool> {
         use crossterm::event::{MouseButton, MouseEventKind};
 
@@ -57,28 +56,14 @@ impl Editor {
             return Ok(false);
         }
 
-        // Track hover position and compute hover hit for visual feedback
         match mouse_event.kind {
+            // **Every surface reports its own hover.** A card, a category
+            // row, a footer button and a search result each say when the
+            // pointer enters and leaves them; this arm compared the cell
+            // against every recorded rectangle in the dialog on every move.
             MouseEventKind::Moved => {
-                let hover_hit = self
-                    .active_chrome()
-                    .settings_layout
-                    .as_ref()
-                    .and_then(|layout: &SettingsLayout| layout.hit_test(col, row));
-
                 if let Some(ref mut state) = self.settings_state {
-                    let old_hit = state.hover_hit;
                     state.hover_position = Some((col, row));
-                    state.hover_hit = hover_hit;
-
-                    // Update dropdown hover index when hovering over options
-                    let new_hover_idx = match hover_hit {
-                        Some(SettingsHit::ControlDropdownOption(_, opt_idx)) => Some(opt_idx),
-                        _ => None,
-                    };
-                    let hover_changed = state.set_dropdown_hover(new_hover_idx);
-
-                    return Ok(old_hit != hover_hit || hover_changed);
                 }
                 return Ok(false);
             }
@@ -88,10 +73,6 @@ impl Editor {
                     if state.is_dropdown_open() {
                         state.dropdown_scroll(-3);
                         return Ok(true);
-                    }
-                    // If search is active and we have results, scroll search results
-                    if state.search_active && !state.search_results.is_empty() {
-                        return Ok(state.search_scroll_up(3));
                     }
                 }
                 // A wheel over the category tree is the tree's: it is a
@@ -109,62 +90,32 @@ impl Editor {
                         state.dropdown_scroll(3);
                         return Ok(true);
                     }
-                    // If search is active and we have results, scroll search results
-                    if state.search_active && !state.search_results.is_empty() {
-                        return Ok(state.search_scroll_down(3));
-                    }
                 }
                 return Ok(self.settings_scroll_down(3));
             }
-            MouseEventKind::Drag(MouseButton::Left) => {
-                // Check if dragging on search scrollbar
-                if let Some(ref mut state) = self.settings_state {
-                    if state.search_active && !state.search_results.is_empty() {
-                        if let Some(scrolled) = self.search_scrollbar_drag(col, row) {
-                            return Ok(scrolled);
-                        }
-                    }
-                }
-                // A drag on the body's own bar is the window's; nothing
-                // else in the body answers one.
-                return Ok(false);
-            }
-            MouseEventKind::Down(MouseButton::Left) => {}
-            _ => return Ok(false),
+            // Both bars in the dialog — the body's and the results' — are
+            // their windows' own, and the framework maps a press or a drag on
+            // one to an offset.
+            MouseEventKind::Drag(MouseButton::Left) => return Ok(false),
+            // **Every surface in the dialog answers its own press**, and the
+            // tree's layers answer before this handler runs. What reached
+            // here was `SettingsLayout::hit_test`: the modal's rectangle, each
+            // control's chip, each visible search row and two scrollbar
+            // tracks, compared against the cell in the order the painter had
+            // registered them. A press that gets this far landed on the box
+            // or its scrim, which is `Background` — and `Background` did
+            // nothing. It is still swallowed, because the dialog is modal and
+            // the editor behind it must not see the click.
+            MouseEventKind::Down(MouseButton::Left) => Ok(true),
+            _ => Ok(false),
         }
-
-        // Use cached settings layout for hit testing
-        let Some(hit) = self
-            .active_chrome()
-            .settings_layout
-            .as_ref()
-            .and_then(|layout: &SettingsLayout| layout.hit_test(col, row))
-        else {
-            return Ok(false);
-        };
-
-        // **A press on a body card never reaches here.** The field that
-        // stamped its click geometry into the layout so the caret could land
-        // where the click did (#2573) is a node now, and its own hit carries
-        // the column inside it — `Editor::settings_widget_hit` places the
-        // caret from that. What is left of this path is the search results
-        // and the narrow layout's category strip.
-        let _ = col;
-        self.dispatch_settings_hit(hit, row, is_double_click);
-        Ok(true)
     }
 
-    /// Perform the action for a resolved `SettingsHit` — shared by the TUI mouse
-    /// hit-test above and the web `/settings` route, which sends the hit it
-    /// rendered natively. So a click does the same thing in both frontends.
-    /// `row` is used only by the scrollbar hits (TUI-only; the web never sends
-    /// them).
-    pub(crate) fn dispatch_settings_hit(
-        &mut self,
-        hit: SettingsHit,
-        row: u16,
-        is_double_click: bool,
-    ) {
+    /// Perform the action for a resolved `SettingsHit` — the one body both
+    /// frontends run. The TUI's nodes resolve their own presses to a hit
+    /// through `Editor::settings_widget_hit`; the web's `/settings` route
+    /// sends the hit it rendered. So a click does the same thing in both.
+    pub(crate) fn dispatch_settings_hit(&mut self, hit: SettingsHit, is_double_click: bool) {
         // If a dropdown is open and the click is outside it, cancel and stop.
         if let Some(ref mut state) = self.settings_state {
             if state.is_dropdown_open() {
@@ -181,7 +132,6 @@ impl Editor {
         }
 
         match hit {
-            SettingsHit::Outside | SettingsHit::Background | SettingsHit::SettingsPanel => {}
             // The wide layout's tree answers for itself now: its rows carry
             // `UiFact::SettingsCategory`, `SettingsCategorySection` and
             // `SettingsCategoryDisclosure` — the identity the row has, rather
@@ -399,14 +349,6 @@ impl Editor {
                     let _ = self.open_config_file(layer);
                 }
             }
-            // Nothing produces this any more: the body's bar is the
-            // `viewport`'s, and the framework maps a press on it to an
-            // offset. The variant stays while the *web* still names it.
-            SettingsHit::Scrollbar => {}
-            SettingsHit::SearchScrollbar => self.search_scrollbar_click(row),
-            SettingsHit::SearchResultsPanel => {
-                // Clicking on search results panel background - no action needed
-            }
         }
     }
 
@@ -601,42 +543,10 @@ impl Editor {
     // the `viewport` the cards live in draws its bar in its own gutter and
     // the framework maps a press or a drag on it to an offset.
 
-    fn search_scrollbar_click(&mut self, row: u16) {
-        if let Some(ref scrollbar_area) = self
-            .active_chrome()
-            .settings_layout
-            .as_ref()
-            .and_then(|l| l.search_scrollbar_area)
-        {
-            if scrollbar_area.height > 0 {
-                let relative_y = row.saturating_sub(scrollbar_area.y);
-                let ratio = relative_y as f32 / scrollbar_area.height as f32;
-                if let Some(ref mut state) = self.settings_state {
-                    state.search_scroll_to_ratio(ratio);
-                }
-            }
-        }
-    }
-
-    fn search_scrollbar_drag(&mut self, col: u16, row: u16) -> Option<bool> {
-        if let Some(ref scrollbar_area) = self
-            .active_chrome()
-            .settings_layout
-            .as_ref()
-            .and_then(|l| l.search_scrollbar_area)
-        {
-            let in_scrollbar_x = col >= scrollbar_area.x.saturating_sub(1)
-                && col <= scrollbar_area.x + scrollbar_area.width;
-            if in_scrollbar_x && scrollbar_area.height > 0 {
-                let relative_y = row.saturating_sub(scrollbar_area.y);
-                let ratio = relative_y as f32 / scrollbar_area.height as f32;
-                if let Some(ref mut state) = self.settings_state {
-                    return Some(state.search_scroll_to_ratio(ratio));
-                }
-            }
-        }
-        None // Not on search scrollbar
-    }
+    // **The results' scrollbar is its window's own too.** Its track was a
+    // second filed rectangle, and a press and a drag each converted a row
+    // inside it to a ratio; the results are a `List` in a `viewport` now, and
+    // the framework maps both to an offset.
 
     // **Everything the entry-dialog stack hit-tested by geometry is gone.**
     // `EntryDialogLayout` recomputed the box, its inner band, its button row

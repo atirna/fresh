@@ -52,42 +52,6 @@ pub fn fit(info: LayoutInfo) -> Option<(u16, u16)> {
     Some(((w * 90 / 100).min(MAX_WIDTH), h * 90 / 100))
 }
 
-/// How many search results fit inside a box of `modal`'s size.
-///
-/// The twin of [`super::keybinding::table_rows`], and there for the same
-/// reason: the box is the tree's, so the window of the list inside it is the
-/// tree's arithmetic too. The painter computed it as it drew and filed it in
-/// `search_max_visible` — where the *next* frame's chrome read it, one frame
-/// after the description that needed it had already been built. That is why
-/// the result count opened reading "(1-5 of 298)" over a list three results
-/// tall: five is the field's constructor default, and the first frame with a
-/// search on it had nothing else to read.
-pub fn search_window(modal: ratatui::layout::Rect) -> usize {
-    let inner_w = modal.width.saturating_sub(2);
-    let inner_h = modal.height.saturating_sub(2);
-    // The painter's own threshold: `inner_area.width < 60` is a narrow box,
-    // and a narrow box stacks its five buttons instead of laying them in a
-    // row, which costs seven rows rather than two.
-    let narrow = inner_w < 60;
-    let footer = if narrow { 7 } else { 2 };
-    // One row of search bar, one blank row under it, then the footer.
-    let content = inner_h.saturating_sub(2 + footer);
-    let rows = match narrow {
-        false => content,
-        // The narrow layout subtracts the footer a second time — the content
-        // band already excludes it — and then takes three rows for the
-        // category strip and one for the rule under it. Mirrored rather than
-        // corrected: this states the geometry the painter has, and the two
-        // have to agree while the panel below is still painted.
-        true => {
-            let main = content.saturating_sub(footer);
-            main.saturating_sub(3u16.min(main) + 1)
-        }
-    };
-    // Three rows a result: its name, its breadcrumb and its category.
-    ((rows.saturating_sub(3) / 3) as usize).max(1)
-}
-
 /// The dialog's box as a layer: centred beside the dock, with the chrome the
 /// tree owns inside it and the painter's body between.
 ///
@@ -128,6 +92,13 @@ pub fn layer(c: Option<&Chrome>) -> Node<UiMsg> {
                 // The page: its header, then its cards in the window that
                 // scrolls them. Both are the tree's in either layout.
                 let page = || {
+                    // A running search replaces the whole band with its
+                    // results; otherwise it is the page's header and cards.
+                    if let Some(r) = &c.results {
+                        return col()
+                            .w(Sizing::Flex(1))
+                            .child(results(r).h(Sizing::Flex(1)));
+                    }
                     let mut kids: Vec<Node<UiMsg>> = Vec::with_capacity(2);
                     if let Some(p) = &c.page {
                         kids.push(page_header(p));
@@ -338,6 +309,75 @@ pub fn entry_items_key(level: usize) -> fresh_ui::Key {
 
 pub fn items_key() -> fresh_ui::Key {
     fresh_ui::Key::Str("settings_items".into())
+}
+
+pub fn results_key() -> fresh_ui::Key {
+    fresh_ui::Key::Str("settings_results".into())
+}
+
+/// Three rows a result: its name, its breadcrumb and its category. The list
+/// is the one place that says so — the count row reads its window back rather
+/// than dividing a band by it.
+pub const RESULT_ROWS: u16 = 3;
+
+/// The search's results: a card list, three rows to a card.
+///
+/// **A `List` is the window, the bar, the wheel and the drag at once.** The
+/// painter windowed the results by hand (`skip(scroll_offset)`, break at
+/// `height - 3`), drew its own scrollbar beside them, and filed a rectangle
+/// per *visible* card — which is why the hit had to carry the absolute index
+/// separately (#2860: the position in the filed list is a viewport slot, and
+/// once scrolled it is not the result's index).
+pub fn results(r: &Results) -> Node<UiMsg> {
+    let rows: std::rc::Rc<Vec<ResultRow>> = std::rc::Rc::new(r.rows.clone());
+    let n = rows.len();
+    let list = fresh_ui::List::windowed(
+        n,
+        |i| fresh_ui::Key::Pair("settings_result".into(), i as u64),
+        move |i| result_card(&rows[i]),
+    )
+    .row_rows(RESULT_ROWS)
+    .focusable(false)
+    .scrollbar()
+    .scrollbar_theme(pair("ui.split_separator_fg", "ui.popup_bg"))
+    .row_theme(|_, st| match st {
+        fresh_ui::widgets::RowState::Selected | fresh_ui::widgets::RowState::SelectedBlur => {
+            pair("ui.settings_selected_fg", "ui.settings_selected_bg")
+        }
+        fresh_ui::widgets::RowState::Hover => pair("ui.menu_hover_fg", "ui.menu_hover_bg"),
+        _ => pair("ui.popup_text_fg", "ui.popup_bg"),
+    })
+    .on_select(|i| UiMsg::Ui(UiFact::SettingsSearchResult(i)))
+    .on_activate(|i| UiMsg::Ui(UiFact::SettingsSearchResult(i)));
+    let list = match n {
+        0 => list,
+        _ => list.selected(r.selected.min(n - 1)),
+    };
+    fresh_ui::ComponentExt::node(list).key(results_key())
+}
+
+/// One result's three rows. The `▸` marks the cursor; the row's own theme
+/// says whether it is the selected one, so the marker is the only thing here
+/// that has to know.
+fn result_card(r: &ResultRow) -> Node<UiMsg> {
+    let dim = pair("ui.line_number_fg", "ui.popup_bg");
+    let mut name: Vec<Node<UiMsg>> = vec![text("  ")];
+    name.extend(
+        r.name
+            .iter()
+            .map(|s| text(s.text.clone()).theme(s.theme.clone())),
+    );
+    col().children([
+        row().h(Sizing::Cells(1)).children(name),
+        line(
+            format!("  {}", r.breadcrumb),
+            attrs("ui.line_number_fg", "ui.popup_bg", &["italic"]),
+        ),
+        match &r.desc {
+            Some(d) => line(format!("  {d}"), dim).elide(fresh_ui::Elide::Tail),
+            None => row().h(Sizing::Cells(1)),
+        },
+    ])
 }
 
 /// The narrow layout's category band: the names, the key hint, a blank row
@@ -817,6 +857,9 @@ pub struct Chrome {
     /// The page's own header, above the settings. `None` while a search is
     /// running or the entry-dialog stack is up.
     pub page: Option<Page>,
+    /// The search's results, in place of the page. `Some` exactly when the
+    /// page is `None` for a running search — the two are the same band.
+    pub results: Option<Results>,
     /// The page's settings, as cards.
     ///
     /// `None` under the same two conditions as the header: a search replaces
@@ -905,6 +948,24 @@ pub struct Categories {
     /// Whether the categories panel has the keyboard. It decides both the
     /// highlight's colour and whether the `>` is drawn, exactly as it did.
     pub focused: bool,
+}
+
+/// The search's results, which replace the page while a search is running.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Results {
+    pub rows: Vec<ResultRow>,
+    pub selected: usize,
+}
+
+/// One result: three rows — its name with the query's matches picked out, the
+/// breadcrumb that says where it lives, and its description.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResultRow {
+    /// Already split at the match positions by the search, which is domain
+    /// knowledge: what a fuzzy match *is* belongs to the matcher.
+    pub name: Vec<Span>,
+    pub breadcrumb: String,
+    pub desc: Option<String>,
 }
 
 /// The narrow layout's categories: one row of names across the top, in place
@@ -1476,6 +1537,7 @@ mod tests {
             footer: Some(footer()),
             categories: Some(tree()),
             strip: None,
+            results: None,
             items: None,
             page: Some(Page {
                 title: "General".into(),
@@ -1559,6 +1621,7 @@ mod tests {
             footer: Some(footer()),
             categories: None,
             strip: None,
+            results: None,
             page: None,
             items: None,
         }
@@ -1683,6 +1746,94 @@ mod tests {
         assert!(
             after.iter().any(|r| r.contains("setting 30")),
             "the window moved to the card it was asked for: {after:?}"
+        );
+    }
+
+    /// **The results' window follows the selection**, and what it ended up at
+    /// is readable — which is the two halves of what `search_scroll_offset`
+    /// used to be. The painter windowed the list by hand
+    /// (`skip(scroll_offset)`, break at `height - 3`) and the state nudged the
+    /// offset by `max_visible` whenever the selection left it; the count row
+    /// then read that offset back to say "(4-6 of 12)".
+    #[test]
+    fn the_results_window_follows_the_selected_result() {
+        let results = |selected: usize| {
+            let mut c = chrome();
+            c.results = Some(Results {
+                selected,
+                rows: (0..12)
+                    .map(|i| ResultRow {
+                        name: vec![Span::new(
+                            format!("result {i}"),
+                            pair("ui.popup_text_fg", "ui.popup_bg"),
+                        )],
+                        breadcrumb: format!("General > setting_{i}"),
+                        desc: None,
+                    })
+                    .collect(),
+            });
+            c
+        };
+        let shown = |ui: &Ui<UiMsg>| -> Vec<String> {
+            ui.spec()
+                .visible()
+                .filter_map(|i| match &i.draw {
+                    fresh_ui::Draw::Lines(l) => {
+                        let t = l.first()?.trim().to_string();
+                        t.starts_with("result ").then_some(t)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // The band is short enough that twelve results cannot all fit.
+        let mut ui: Ui<UiMsg> = Ui::new();
+        let frame = |c: Chrome| {
+            frame_tree(Frame {
+                settings: Some(c),
+                modal: Some(Slot::Settings),
+                dock: None,
+                menu_bar: false,
+                status_bar: false,
+                ..Frame::default()
+            })
+        };
+        ui.frame(frame(results(0)), Size::new(100, 24));
+        let first = shown(&ui);
+        assert!(
+            first.iter().any(|r| r == "result 0"),
+            "the window starts at the top: {first:?}"
+        );
+        assert!(
+            !first.iter().any(|r| r == "result 11"),
+            "and does not reach the last result: {first:?}"
+        );
+
+        ui.frame(frame(results(11)), Size::new(100, 24));
+        let after = shown(&ui);
+        assert!(
+            after.iter().any(|r| r == "result 11"),
+            "selecting the last result brought it into the window: {after:?}"
+        );
+        // And what the count row reports — the first result in the window,
+        // and how many of them fit — is the window's own answer rather than a
+        // pair of numbers kept beside it. Both are in *results*: an
+        // index-scrolled window counts in the items it holds.
+        let el = ui.find_by_key(&results_key()).expect("the results list");
+        let (scroll, window) = ui.scroll(el);
+        let offset = scroll.y.max(0) as usize;
+        assert_eq!(
+            window.h as usize,
+            after.len(),
+            "the window reports as many results as are on screen"
+        );
+        assert!(
+            offset > 0,
+            "the window moved, so the count row starts past the first result"
+        );
+        assert!(
+            !after.iter().any(|r| *r == format!("result {}", offset - 1)),
+            "and the result above the window is not on screen: {after:?}"
         );
     }
 

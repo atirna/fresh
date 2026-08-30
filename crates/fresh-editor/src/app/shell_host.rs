@@ -1035,7 +1035,14 @@ impl Editor {
             _ => None,
         };
 
-        self.dispatch_settings_hit(resolved, 0, false);
+        // A map row activates on a *double* click and its add row on a
+        // single one (#604), so the press's own doubleness travels with it —
+        // the same bit `handle_settings_mouse` was handed.
+        let dbl = self
+            .shell_pointer_event
+            .map(|(_, double)| double)
+            .unwrap_or(false);
+        self.dispatch_settings_hit(resolved, dbl);
         if let Some(byte) = caret {
             if let Some(s) = self.settings_state.as_mut() {
                 s.position_text_cursor(byte);
@@ -1199,7 +1206,7 @@ impl Editor {
                 }
             }
             UiFact::SettingsItem(idx) => {
-                self.dispatch_settings_hit(crate::view::settings::SettingsHit::Item(idx), 0, false);
+                self.dispatch_settings_hit(crate::view::settings::SettingsHit::Item(idx), false);
             }
             UiFact::SettingsItemHover(idx) => {
                 if let Some(s) = self.settings_state.as_mut() {
@@ -1209,7 +1216,6 @@ impl Editor {
             UiFact::SettingsInherit(idx) => {
                 self.dispatch_settings_hit(
                     crate::view::settings::SettingsHit::ControlInherit(idx),
-                    0,
                     false,
                 );
             }
@@ -1249,6 +1255,12 @@ impl Editor {
             }
             UiFact::SettingsEntryFieldAction(item, action) => {
                 self.entry_dialog_field_action(item, action);
+            }
+            UiFact::SettingsSearchResult(idx) => {
+                self.dispatch_settings_hit(
+                    crate::view::settings::SettingsHit::SearchResult(idx),
+                    false,
+                );
             }
             UiFact::PanelClosed => {
                 self.dismiss_floating_panel_with_cancel(crate::app::PanelSlot::Floating);
@@ -1730,7 +1742,7 @@ impl Editor {
                 }
             }
             UiFact::SettingsButtonHover(b) => {
-                use crate::view::settings::layout::SettingsHit;
+                use crate::view::settings::hit::SettingsHit;
                 use crate::view::shell::settings::Button;
                 if let Some(s) = self.settings_state.as_mut() {
                     s.hover_hit = b.map(|b| match b {
@@ -1785,11 +1797,11 @@ impl Editor {
             }
             UiFact::ModalPointer(slot) => {
                 use crate::view::shell::modal::Slot;
-                let Some((ev, double)) = self.shell_pointer_event else {
+                let Some((ev, _)) = self.shell_pointer_event else {
                     return;
                 };
                 let r = match slot {
-                    Slot::Settings => self.handle_settings_mouse(ev, double),
+                    Slot::Settings => self.handle_settings_mouse(ev),
                     Slot::FloatingPanel => self.handle_floating_modal_mouse(ev),
                 };
                 if let Err(e) = r {

@@ -492,6 +492,13 @@ pub enum UiFact {
     SettingsEntryButtonHover(Option<usize>),
     /// A press on a field's `[Reset]` / `[Inherit]`: `(field, action)`.
     SettingsEntryFieldAction(usize, usize),
+    /// A press on one of the search's results, by its absolute index.
+    ///
+    /// **Absolute, and it always was** — the painter filed a rectangle per
+    /// *visible* card, so the position in that list was a viewport slot and,
+    /// once the list had scrolled, not the result's index (#2860). A list row
+    /// knows its own index whether it is on screen or not.
+    SettingsSearchResult(usize),
 }
 
 /// What a menu-bar navigation step does to the open chain.

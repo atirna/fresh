@@ -272,15 +272,36 @@ impl Editor {
         // the standing proof, and it keeps both derivations honest now that
         // only one of them runs here.
         // See docs/internal/fresh-editor-ui-migration.md (S1).
-        // The settings search list's window, from the box the tree placed last
-        // frame. This is the one mutation the description needs made *before*
-        // it is built: the row it describes says "(1-3 of 298)", and three is
-        // how many results the box has room for. The painter used to work that
-        // out as it drew and leave it behind for the next frame to read.
-        if let Some(r) = self.panel_rect(&crate::view::shell::settings::key()) {
-            let n = crate::view::shell::settings::search_window(r);
+        // The settings search list's window, from the band the tree placed
+        // last frame. This is the one mutation the description needs made
+        // *before* it is built: the row it describes says "(1-3 of 298)", and
+        // three is how many results the band has room for.
+        //
+        // The band is the page's — the same one the cards fill when no search
+        // is running — so its height is known on every frame the dialog is
+        // open, including the first frame a query has results on. What was
+        // here read the *box* and re-derived the band from it by mirroring
+        // the painter's arithmetic: subtract the border, the search row, the
+        // gap and a footer that is two rows wide and seven narrow, then in the
+        // narrow case subtract the footer a second time because the painter
+        // did. None of that is anyone's arithmetic any more.
+        //
+        // The list's own window is the better answer and is preferred where
+        // there is one; the band is what the *first* frame of a search has,
+        // since the list does not exist until the description that reports
+        // its window has already been built.
+        let window = self
+            .shell_ui
+            .as_ref()
+            .and_then(|ui| ui.find_by_key(&crate::view::shell::settings::results_key()))
+            .map(|el| self.shell_ui.as_ref().expect("checked").scroll(el).1.h)
+            .filter(|h| *h > 0);
+        let band = self
+            .panel_rect(&crate::view::shell::settings::panel_key())
+            .map(|r| r.height / crate::view::shell::settings::RESULT_ROWS);
+        if let Some(n) = window.or(band) {
             if let Some(s) = self.settings_state.as_mut() {
-                s.search_max_visible = n;
+                s.search_max_visible = (n as usize).max(1);
             }
         }
         // What the body's window turned out to be. Every answer the settings
@@ -2210,6 +2231,14 @@ impl Editor {
         if moved {
             s.sync_tree_cursor_to_body_scroll();
         }
+        // The search results' window, on the same terms. The list moves its
+        // own window when the selection leaves it, so what the count row
+        // reports is read back rather than kept in step by hand.
+        if let Some(el) = ui.find_by_key(&st::results_key()) {
+            // In results, not rows: an index-scrolled window counts its offset
+            // in the items it holds.
+            s.search_scroll_offset = ui.scroll(el).0.y.max(0) as usize;
+        }
         // Each entry dialog's window, on the same terms. Its offset is read
         // rather than kept: the keyboard moves it by asking, and what it
         // ended up at is the window's answer.
@@ -2543,7 +2572,7 @@ impl Editor {
                     3 => st::Button::Cancel,
                     _ => st::Button::Edit,
                 });
-            use crate::view::settings::layout::SettingsHit;
+            use crate::view::settings::hit::SettingsHit;
             st::Footer {
                 layer: format!("[ {} ]", s.target_layer_name()),
                 reset: format!(
@@ -2680,11 +2709,23 @@ impl Editor {
                 })
                 .collect(),
         });
+        // The search's results, in place of the page. The painter windowed
+        // them by hand and filed a rectangle per visible card; the list is
+        // the window, and a row knows its own index.
+        let results = (s.search_active && !s.search_results.is_empty()).then(|| st::Results {
+            selected: s.selected_search_result,
+            rows: s
+                .search_results
+                .iter()
+                .map(crate::view::settings::render::search_result_row)
+                .collect(),
+        });
         Some(st::Chrome {
             wide,
             footer,
             categories,
             strip,
+            results,
             page,
             items,
             title: match s.has_changes() {
@@ -4577,23 +4618,18 @@ impl Editor {
             // columns out, so the panel's rectangle is read rather than split
             // for a second time. See `settings::panel_key`.
             let panel_area = self.panel_rect(&crate::view::shell::settings::panel_key());
-            // And the band under that panel's header, which the header itself
-            // sizes. See `settings::items_key`.
-            let items_area = self.panel_rect(&crate::view::shell::settings::items_key());
             let open = self.settings_state.as_ref().is_some_and(|s| s.visible);
             if open {
                 let theme = self.theme.read().unwrap().clone();
-                if let Some(ref mut settings_state) = self.settings_state {
-                    let settings_layout = crate::view::settings::render_settings(
+                if let Some(ref settings_state) = self.settings_state {
+                    crate::view::settings::render_settings(
                         frame,
                         area,
                         modal_area.unwrap_or(ratatui::layout::Rect::ZERO),
                         panel_area,
-                        items_area,
                         settings_state,
                         &theme,
                     );
-                    self.active_chrome_mut().settings_layout = Some(settings_layout);
                 }
             }
         }

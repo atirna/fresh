@@ -480,6 +480,7 @@ mod tests {
                     footer: None,
                     categories: None,
                     strip: None,
+                    results: None,
                     page: None,
                     items: None,
                 }),
