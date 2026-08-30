@@ -322,9 +322,22 @@ assumed:
 * `Tree` is a *flat, controlled* list of pre-rendered rows whose expansion is
   the plugin's, so it crossed on `widgets::List` with `List` itself.
 
-What is still behind the boundary is the two shapes whose rows are subtrees —
-a `List` with `item_specs` and a `Tree` with `item_height > 1` or
-`card_borders` — and multi-line `Text`. Those are one substitution, not three.
+A `List` of *cards* — `item_specs`, each item a little block — crossed on a
+library change rather than a boundary argument: `List` stamped `Cells(1)` on
+every row and `ScrollMode::Items` counted one item per cell, so `row_rows` is
+what it needed. The gutter is reserved whether the bar is there or not, which
+also removes the reflow the runtime had (every card re-rendered one column
+narrower the moment one more session made the list overflow).
+
+**Two shapes are left, and they are the same question.** A `Tree` with
+`card_borders` has *heterogeneous* rows — `item_height + 2` for a card node,
+one for a folder header — which a uniform band cannot say, and uniformity is
+not an accident: it is what lets a window name the items it holds without
+measuring them. Multi-line `Text` has a painter-drawn bar over a scroll the
+runtime owns. Both want the same thing, which is for the scroll to belong to
+the tree, so both are taken with C.2 rather than guessed at before it.
+(`item_height > 1` without `card_borders` does not occur — the only producer
+sets the two together — so there is no third case hiding here.)
 
 **`List` has already crossed, and it is the proof of the shape.**
 `widgets::List` windows its rows out of a `viewport`, so the scroll is the

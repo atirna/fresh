@@ -132,19 +132,27 @@ pub fn covered(spec: &WidgetSpec) -> bool {
         // of a viewport — the scroll is the element's and `scrollbar()` is the
         // bar. A list of *cards* has not: its rows are multi-row subtrees with
         // their own selection marking, which is the next substitution.
-        WidgetSpec::List { item_specs, .. } => item_specs.is_empty(),
+        // A list of *cards* crosses on `List::row_rows`: an item is a band of
+        // rows rather than one, and everything else — the window in items, the
+        // selection, the press — is the list above.
+        WidgetSpec::List { .. } => true,
         // A single-line field does not scroll; a multi-line one does.
         WidgetSpec::Text { rows, .. } => *rows <= 1,
         // A tree is a *flat, controlled* list of pre-rendered rows — its
         // expansion is the plugin's — so it crosses on `widgets::List` too.
-        // Multi-row items (`item_height > 1`, `card_borders`) have not: their
-        // rows are subtrees with their own selection marking, which is the
-        // card substitution.
-        WidgetSpec::Tree {
-            item_height,
-            card_borders,
-            ..
-        } => *item_height <= 1 && !card_borders,
+        //
+        // **`card_borders` is the one shape a uniform band cannot say.** With
+        // it, a tree's rows are *heterogeneous*: a card node takes
+        // `item_height + 2` rows and a folder header takes one
+        // (`tree_node_rows`). `List::row_rows` is uniform by design — that is
+        // what lets a window name the items it holds without measuring any of
+        // them — so this is not a matter of raising a number. It wants either
+        // per-item heights in the library or a cells-scrolling viewport over
+        // all the rows, and which of those is right is the same question as
+        // who owns the scroll (C.2), so it is taken there rather than guessed
+        // at here. `item_height > 1` without `card_borders` is not a case that
+        // occurs: the only producer sets the two together.
+        WidgetSpec::Tree { card_borders, .. } => !card_borders,
         // **`DualList` does not scroll**, which is why it crosses through the
         // adapter with no substitution at all. It emits every row — its body
         // is `max(available, included, visible_rows)` tall and there is no
@@ -644,6 +652,138 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
                         // A row's hit names the List that owns it: focus moves
                         // there, and the arrows after a row click keep driving
                         // the list's selection.
+                        owner_key: Some(list_key.clone()),
+                    },
+                }))
+            }));
+            let list = match sel >= 0 {
+                true => list.selected(sel as usize),
+                false => list,
+            };
+            let node = fresh_ui::ComponentExt::node(list);
+            match visible_rows {
+                Some(r) => node.h(Sizing::Cells(*r as u16)),
+                None => node.flex(1),
+            }
+        }
+        // **A card list is a list whose items are blocks.**
+        //
+        // `item_specs` makes each item a `WidgetSpec` rendered into a band of
+        // rows — a rounded pill with a title, a line of detail and a rule.
+        // Everything else about it is the list above: the window is in items,
+        // the selection is the owner's, a press anywhere on the card selects
+        // it. What it needed was for the library's `List` to stop stamping one
+        // cell on every row, which is `row_rows`.
+        //
+        // **The card's own rows stay the runtime's**, and so does the way a
+        // selected one is marked: `mark_list_card_selected` swaps the light
+        // box glyphs for heavy ones and adds bold and an accent, because "no
+        // background band — it reads garish over a multi-row card". That is
+        // not a theme name and could not be one, so the list's own row states
+        // are overridden to the base ink and the marking is applied where the
+        // rows are made.
+        //
+        // **The gutter is reserved whether the bar is there or not.** The
+        // runtime re-rendered every card one column narrower the moment the
+        // list overflowed, so adding one session reflowed all of them; a
+        // stable gutter is the same column, always, which is what that
+        // reflow was an accident of.
+        WidgetSpec::List {
+            item_specs,
+            item_keys,
+            selected_index,
+            visible_rows,
+            key,
+            ..
+        } if !item_specs.is_empty() => {
+            use std::rc::Rc;
+            let card_width = (width as u32).saturating_sub(1).max(1);
+            let mut cards: Vec<Vec<TextPropertyEntry>> = Vec::with_capacity(item_specs.len());
+            let mut item_height: u16 = 1;
+            for item in item_specs.iter() {
+                let mut scratch = std::collections::HashMap::new();
+                let rows = crate::widgets::render::render_collected(
+                    item,
+                    cx.states,
+                    &mut scratch,
+                    crate::widgets::RenderContext {
+                        focus_key: &cx.focus_key,
+                        hover_key: cx.hovered_key.as_deref().unwrap_or(""),
+                        hover_item_key: &cx.hovered_item_key,
+                        markdown: None,
+                        marker_gutter: cx.marker_gutter,
+                        avail_height: cx.avail_height,
+                    },
+                    card_width,
+                )
+                .entries;
+                item_height = item_height.max((rows.len() as u16).max(1));
+                cards.push(rows);
+            }
+            let n = cards.len();
+            let cards = Rc::new(cards);
+            let keys = Rc::new(item_keys.clone());
+            let list_key = key.clone().unwrap_or_default();
+            let slot = cx.slot;
+            let sel = *selected_index;
+            let hit_keys = keys.clone();
+            let list = fresh_ui::List::windowed(
+                n,
+                {
+                    let keys = keys.clone();
+                    move |i| {
+                        fresh_ui::Key::Str(
+                            keys.get(i).cloned().unwrap_or_else(|| i.to_string()).into(),
+                        )
+                    }
+                },
+                {
+                    let cards = cards.clone();
+                    move |i| {
+                        let selected = i as i32 == sel;
+                        col().children((0..item_height as usize).map(|r| {
+                            let mut e = cards[i]
+                                .get(r)
+                                .cloned()
+                                .unwrap_or_else(crate::widgets::render::blank_list_row);
+                            e.normalize_widths();
+                            if selected {
+                                crate::widgets::render::mark_list_card_selected(&mut e);
+                            }
+                            entry_row(&e)
+                        }))
+                    }
+                },
+            )
+            .focusable(false)
+            .row_rows(item_height)
+            .scrollbar_gutter()
+            .row_theme(|_, st| match st {
+                fresh_ui::widgets::RowState::Hover => {
+                    Ink::new(Paint::key(BASE_FG), Paint::key("ui.menu_hover_bg")).to_string()
+                }
+                // A selected card is marked in its own glyphs, not by a band.
+                _ => Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)).to_string(),
+            })
+            .on_activate_handler(Rc::new(move |i| {
+                let item_key = hit_keys.get(i).cloned().unwrap_or_default();
+                Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
+                    slot,
+                    hit: crate::widgets::HitArea {
+                        row_target: true,
+                        context_click: true,
+                        overlay: false,
+                        widget_key: item_key.clone(),
+                        widget_kind: "list",
+                        buffer_row: i as u32,
+                        byte_start: 0,
+                        byte_end: 0,
+                        payload: serde_json::json!({
+                            "index": i,
+                            "key": item_key,
+                            "list_key": list_key,
+                        }),
+                        event_type: "select",
                         owner_key: Some(list_key.clone()),
                     },
                 }))
@@ -2702,5 +2842,135 @@ mod tests {
             .is_empty(),
             "the label does not"
         );
+    }
+
+    fn card(title: &str) -> WidgetSpec {
+        WidgetSpec::LabeledSection {
+            label: title.into(),
+            child: Box::new(WidgetSpec::Raw {
+                entries: vec![raw(title)],
+                key: None,
+            }),
+            width_pct: None,
+            key: None,
+        }
+    }
+
+    fn card_list(n: usize, selected: i32, visible: u32) -> WidgetSpec {
+        WidgetSpec::List {
+            items: Vec::new(),
+            item_specs: (0..n).map(|i| card(&format!("card{i}"))).collect(),
+            item_keys: (0..n).map(|i| format!("c{i}")).collect(),
+            selected_index: selected,
+            visible_rows: Some(visible),
+            key: Some("cards".into()),
+            focusable: true,
+        }
+    }
+
+    /// **A card is a band of rows, and the band is the item.** The runtime maps
+    /// item `i` to rows `i * item_height ..`; `List::row_rows` is the same
+    /// statement, made once, where the rows are placed.
+    #[test]
+    fn a_card_lists_items_take_a_band_of_rows_each() {
+        let spec = card_list(6, 0, 9);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let band = |k: &str| {
+            let id = ui
+                .find_by_key(&fresh_ui::Key::Str(k.into()))
+                .unwrap_or_else(|| panic!("card {k}"));
+            let r = ui.rect_of(id);
+            (r.y, r.h)
+        };
+        let (y0, h0) = band("c0");
+        assert!(h0 > 1, "a card is taller than a line: {h0}");
+        assert_eq!(band("c1"), (y0 + h0 as i32, h0), "the next band, stacked");
+        assert_eq!(band("c2"), (y0 + 2 * h0 as i32, h0));
+    }
+
+    /// The rows themselves are the runtime's, marking included: a selected
+    /// card is drawn in heavy box glyphs rather than banded, because a band
+    /// "reads garish over a multi-row card".
+    #[test]
+    fn a_selected_card_is_marked_in_its_own_glyphs() {
+        let plain = tree_rows(&card_list(3, -1, 12));
+        let picked = tree_rows(&card_list(3, 0, 12));
+        assert!(
+            plain.iter().any(|r| r.contains('╭')),
+            "unselected cards keep the light box: {plain:?}"
+        );
+        assert!(
+            picked.iter().any(|r| r.contains('┏')),
+            "the selected one is heavy: {picked:?}"
+        );
+        assert_eq!(
+            plain.len(),
+            picked.len(),
+            "and marking does not change the layout"
+        );
+    }
+
+    /// A press anywhere on a card selects it, and says which — the same
+    /// `select` hit with the same payload the runtime recorded for every row
+    /// of the band.
+    #[test]
+    fn pressing_a_card_selects_that_item() {
+        let spec = card_list(6, 0, 9);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let r = ui.rect_of(ui.find_by_key(&fresh_ui::Key::Str("c1".into())).expect("c1"));
+        // The card's *last* row, to prove the whole band is the target.
+        let at = fresh_ui::Point::new(2, r.y + r.h as i32 - 1);
+        ui.dispatch(fresh_ui::Input::press(
+            at,
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        ));
+        let got = facts(ui.dispatch(fresh_ui::Input::release(
+            at,
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        let hit = got
+            .iter()
+            .find_map(|f| match f {
+                UiFact::WidgetHit { hit, .. } => Some(hit),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a select, got {got:?}"));
+        assert_eq!(hit.event_type, "select");
+        assert_eq!(hit.widget_key, "c1");
+        assert_eq!(hit.owner_key.as_deref(), Some("cards"));
+        assert_eq!(hit.payload.get("index").and_then(|v| v.as_i64()), Some(1));
+    }
+
+    /// The bar reads in items. Nine rows of window over three-row cards is a
+    /// window of three *cards*, and a thumb sized from the nine would say the
+    /// list is three times as visible as it is.
+    #[test]
+    fn a_card_lists_bar_measures_the_window_in_cards() {
+        let spec = card_list(20, 0, 9);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let bar = ui
+            .spec()
+            .items
+            .iter()
+            .find_map(|i| match i.draw {
+                fresh_ui::Draw::Scrollbar {
+                    offset,
+                    content,
+                    window,
+                } => Some((offset, content, window)),
+                _ => None,
+            })
+            .expect("twenty cards in nine rows overflow");
+        let h0 = ui
+            .rect_of(ui.find_by_key(&fresh_ui::Key::Str("c0".into())).expect("c0"))
+            .h;
+        assert_eq!(bar.0, 0);
+        assert_eq!(bar.1, 20, "twenty items");
+        assert_eq!(bar.2, 9 / h0, "however many of them fit");
     }
 }
