@@ -225,12 +225,73 @@ pub fn covered(spec: &WidgetSpec) -> bool {
 /// rule §4.4 states — this is *content* resolved from a known extent, not
 /// geometry recorded from a paint.
 pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
+    // A spec with no container above it is laid into a column: that is what
+    // the panel body and the settings field are, and what the runtime's own
+    // collector assumes when it walks a bare spec.
+    node_in(spec, width, cx, Site::ROOT)
+}
+
+/// Which way the container above a node runs.
+///
+/// **Only a flexible spacer needs this, and it needs it absolutely.**
+/// `Node::flex` sets *both* axes, and on a container's cross axis
+/// `Sizing::Flex` means "fill the extent" — so a `flexSpacer()` inside a row
+/// asked that row to be as tall as everything left in the column above it. One
+/// of those in the New-Workspace form's tab row made the row twenty-six cells
+/// tall, and every field under it was laid out at zero height against the
+/// panel's bottom edge. A spacer flexes along the axis it sits on; nothing
+/// else in the adapter cares which that is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Axis {
+    Across,
+    Down,
+}
+
+/// Where in the panel a node is being laid: the axis of the container above
+/// it, and how far left of it a floating overlay row starts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Site {
+    axis: Axis,
+    /// **The columns of chrome an overlay row re-adds.**
+    ///
+    /// A focused field's completion popup is emitted as *overlay rows* whose
+    /// glyphs are `panel_width + 4` wide — "re-add section chrome", in
+    /// `emit_completion_overlays`' own words — because the runtime draws every
+    /// row of a panel as one flat, full-width entry and a `LabeledSection`'s
+    /// `│ … │` is part of that text. The tree draws the section as a *box*
+    /// instead, so its child starts two columns in, and an overlay hung off
+    /// that child landed two columns right of the frame it is drawn to line up
+    /// with. This is that offset, stated by the node that creates it.
+    escape: u16,
+}
+
+impl Site {
+    const ROOT: Site = Site {
+        axis: Axis::Down,
+        escape: 0,
+    };
+    fn across(self) -> Site {
+        Site {
+            axis: Axis::Across,
+            ..self
+        }
+    }
+    fn down(self) -> Site {
+        Site {
+            axis: Axis::Down,
+            ..self
+        }
+    }
+}
+
+fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMsg> {
+    let axis = site.axis;
     match spec {
         WidgetSpec::Row { children, wrap, .. } => {
             let r = row().children(
                 children
                     .iter()
-                    .map(|c| node(c, width, cx))
+                    .map(|c| node_in(c, width, cx, site.across()))
                     .collect::<Vec<_>>(),
             );
             match wrap {
@@ -241,15 +302,20 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
         WidgetSpec::Col { children, .. } => col().children(
             children
                 .iter()
-                .map(|c| node(c, width, cx))
+                .map(|c| node_in(c, width, cx, site.down()))
                 .collect::<Vec<_>>(),
         ),
-        // `flex` fills the row's remainder; `cols` is a fixed gap. The runtime
-        // spells the first one by handing the row a width to divide, which is
-        // what `Sizing::Flex` is.
-        WidgetSpec::Spacer { cols, flex, .. } => match flex {
-            true => row().flex(1),
-            false => row().w(Sizing::Cells(*cols as u16)),
+        // `flex` fills the container's remainder *on its own axis*. A fixed
+        // spacer is `cols` blank cells in a row and **one blank line** in a
+        // column, however wide it says it is: `kinds::spacer` pushes exactly
+        // one entry, and a column of entries is a column of rows. Sized by
+        // `cols` in both, every `spacer(0)` between a form's sections
+        // vanished and the fields closed up against each other.
+        WidgetSpec::Spacer { cols, flex, .. } => match (flex, axis) {
+            (true, Axis::Across) => row().w(Sizing::Flex(1)),
+            (true, Axis::Down) => row().h(Sizing::Flex(1)),
+            (false, Axis::Across) => row().w(Sizing::Cells(*cols as u16)),
+            (false, Axis::Down) => row().h(Sizing::Cells(1)),
         },
         // Full width by definition — "so the separator always matches the
         // rendered width, including a user-dragged dock, without the plugin
@@ -352,7 +418,10 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
         // `Component` would hand a plugin's subtree host state it never asked
         // for — the names collide, the concepts do not.
         WidgetSpec::Component { child, key } => {
-            let n = fresh_ui::focusable(node(child, width, cx)).focus_scope();
+            // Transparent to layout, so it is transparent to the axis too:
+            // a `component()` wrapping a `flexSpacer()` sits wherever the
+            // component sits.
+            let n = fresh_ui::focusable(node_in(child, width, cx, site)).focus_scope();
             match key.as_deref().filter(|k| !k.is_empty()) {
                 Some(k) => n.key(fresh_ui::Key::Str(k.into())),
                 None => n,
@@ -583,27 +652,39 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
         // applied to six recorded channels.
         WidgetSpec::LabeledSection { label, child, .. } => {
             let ring = Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)).to_string();
-            let framed = col().theme(ring.clone()).border().pad(1, 0).child(node(
+            // The child is handed the width less this box's four columns of
+            // chrome, which is the contract `emit_completion_overlays` reads
+            // when it widens a completion popup back out by four. Two of those
+            // columns are on this side, so an overlay the child floats starts
+            // two left of where the child does.
+            let framed = col().theme(ring.clone()).border().pad(1, 0).child(node_in(
                 child,
                 width.saturating_sub(4).max(1),
                 cx,
+                Site {
+                    axis: Axis::Down,
+                    escape: 2,
+                },
             ));
             match label.is_empty() {
                 true => framed,
                 // The legend rides the top edge, the way every other titled
                 // frame in the shell does it — a transparent strip stacked
                 // over the box rather than text spliced into the ring.
+                // The strip is one row and says so. A `flex` filler under it
+                // — there to push it to the top edge, which is where a
+                // stack's children start anyway — made the legend column ask
+                // for every row left in the form, and the box it labels is
+                // three.
                 false => fresh_ui::stack().children([
                     framed,
                     col()
                         .pointer_mode(fresh_ui::PointerMode::Transparent)
-                        .children([
-                            row().h(Sizing::Cells(1)).children([
-                                row().w(Sizing::Cells(2)),
-                                text_runs([Run::themed(format!(" {label} "), ring)]),
-                            ]),
-                            row().flex(1),
-                        ]),
+                        .h(Sizing::Cells(1))
+                        .children([row().h(Sizing::Cells(1)).children([
+                            row().w(Sizing::Cells(2)),
+                            text_runs([Run::themed(format!(" {label} "), ring)]),
+                        ])]),
                 ]),
             }
         }
@@ -1261,7 +1342,7 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
         | WidgetSpec::List { .. }
         | WidgetSpec::Tree { .. }
         | WidgetSpec::Dropdown { .. }
-        | WidgetSpec::DualList { .. } => collected(spec, width, cx),
+        | WidgetSpec::DualList { .. } => collected(spec, width, cx, site.escape),
         // `covered` gates this; reaching it is a bug in the caller rather than
         // a spec the plugin got wrong, so it is loud in debug and empty in
         // release rather than silently dropping a panel's content.
@@ -1368,7 +1449,7 @@ impl fresh_ui::Component<UiMsg> for Scrolled {
 /// `widgets::Tree`, so a plugin's list is the list the settings form uses, is
 /// the step after — and doing this first makes that a substitution rather than
 /// a rewrite.
-fn collected(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
+fn collected(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, escape: u16) -> Node<UiMsg> {
     // The collector writes the next instance state as it renders. A
     // description cannot own that write, so it goes to a scratch map and the
     // host resolves the real one — the same split `Number` makes, at the scale
@@ -1395,6 +1476,7 @@ fn collected(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
         &out.overlays,
         &out.popups,
         out.focus_cursor,
+        escape,
     )
 }
 
@@ -1420,6 +1502,7 @@ fn rows_with_hits(
     overlays: &[crate::widgets::OverlayRow],
     popups: &[crate::widgets::PanelPopup],
     caret: Option<crate::widgets::FocusCursor>,
+    escape: u16,
 ) -> Node<UiMsg> {
     let mut kids: Vec<Node<UiMsg>> = Vec::with_capacity(entries.len());
     for (i, entry) in entries.iter().enumerate() {
@@ -1477,14 +1560,15 @@ fn rows_with_hits(
             fresh_ui::layer()
                 .anchor(fresh_ui::Anchor::Parent)
                 .place(fresh_ui::Place::Over)
-                .offset(0, o.buffer_row as i16)
+                .offset(-(escape as i16), o.buffer_row as i16)
                 .fit(fresh_ui::Fit::CLAMP)
-                .child(
+                .child(float_route(
                     row()
                         .h(Sizing::Cells(1))
                         .theme(Ink::new(Paint::key(BASE_FG), Paint::key("ui.popup_bg")).to_string())
                         .child(entry_row(&o.entry)),
-                ),
+                    cx.slot,
+                )),
         );
     }
     for p in stray {
@@ -1496,6 +1580,43 @@ fn rows_with_hits(
         );
     }
     fresh_ui::stack().children(stack)
+}
+
+/// Send a float's wheel and hover where the rows behind it would have sent
+/// them.
+///
+/// **A layer is the first thing asked at a point, and a hit does not continue
+/// past it.** So a pop-over or an overlay row that answers only presses does
+/// not let a wheel *through* — it eats it, and the list under the pointer
+/// stops scrolling the moment a float covers it. Every float in a panel owes
+/// this, which is why it is one function: the same statement `shell::settings`
+/// makes about its own box, for the same reason.
+fn float_route(n: Node<UiMsg>, slot: Slot) -> Node<UiMsg> {
+    let route = move |e: &fresh_ui::Event| -> Option<UiMsg> {
+        e.stop();
+        match (slot, e.kind) {
+            // The modal owns the whole pointer channel and replays the event
+            // it was handed, so a wheel and a hover both land where they did.
+            (Slot::Floating, _) => Some(UiMsg::Ui(super::msg::UiFact::ModalPointer(
+                super::modal::Slot::FloatingPanel,
+            ))),
+            // The dock is not a modal: its column answers each gesture with a
+            // fact of its own, and the wheel is the one a float covers.
+            (Slot::Dock, fresh_ui::GestureKind::Wheel) => {
+                Some(UiMsg::Ui(super::msg::UiFact::DockScroll {
+                    delta: e.delta,
+                    x: e.pos.x.max(0) as u16,
+                    y: e.pos.y.max(0) as u16,
+                }))
+            }
+            (Slot::Dock, _) => None,
+        }
+    };
+    let mut n = fresh_ui::gesture(n);
+    for kind in [fresh_ui::GestureKind::Wheel, fresh_ui::GestureKind::Move] {
+        n = n.on(kind, std::rc::Rc::new(route));
+    }
+    n
 }
 
 /// An open dropdown's option list, as a layer hanging off its trigger's row.
@@ -1557,6 +1678,7 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
             None
         }),
     );
+    let box_node = float_route(box_node, cx.slot);
     fresh_ui::layer()
         .anchor(fresh_ui::Anchor::Parent)
         .place(fresh_ui::Place::Below)
@@ -1859,7 +1981,7 @@ mod tests {
             .map(|e| {
                 let mut n = e.clone();
                 n.normalize_widths();
-                n.text.trim_end_matches('\n').to_string()
+                n.text.trim_end_matches('\n').trim_end().to_string()
             })
             .collect()
     }
@@ -1969,6 +2091,133 @@ mod tests {
         }
     }
 
+    /// **A form's rows are the runtime's rows.** Every variant was asserted
+    /// against `render_spec` on its own, and both of the faults that reached
+    /// CI were in how they *compose*, where a one-variant case cannot look.
+    ///
+    /// A `flexSpacer()` inside a row asked the row to be as tall as
+    /// everything left in the column above it — `Node::flex` sets both axes,
+    /// and on a container's *cross* axis `Sizing::Flex` means "fill the
+    /// extent" — so the New-Workspace form's tab row came out twenty-six
+    /// cells tall and every field under it was laid out at zero height
+    /// against the panel's bottom edge. A `spacer(0)` between two sections
+    /// measured nothing, where `kinds::spacer` pushes one entry: a blank
+    /// line. Neither is visible in a single widget and both move every row
+    /// under them in a real panel.
+    #[test]
+    fn a_forms_rows_are_the_runtimes_rows() {
+        let gap = |cols: u32, flex: bool| WidgetSpec::Spacer {
+            cols,
+            flex,
+            key: None,
+        };
+        let field = |label: &str, body: &str| WidgetSpec::LabeledSection {
+            label: label.into(),
+            child: Box::new(WidgetSpec::Raw {
+                entries: vec![raw(body)],
+                key: None,
+            }),
+            width_pct: None,
+            key: None,
+        };
+        let cases: Vec<(&str, WidgetSpec)> = vec![
+            (
+                "a flexible spacer between two runs",
+                col_of(vec![
+                    WidgetSpec::Row {
+                        children: vec![
+                            WidgetSpec::Raw {
+                                entries: vec![raw("Run in:")],
+                                key: None,
+                            },
+                            gap(0, true),
+                            WidgetSpec::Raw {
+                                entries: vec![raw("switch")],
+                                key: None,
+                            },
+                        ],
+                        wrap: false,
+                        key: None,
+                    },
+                    WidgetSpec::Raw {
+                        entries: vec![raw("under it")],
+                        key: None,
+                    },
+                ]),
+            ),
+            (
+                "fixed spacers between a column's sections",
+                col_of(vec![
+                    WidgetSpec::Raw {
+                        entries: vec![raw("first")],
+                        key: None,
+                    },
+                    gap(0, false),
+                    WidgetSpec::Raw {
+                        entries: vec![raw("second")],
+                        key: None,
+                    },
+                    gap(4, false),
+                    WidgetSpec::Raw {
+                        entries: vec![raw("third")],
+                        key: None,
+                    },
+                ]),
+            ),
+            (
+                "a form: a tab row, spacers, two fields and a button",
+                col_of(vec![
+                    WidgetSpec::Row {
+                        children: vec![
+                            WidgetSpec::Raw {
+                                entries: vec![raw("Run in:")],
+                                key: None,
+                            },
+                            gap(0, true),
+                            WidgetSpec::Raw {
+                                entries: vec![raw("switch")],
+                                key: None,
+                            },
+                        ],
+                        wrap: false,
+                        key: None,
+                    },
+                    gap(0, false),
+                    field("Host", "build-01"),
+                    field("Remote Path", "/srv"),
+                    gap(0, false),
+                    button("Create", Some("create"), false, false),
+                ]),
+            ),
+        ];
+        // **Corners, and only corners, are normalised.** `fold::border` writes
+        // the editor's plain set (`┌┐└┘`) and the widget runtime's
+        // `LabeledSection` wrote the rounded one — a difference C.6 already
+        // made on the panel's own frame, and a deliberate one: "a rounded set
+        // would be a visible change on the first surface that migrates". It
+        // is recorded here rather than asserted away, because everything else
+        // about the frame — where it starts, how wide it is, where its legend
+        // sits — is compared exactly.
+        let plain = |rows: Vec<String>| -> Vec<String> {
+            rows.into_iter()
+                .map(|r| {
+                    r.replace('╭', "┌")
+                        .replace('╮', "┐")
+                        .replace('╰', "└")
+                        .replace('╯', "┘")
+                })
+                .collect()
+        };
+        for (label, spec) in cases {
+            assert!(covered(&spec), "{label} should be covered");
+            assert_eq!(
+                plain(tree_rows(&spec)),
+                plain(runtime_rows(&spec)),
+                "{label}"
+            );
+        }
+    }
+
     /// **The coverage gate is the point of `covered`.** A panel is described
     /// or painted, never half of each, so one unmigrated child takes the whole
     /// spec down the old path.
@@ -2008,29 +2257,64 @@ mod tests {
         rows_of(&ui)
     }
 
-    /// Every line the display list paints, left to right, top to bottom.
+    /// The display list folded into a grid, and the grid read back as rows.
+    ///
+    /// **A tiny `fold_native`, and it has to be**: the runtime's unit is an
+    /// entry — a line of text, spaces and box glyphs included — so anything
+    /// less than a grid cannot see what it is being compared against. Joining
+    /// a row's runs end to end cannot see the gap a `Spacer` opened between
+    /// them; skipping a row nothing painted on cannot see a blank line, which
+    /// is what a `Spacer` in a column *is*; and ignoring `Draw::Border`
+    /// cannot see a `LabeledSection`'s frame at all.
     fn rows_of(ui: &Ui<UiMsg>) -> Vec<String> {
-        let mut pieces: Vec<(i32, i32, String)> = Vec::new();
+        const H: usize = 64;
+        let mut grid: Vec<Vec<char>> = vec![vec![' '; WIDTH as usize]; H];
+        let mut bottom: Option<usize> = None;
+        let mut put =
+            |grid: &mut Vec<Vec<char>>, bottom: &mut Option<usize>, x: i32, y: i32, c: char| {
+                if x < 0 || y < 0 || y as usize >= H || x >= WIDTH as i32 {
+                    return;
+                }
+                grid[y as usize][x as usize] = c;
+                *bottom = Some(bottom.map_or(y as usize, |b: usize| b.max(y as usize)));
+            };
         for item in ui.spec().in_flow() {
-            if let fresh_ui::Draw::Lines(lines) = &item.draw {
-                for (i, l) in lines.iter().enumerate() {
-                    pieces.push((item.rect.y + i as i32, item.rect.x, l.to_string()));
+            let r = item.rect;
+            match &item.draw {
+                fresh_ui::Draw::Lines(lines) => {
+                    for (i, l) in lines.iter().enumerate() {
+                        for (j, c) in l.chars().enumerate() {
+                            put(&mut grid, &mut bottom, r.x + j as i32, r.y + i as i32, c);
+                        }
+                    }
                 }
+                // The glyphs `fold::border` writes, so the two agree on what a
+                // bordered node looks like.
+                fresh_ui::Draw::Border if r.w >= 2 && r.h >= 2 => {
+                    let (right, low) = (r.x + r.w as i32 - 1, r.y + r.h as i32 - 1);
+                    for x in r.x..=right {
+                        put(&mut grid, &mut bottom, x, r.y, '─');
+                        put(&mut grid, &mut bottom, x, low, '─');
+                    }
+                    for y in r.y..=low {
+                        put(&mut grid, &mut bottom, r.x, y, '│');
+                        put(&mut grid, &mut bottom, right, y, '│');
+                    }
+                    put(&mut grid, &mut bottom, r.x, r.y, '┌');
+                    put(&mut grid, &mut bottom, right, r.y, '┐');
+                    put(&mut grid, &mut bottom, r.x, low, '└');
+                    put(&mut grid, &mut bottom, right, low, '┘');
+                }
+                _ => {}
             }
         }
-        pieces.sort_by_key(|(y, x, _)| (*y, *x));
-        let mut out: Vec<String> = Vec::new();
-        let mut at: Option<i32> = None;
-        for (y, _, s) in pieces {
-            match at {
-                Some(prev) if prev == y => out.last_mut().unwrap().push_str(&s),
-                _ => {
-                    out.push(s);
-                    at = Some(y);
-                }
-            }
-        }
-        out
+        let Some(bottom) = bottom else {
+            return Vec::new();
+        };
+        grid[..=bottom]
+            .iter()
+            .map(|r| r.iter().collect::<String>().trim_end().to_string())
+            .collect()
     }
 
     /// The runtime's, under the same context.
@@ -2052,7 +2336,7 @@ mod tests {
         .map(|e| {
             let mut n = e.clone();
             n.normalize_widths();
-            n.text.trim_end_matches('\n').to_string()
+            n.text.trim_end_matches('\n').trim_end().to_string()
         })
         .collect()
     }
@@ -3115,7 +3399,7 @@ mod tests {
             .map(|e| {
                 let mut n = e.clone();
                 n.normalize_widths();
-                n.text.trim_end_matches('\n').to_string()
+                n.text.trim_end_matches('\n').trim_end().to_string()
             })
             .collect();
         let got = layer_rows(&ui);

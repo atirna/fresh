@@ -908,7 +908,11 @@ mod tests {
         let d = ui.rect_of(ui.find_by_key(&dialog_key()).expect("the dialog"));
         let b = ui.rect_of(ui.find_by_key(&key()).expect("the box"));
         assert_eq!(d.w, 50);
-        assert_eq!(d.h, 10, "seven plus one per change");
+        // Two borders, the title, the prompt, the blank under it, the rule,
+        // the buttons and the help line — then one row per change. The
+        // painter's figure was seven because its title rode *in* the top
+        // border; this box gives it a row.
+        assert_eq!(d.h, 11, "eight plus one per change");
         assert_eq!(d.x, b.x + (b.w as i32 - 50) / 2, "centred in the box");
     }
 
