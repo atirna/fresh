@@ -194,7 +194,7 @@ provided at is the scope they belong to.
 
 | # | What | How | Avoid |
 |---|---|---|---|
-| A.1 | `base`, `menu`, `popups`, `prompt`, `context_menu` implement `on_layer_key`. **Free today.** | The surface declares `focusable()` / `focus_scope()`; its bindings ride down as `Shortcut { key, intent }` data and the library's Shortcuts → Intents → Actions chain resolves them. The menu bar already ships this shape (`MenuShortcut`) — copy it, do not reinvent it. | Resolving key → action *before* dispatch and handing the tree an `Action`. §6.2 decision 1 settled this the other way: bindings flow down as data, the tree resolves. |
+| A.1 | ~~`context_menu`~~, ~~`menu`~~ done; `base`, `popups`, `prompt` still implement `on_layer_key`. | The surface declares `focusable()` / `focus_scope()`; its bindings ride down as `Shortcut { key, intent }` data and the library's Shortcuts → Intents → Actions chain resolves them. **The menu closed the last gap that kept a surface half-migrated**: its navigation had been intents since decision 1, but a whole input handler stayed alive to *swallow* the keys it declined, because `Modality` was one knob for two channels and the chain could not take the keyboard without taking the pointer from the bar it hangs off. `Modality::Keyboard` says the one without the other; `blocks_pointer` and `owns_keyboard` are what the framework now asks, per channel, at each site. `view/ui/menu_input.rs` and `Menu::on_layer_key` are gone. | Resolving key → action *before* dispatch and handing the tree an `Action`. §6.2 decision 1 settled this the other way: bindings flow down as data, the tree resolves. |
 | A.2 | `dock` + `floating_modal` `on_layer_key` hand the key to the widget dispatcher. | Rides with C. | Migrating them early behind a shim that calls the old dispatcher from a `GestureKind::Key` handler. That is the walk with a new caller. |
 | A.3 | The four `modals` `on_layer_key` hand it to painter interiors. | Rides with B. | As A.2. |
 | A.4 | `layer_rank` — a central ordered list of surfaces. | Delete it. Precedence is *derived*: layer order, `Modality::Exclusive`, focus-scope containment — all already in the tree. | A `key_rank` property on layers, or a `Behavior` that walks them in order. Goal 2 forbids the central list by name; a renamed one is the same list. |
@@ -768,6 +768,18 @@ are described.** The wide settings layout was being told apart from the narrow
 one by "are the categories described" — true until a search takes the tree
 away without making the box narrow, at which point the wide layout's search
 results were laid out at the box's left edge. `Chrome::wide` says it.
+
+**One property, one channel.** `Modality` answered two questions with one
+value — may the pointer reach what is behind, and may a key — and every
+surface that wanted only the second had to pay for the first. The menu paid
+in a whole input handler: `view/ui/menu_input.rs` existed to return
+"consumed" for keys the menu had nothing to say about, because the open chain
+could not declare itself modal without making the bar it hangs off unclickable.
+The fix was not a second flag beside the enum but **asking the property per
+channel** — `Modality::blocks_pointer` and `Modality::owns_keyboard`, with
+`Keyboard` the variant that answers them differently. **A property whose two
+consumers want different answers is two properties**, and the tell is a caller
+that works around it rather than reading it.
 
 **A window's offset and its extent are counted in the same unit, and the
 unit is the window's, not the caller's.** `apply_anchors` read a `Reveal`

@@ -354,19 +354,32 @@ impl<M: 'static> Ui<M> {
         FocusScope { nodes }
     }
 
-    /// The topmost layer that makes what is below it inert, as an element.
+    /// The topmost layer that owns the keyboard, as an element — which is
+    /// what confines focus traversal.
     pub(crate) fn topmost_modal(&self) -> Option<ElementId> {
-        let i = self.topmost_modal_index()?;
+        let i = self.topmost_modal_index(Modality::owns_keyboard)?;
         self.element_of(self.pending_layers[i].0)
     }
 
-    /// Where that layer sits in resolution order. Everything resolved after it
-    /// is above it and stays live; everything before it is inert.
-    pub(crate) fn topmost_modal_index(&self) -> Option<usize> {
+    /// Where the topmost layer answering `channel` sits in resolution order.
+    /// Everything resolved after it is above it and stays live; everything
+    /// before it is inert *on that channel*.
+    ///
+    /// **The channel is a parameter because the answer differs by channel.**
+    /// A menu owns every key while the bar it hangs from stays clickable, so
+    /// asking one question for both put the pointer floor under a layer that
+    /// had only claimed the keyboard.
+    pub(crate) fn topmost_modal_index(&self, channel: fn(Modality) -> bool) -> Option<usize> {
         (0..self.pending_layers.len()).rev().find(|&i| {
             self.layer_geom(self.pending_layers[i].0)
-                .is_some_and(|g| g.modality != Modality::None)
+                .is_some_and(|g| channel(g.modality))
         })
+    }
+
+    /// The topmost layer that takes the pointer away from what is behind it.
+    pub(crate) fn topmost_pointer_modal(&self) -> Option<ElementId> {
+        let i = self.topmost_modal_index(Modality::blocks_pointer)?;
+        self.element_of(self.pending_layers[i].0)
     }
 
     /// The registration that groups what traversal may currently reach.
@@ -540,7 +553,30 @@ impl<M: 'static> Ui<M> {
         // A key that dismisses a layer is answered by that layer: Escape
         // closing a menu is the menu's reply, not a key that also belongs to
         // whatever is behind it.
-        self.dismiss_for_key(k, out)
+        if self.dismiss_for_key(k, out) {
+            return true;
+        }
+        // **A modal layer owns the keyboard, including the keys it declines.**
+        // Nothing above acted on this one, and focus is inside a layer that
+        // took the keyboard away from what is behind it — so the key stops
+        // here. That is what modal means to a keyboard, and it is the last
+        // thing a host with its own pipeline behind this tree needs told.
+        self.key_stops_at_modal()
+    }
+
+    /// Whether focus sits inside a layer that owns the keyboard.
+    ///
+    /// The chain is the focused element's ancestors, and a layer's element is
+    /// one of them, so this asks the same containment question traversal does
+    /// — no separate stack of "who owns the keyboard" and no ranking of
+    /// surfaces. With nothing focused there is no chain and nothing owns it.
+    fn key_stops_at_modal(&self) -> bool {
+        let Some(f) = self.focus else { return false };
+        self.path_to(f).iter().any(|&n| {
+            self.render_for(n)
+                .and_then(|r| self.layer_geom(r))
+                .is_some_and(|g| g.modality != Modality::None)
+        })
     }
 
     fn propagate_key(&mut self, chain: &[ElementId], k: KeyPress, out: &mut Vec<M>) -> bool {

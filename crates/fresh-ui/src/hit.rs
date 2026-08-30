@@ -328,7 +328,14 @@ impl<M: 'static> Ui<M> {
         // dropdown opened by one of its own fields — is above it, and stays
         // hittable. Layers are resolved in the order they were found, so
         // "after" is an index.
-        let floor = self.topmost_modal_index().unwrap_or(0);
+        //
+        // Modal *to the pointer*, which is the only channel this walk is
+        // about: a layer that owns the keyboard alone leaves the surface it
+        // hangs from clickable, which is how a menu bar switches menus in one
+        // press.
+        let floor = self
+            .topmost_modal_index(crate::desc::Modality::blocks_pointer)
+            .unwrap_or(0);
         for i in (floor..self.pending_layers.len()).rev() {
             let paths = self.paths_in(self.pending_layers[i].0, p);
             if !paths.is_empty() {
@@ -337,7 +344,10 @@ impl<M: 'static> Ui<M> {
         }
         // Nothing above took it. Inside a modal the search stops at its
         // subtree; outside one it reaches the whole tree.
-        let root = match self.topmost_modal().and_then(|e| self.render_for(e)) {
+        let root = match self
+            .topmost_pointer_modal()
+            .and_then(|e| self.render_for(e))
+        {
             Some(r) => Some(r),
             None => self.render_root,
         };
