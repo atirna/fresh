@@ -272,6 +272,17 @@ impl Editor {
         // the standing proof, and it keeps both derivations honest now that
         // only one of them runs here.
         // See docs/internal/fresh-editor-ui-migration.md (S1).
+        // The settings search list's window, from the box the tree placed last
+        // frame. This is the one mutation the description needs made *before*
+        // it is built: the row it describes says "(1-3 of 298)", and three is
+        // how many results the box has room for. The painter used to work that
+        // out as it drew and leave it behind for the next frame to read.
+        if let Some(r) = self.panel_rect(&crate::view::shell::settings::key()) {
+            let n = crate::view::shell::settings::search_window(r);
+            if let Some(s) = self.settings_state.as_mut() {
+                s.search_max_visible = n;
+            }
+        }
         let shell = self.shell_frame((dock_area, chrome_area));
         // The shell's tree is retained across frames — element state, focus and
         // the dirty set live on it — so it is moved out for the duration of the
@@ -1167,6 +1178,28 @@ impl Editor {
         // geometry lives now. So the description is built either way and only
         // the cell-writing half is skipped, which is what "backends are folds
         // over the display list" buys: two backends, one layout.
+        // The full-screen modals' remaining paint, **before** the overlay band
+        // rather than after it. What is left of `render_modal_overlays` is the
+        // settings dialog's body — its two panels and its entry stack — and
+        // the box that body sits in is a layer in the tree, as are its search
+        // row, its footer and its five prompts. A `Block` fills the rectangle
+        // it borders, so a painter that ran after the fold wiped every one of
+        // them: the described rows came out blank and the help overlay never
+        // appeared at all.
+        //
+        // This is the rule the overlay band already states for every other
+        // legacy painter — "painted after every legacy painter, because paint
+        // order is what puts a menu on top" — applied to the last painter that
+        // was still exempt from it. It was exempt because it used to be the
+        // topmost surface there was; it is not, now that the chrome over it is
+        // the tree's.
+        //
+        // The dock is painted later still (`render_panels_and_modals`), so the
+        // dimming this pass applies to it is re-applied there once its cells
+        // exist. The modal itself lays into the chrome column beside the dock,
+        // so nothing of it is at risk from that later paint.
+        self.render_modal_overlays(frame, size);
+
         if !self.suppress_chrome_cells {
             let palette = self.shell_palette();
             let ui = self
@@ -1760,13 +1793,20 @@ impl Editor {
             }
         }
 
-        // Settings / calibration-wizard / keybinding-editor / event-debug —
-        // full-screen modals. They get the whole frame (`size`), not the
-        // chrome region right of the dock: each dims everything behind it,
-        // the dock included, and centres in the full window. Drawn here,
-        // after the dock's own pass, so the dock cannot overpaint the
-        // modal's left edge.
-        self.render_modal_overlays(frame, size);
+        // The full-screen modals were painted here once, after the dock, so
+        // the dock could not overpaint a modal's left edge. They lay into the
+        // chrome column beside the dock now — the tree places them, and
+        // `within(chrome_key())` is where that is said — so there is no edge
+        // left to overpaint, and they paint before the overlay band instead
+        // (see `render`). What is owed here is the half of their dimming the
+        // dock's own cells did not exist for yet.
+        if self.settings_state.as_ref().is_some_and(|s| s.visible) && !self.suppress_chrome_cells {
+            if let Some(dock) = dock_area {
+                if self.dock.is_some() {
+                    crate::view::dimming::apply_dimming(frame, dock);
+                }
+            }
+        }
 
         if self.floating_widget_panel.is_some() {
             // A `fullscreen` modal paints over the whole frame, covering the

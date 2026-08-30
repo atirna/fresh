@@ -2147,9 +2147,11 @@ fn render_search_results(
     theme: &Theme,
     layout: &mut SettingsLayout,
 ) {
-    // Calculate max visible results (each result is 3 rows tall)
-    let max_visible = (area.height.saturating_sub(3) / 3) as usize;
-    state.search_max_visible = max_visible.max(1);
+    // **The window is the tree's** (`view::shell::settings::search_window`),
+    // computed from the box it places and set before this frame's description
+    // was built. It was computed here instead, from the rectangle this painter
+    // had been handed — which meant the search row's "(1-3 of 298)" was
+    // describing a window measured on the frame before it.
 
     // Ensure scroll offset is valid
     if state.search_scroll_offset >= state.search_results.len() {

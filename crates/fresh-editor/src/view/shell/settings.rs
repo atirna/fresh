@@ -52,6 +52,42 @@ pub fn fit(info: LayoutInfo) -> Option<(u16, u16)> {
     Some(((w * 90 / 100).min(MAX_WIDTH), h * 90 / 100))
 }
 
+/// How many search results fit inside a box of `modal`'s size.
+///
+/// The twin of [`super::keybinding::table_rows`], and there for the same
+/// reason: the box is the tree's, so the window of the list inside it is the
+/// tree's arithmetic too. The painter computed it as it drew and filed it in
+/// `search_max_visible` — where the *next* frame's chrome read it, one frame
+/// after the description that needed it had already been built. That is why
+/// the result count opened reading "(1-5 of 298)" over a list three results
+/// tall: five is the field's constructor default, and the first frame with a
+/// search on it had nothing else to read.
+pub fn search_window(modal: ratatui::layout::Rect) -> usize {
+    let inner_w = modal.width.saturating_sub(2);
+    let inner_h = modal.height.saturating_sub(2);
+    // The painter's own threshold: `inner_area.width < 60` is a narrow box,
+    // and a narrow box stacks its five buttons instead of laying them in a
+    // row, which costs seven rows rather than two.
+    let narrow = inner_w < 60;
+    let footer = if narrow { 7 } else { 2 };
+    // One row of search bar, one blank row under it, then the footer.
+    let content = inner_h.saturating_sub(2 + footer);
+    let rows = match narrow {
+        false => content,
+        // The narrow layout subtracts the footer a second time — the content
+        // band already excludes it — and then takes three rows for the
+        // category strip and one for the rule under it. Mirrored rather than
+        // corrected: this states the geometry the painter has, and the two
+        // have to agree while the panel below is still painted.
+        true => {
+            let main = content.saturating_sub(footer);
+            main.saturating_sub(3u16.min(main) + 1)
+        }
+    };
+    // Three rows a result: its name, its breadcrumb and its category.
+    ((rows.saturating_sub(3) / 3) as usize).max(1)
+}
+
 /// The dialog's box as a layer: centred beside the dock, with the chrome the
 /// tree owns inside it and the painter's body between.
 ///
@@ -92,8 +128,15 @@ pub fn layer(c: Option<&Chrome>) -> Node<UiMsg> {
                 ];
                 if let Some(f) = &c.footer {
                     // The separator the painter drew one row above the
-                    // buttons, then the buttons, then the border.
-                    rows.push(rule());
+                    // buttons, then the buttons, then the border. The rule is
+                    // inset by the same cell as the buttons: the box's border
+                    // is the painter's and a full-width rule drew straight
+                    // over both of its sides.
+                    rows.push(row().h(Sizing::Cells(1)).children([
+                        row().w(Sizing::Cells(1)),
+                        rule().flex(1),
+                        row().w(Sizing::Cells(1)),
+                    ]));
                     rows.push(row().h(Sizing::Cells(1)).children([
                         row().w(Sizing::Cells(1)),
                         footer_row(f).flex(1),
@@ -291,12 +334,15 @@ fn footer_row(f: &Footer) -> Node<UiMsg> {
             kids.push(button(&f, Button::Edit, &f.edit));
             kids.push(text("  ").theme(ink()));
         }
-        // The hints, between `[ Edit ]` and the right-hand group. The painter
-        // worked out the gap's start and end from whichever buttons it had
-        // decided to show and clipped the text to it; a flexible child between
-        // them is the same gap, and it elides rather than being cut.
-        kids.extend(keyhints(&f.help));
-        kids.push(row().flex(1));
+        // The hints, between `[ Edit ]` and the right-hand group, **inside**
+        // the flexible child rather than beside it. The painter worked out the
+        // gap's start and end from whichever buttons it had decided to show
+        // and clipped the text to it; a flexible child *containing* them is
+        // that gap, and the hints are clipped to it. Laid beside a bare
+        // spacer they are fixed-width instead, so a help string longer than
+        // the slack pushed the right-hand group off the box's edge and the
+        // last button came out cut in half.
+        kids.push(row().flex(1).children(keyhints(&f.help)));
         for (on, b, label) in [
             (show_layer, Button::Layer, &f.layer),
             (show_reset, Button::Reset, &f.reset),
@@ -470,7 +516,13 @@ pub fn dialog_layer(d: &Dialog) -> Node<UiMsg> {
             let w = want_w.min(info.constraints.max_w.saturating_sub(4));
             let want = match &d {
                 Dialog::Help { .. } => 20,
-                Dialog::Confirm(c) | Dialog::Reset(c) => (7 + c.changes.len() as u16).min(20),
+                // Two borders, the title, the prompt, the blank under it,
+                // the rule, the buttons and the help line — then a row per
+                // change. The painter's own figure was seven, because it hung
+                // its title *in* the top border and this box gives it a row of
+                // its own; at seven the changes list was squeezed to nothing
+                // and the prompt promised a list that was not there.
+                Dialog::Confirm(c) | Dialog::Reset(c) => (8 + c.changes.len() as u16).min(20),
                 Dialog::EntryDiscard(_) | Dialog::EntryDelete(_) => 7,
             };
             let h = want.min(info.constraints.max_h.saturating_sub(4));
