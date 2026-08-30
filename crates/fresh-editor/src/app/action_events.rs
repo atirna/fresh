@@ -436,7 +436,13 @@ impl crate::app::window::Window {
                         .layout_cache
                         .visual_line_end(split_id, position, allow_advance)
                     {
-                        Some(end_pos) => (end_pos, None),
+                        // The row reports its end as the last source byte it
+                        // drew, which is one cell short when that byte is a
+                        // content character — every row a compose-mode soft
+                        // break wrapped, since the break consumes the space it
+                        // fell on. The row owns and draws the position past it
+                        // (`end_exclusive`), so the caret stays on the row.
+                        Some(end_pos) => (self.step_past_row_end_char(end_pos), None),
                         None => return None,
                     }
                 }
@@ -512,6 +518,35 @@ impl crate::app::window::Window {
     /// Returns `Some((new_position, new_sticky))` on success, or `None`
     /// if wrap mode is off (delegate to caller default) or we're at a
     /// genuine buffer boundary.
+    /// Where `End` stops, given the byte a visual row reports as its end.
+    ///
+    /// That byte is the last source byte the row drew. For a row ending at its
+    /// line ending, or at whitespace a wrap consumed, it already is the
+    /// position after the row's text. For a row ending on a content character
+    /// it is one cell short, so step past that character.
+    fn step_past_row_end_char(&mut self, end_pos: usize) -> usize {
+        let buffer = &mut self.active_state_mut().buffer;
+        if end_pos >= buffer.len() {
+            return end_pos;
+        }
+        let Some(ch) = char_at(buffer, end_pos) else {
+            return end_pos;
+        };
+        if ch.is_whitespace() {
+            return end_pos;
+        }
+        // Only when the byte past it is a separator the wrap consumed. A wrap
+        // can also split a run with no whitespace in it — CJK text, a long URL
+        // — and there the next byte is the first character of the row BELOW,
+        // which that row draws: stepping onto it would take `End` off the row.
+        let after = end_pos + ch.len_utf8();
+        match char_at(buffer, after) {
+            Some(next) if next.is_whitespace() => after,
+            None => after,
+            Some(_) => end_pos,
+        }
+    }
+
     fn compute_wrap_aware_visual_move_fallback(
         &mut self,
         from_pos: usize,
@@ -780,4 +815,23 @@ fn step_before_line_break(buffer: &crate::model::buffer::Buffer, pos: usize) -> 
         }
     }
     pos - 1
+}
+
+/// The character starting at `pos`, or `None` when `pos` is not a character
+/// boundary or the buffer ends there.
+///
+/// The width comes from the leading byte rather than from decoding a fixed
+/// window: a four-byte slice can end mid-character (`1+2+2`, `2+3`, …), and
+/// decoding that returns `Err`, which silently reads as "no character here".
+fn char_at(buffer: &crate::model::buffer::Buffer, pos: usize) -> Option<char> {
+    let lead = *buffer.slice_bytes(pos..pos.saturating_add(1)).first()?;
+    let width = match lead {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => return None,
+    };
+    let bytes = buffer.slice_bytes(pos..pos.saturating_add(width));
+    std::str::from_utf8(&bytes).ok()?.chars().next()
 }

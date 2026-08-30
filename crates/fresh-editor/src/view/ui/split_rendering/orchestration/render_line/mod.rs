@@ -920,9 +920,13 @@ pub(crate) fn render_view_lines(input: LineRenderInput<'_>) -> LineRenderOutput 
         }
 
         if !line_spans.is_empty() {
+            let row_end_exclusive = row_end_exclusive(current_view_line, &state.buffer);
             if let Some(x) = locate_cursor_in_view_map(
                 &line_view_map,
                 primary_cursor_position,
+                cursor_line_start_byte,
+                cursor_line_end_byte,
+                row_end_exclusive,
                 is_on_cursor_line,
                 current_row,
                 &mut cursor,
@@ -1042,6 +1046,7 @@ pub(crate) fn render_view_lines(input: LineRenderInput<'_>) -> LineRenderOutput 
             gutter_width,
             prev_line_end_byte,
             state.buffer.len(),
+            &state.buffer,
         ));
 
         // Track if line was empty before moving line_spans
@@ -1358,12 +1363,20 @@ fn place_line_end_cursor(
 fn locate_cursor_in_view_map(
     line_view_map: &[Option<usize>],
     primary_cursor_position: usize,
+    cursor_line_start_byte: usize,
+    cursor_line_end_byte: usize,
+    // One byte past the last character this row drew, when the row ends on a
+    // content character. That position is the row's own — it is where `End`
+    // goes — but no cell carries it, because the wrap consumed the separator.
+    row_end_exclusive: Option<usize>,
     is_on_cursor_line: bool,
     current_row: u16,
     cursor: &mut CursorTracker,
 ) -> Option<u16> {
     let mut nearest_fallback: Option<(u16, usize)> = None; // (screen_x, byte_distance)
     let mut last_visible_x: Option<u16> = None;
+    // Whether this row draws any byte of the cursor's own logical line.
+    let mut row_draws_cursor_line = false;
     for (screen_x, source_offset) in line_view_map.iter().enumerate() {
         if let Some(src) = source_offset {
             // Exact match: cursor byte is visible
@@ -1371,18 +1384,48 @@ fn locate_cursor_in_view_map(
                 cursor.place(screen_x as u16, current_row);
             }
             // Track nearest visible byte >= cursor position for fallback
-            if !cursor.found && is_on_cursor_line && *src >= primary_cursor_position {
+            if !cursor.found && *src >= primary_cursor_position {
                 let dist = *src - primary_cursor_position;
                 if nearest_fallback.is_none_or(|(_, best)| dist < best) {
                     nearest_fallback = Some((screen_x as u16, dist));
                 }
             }
+            if (cursor_line_start_byte..cursor_line_end_byte).contains(src) {
+                row_draws_cursor_line = true;
+            }
             last_visible_x = Some(screen_x as u16);
         }
     }
-    // Fallback: cursor byte was concealed — snap to nearest visible byte
+    // Fallback: cursor byte was concealed — snap to nearest visible byte.
+    //
+    // Gated so a row that has nothing to do with the cursor cannot snap a
+    // phantom onto itself when the cursor's own line is offscreen (#1965).
+    //
+    // `is_on_cursor_line` asks whether the row STARTS inside the cursor's
+    // logical line, which a conceal spanning a newline breaks: compose mode's
+    // reflow draws a paragraph's source lines as one row, so the row that holds
+    // the cursor's bytes starts in the line above and the gate reads false —
+    // leaving the caret undrawn wherever it sat in a byte no cell claims, which
+    // is every byte inside a join and the space a row break lands on. Asking
+    // instead whether the row DRAWS any of that line answers the same question
+    // where a row and a logical line still coincide, and keeps answering it
+    // when they do not. No wider for the phantom case: a row drawing none of
+    // the cursor's line cannot claim the cursor either way.
+    // The position just past this row's last character sits one cell to its
+    // right. Claimed ahead of the nearest-visible fallback, which would hand it
+    // to the row below — the caret jumping a line when `End` goes there.
+    if !cursor.found
+        && row_end_exclusive == Some(primary_cursor_position)
+        && (is_on_cursor_line || row_draws_cursor_line)
+    {
+        if let Some(x) = last_visible_x {
+            cursor.place(x.saturating_add(1), current_row);
+        }
+    }
     if let Some((fallback_x, _)) = nearest_fallback {
-        cursor.place(fallback_x, current_row);
+        if is_on_cursor_line || row_draws_cursor_line {
+            cursor.place(fallback_x, current_row);
+        }
     }
     last_visible_x
 }
@@ -1452,12 +1495,72 @@ fn append_inline_diagnostic(
 }
 
 /// Build the mouse-click/cursor-movement mapping for a rendered row.
+/// One byte past the last character a row drew, when that position belongs to
+/// the row and no cell carries it. `None` otherwise.
+///
+/// A row ends on a content character whenever the wrap that ended it consumed a
+/// separator — which is what a compose-mode soft break does with the space it
+/// fell on. The position past that character is then the separator's own, drawn
+/// by nobody, and it is where `End` goes.
+///
+/// A wrap can also split a run with no whitespace in it at all — CJK text, a
+/// long URL, an unbreakable token — and there the byte past the last character
+/// is the first character of the NEXT row, which that row draws. Claiming it
+/// would paint the caret on the wrong row and send `End` off the row entirely.
+/// The two cases are told apart by the byte itself: a consumed separator is
+/// whitespace, the next row's first character is not.
+fn row_end_exclusive(view_line: &ViewLine, buffer: &crate::model::buffer::Buffer) -> Option<usize> {
+    // `char_source_bytes` is indexed by character of `text` (its length is
+    // `text.chars().count()`), so the index of the last mapped byte is the
+    // index of its character.
+    let (idx, byte) = view_line
+        .char_source_bytes
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, m)| m.map(|byte| (idx, byte)))?;
+    let ch = view_line
+        .text
+        .chars()
+        .nth(idx)
+        .filter(|c| !c.is_whitespace())?;
+    let end = byte + ch.len_utf8();
+    if end >= buffer.len() || byte_at_is_whitespace(buffer, end) {
+        Some(end)
+    } else {
+        None
+    }
+}
+
+/// Whether the buffer's character at `pos` is whitespace. `pos` must be a
+/// character boundary; the width is read from the leading byte so a slice that
+/// ends mid-character cannot make this fail silently.
+fn byte_at_is_whitespace(buffer: &crate::model::buffer::Buffer, pos: usize) -> bool {
+    let lead = match buffer.slice_bytes(pos..pos.saturating_add(1)).first() {
+        Some(b) => *b,
+        None => return false,
+    };
+    let width = match lead {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => return false,
+    };
+    let bytes = buffer.slice_bytes(pos..pos.saturating_add(width));
+    std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|text| text.chars().next())
+        .is_some_and(char::is_whitespace)
+}
+
 fn build_view_line_mapping(
     view_line: &ViewLine,
     line_view_map: &[Option<usize>],
     gutter_width: usize,
     prev_line_end_byte: usize,
     buffer_len: usize,
+    buffer: &crate::model::buffer::Buffer,
 ) -> ViewLineMapping {
     let line_end_byte = if view_line.ends_with_newline {
         // Position ON the newline - find the last source byte (the newline's position)
@@ -1493,6 +1596,8 @@ fn build_view_line_mapping(
         prev_line_end_byte
     };
 
+    let end_exclusive = row_end_exclusive(view_line, buffer).filter(|end| *end != line_end_byte);
+
     // Content mapping starts after the gutter
     let content_map = if line_view_map.len() >= gutter_width {
         line_view_map[gutter_width..].to_vec()
@@ -1513,5 +1618,6 @@ fn build_view_line_mapping(
         char_source_bytes: content_map,
         line_end_byte,
         is_plugin_virtual,
+        end_exclusive,
     }
 }
