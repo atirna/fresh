@@ -2687,10 +2687,11 @@ impl Editor {
         use fresh_i18n::t;
 
         let s = self.settings_state.as_ref().filter(|s| s.visible)?;
-        // The painter's own precedence, topmost first. The entry dialog's two
-        // prompts sit *over* the entry stack, so they cross even though the
-        // stack has not: a layer lands on top of what the painter drew, which
-        // is where they were.
+        // The painter's own precedence, topmost first — and it is layer
+        // order now, so it holds without the gate that used to sit in the
+        // middle of this chain. The entry stack was painted, so anything
+        // *under* it had to stay painted too; a described prompt would have
+        // landed on top of the dialog it belonged behind.
         if s.showing_entry_delete_confirm {
             let named = !s.entry_delete_target_name.is_empty();
             return Some(st::Dialog::EntryDelete(st::Destructive {
@@ -2726,11 +2727,6 @@ impl Editor {
                 grave: false,
                 width: 50,
             }));
-        }
-        // The stack itself is still painted, so anything *under* it stays
-        // painted too — a described dialog would land on top of it.
-        if s.showing_entry_dialog() {
-            return None;
         }
         if s.showing_help {
             let head = |k: &str| st::HelpLine {
