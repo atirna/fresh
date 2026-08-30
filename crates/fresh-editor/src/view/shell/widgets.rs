@@ -288,10 +288,35 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
     let axis = site.axis;
     match spec {
         WidgetSpec::Row { children, wrap, .. } => {
+            // **A row of blocks splits its width; a row of inline pieces does
+            // not.** `allocate_row_child_widths` is the runtime's own rule —
+            // a `LabeledSection` with a `width_pct` takes its declared share,
+            // the rest split what is left equally, and an inline child gets
+            // the full width as a soft cap — and it is *called* here rather
+            // than restated, because the plugin API's `width_pct` means what
+            // that function says it means.
+            //
+            // Laid out as `Auto` instead, a block measured against the room
+            // that was left and the first one took all of it: the
+            // orchestrator's two-column picker came out as its sessions list
+            // alone, with the preview pane — and the bulk-action bar inside
+            // it — allocated no width at all.
+            let widths = crate::widgets::kinds::containers::allocate_row_child_widths(
+                children,
+                width as u32,
+            );
             let r = row().children(
                 children
                     .iter()
-                    .map(|c| node_in(c, width, cx, site.across()))
+                    .zip(widths)
+                    .map(|(c, w)| {
+                        let w = (w as u16).max(1);
+                        let n = node_in(c, w, cx, site.across());
+                        match crate::widgets::kinds::containers::predicts_block(c) {
+                            true => n.w(Sizing::Cells(w)),
+                            false => n,
+                        }
+                    })
                     .collect::<Vec<_>>(),
             );
             match wrap {
@@ -2163,6 +2188,14 @@ mod tests {
                         key: None,
                     },
                 ]),
+            ),
+            (
+                "two fields side by side in a row",
+                col_of(vec![WidgetSpec::Row {
+                    children: vec![field("Left", "one"), field("Right", "two")],
+                    wrap: false,
+                    key: None,
+                }]),
             ),
             (
                 "a form: a tab row, spacers, two fields and a button",

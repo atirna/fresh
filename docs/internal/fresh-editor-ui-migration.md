@@ -614,6 +614,49 @@ argument for writing the tests at the same time rather than after: the panel's
 frame was a transparent layer above the modal's claim, and every press on the
 box's chrome and content area went nowhere.
 
+**And the same rule one level down, which C.1 then shipped.** *Within* a
+layer, a transparent node still produces a path — a second one, offered before
+the path that reaches the content behind it — and dispatch tries paths
+topmost-first, **stopping at the first one that claims**. Every node on a path
+gets its handlers run, ancestors included. So a decorative filler laid over a
+box whose root swallows what its interior does not answer hands that root the
+press *first*, and the widget under the filler never sees it: the panel's title
+strip was a column with a `flex` filler beneath it, covering the whole box, and
+every press on a described widget died one node short of the widget it landed
+on. A strip that ends where its content ends has no path to offer, and that —
+not a `PointerMode` — is the fix. **A decoration is as big as what it
+decorates.**
+
+**A float inside a layer owes the same answer for the kinds it does not
+handle.** A pop-over or an overlay row that listens for presses *eats* a wheel
+rather than letting it through, because the layer it is in is the first thing
+asked at the point. Every scrollable list in the panel stopped scrolling the
+moment a float covered it. `widgets::float_route` is the panel's version of
+what `shell::settings::route` says for its box: where the event goes when this
+node is not the one that wants it.
+
+**One more, about the library's own API rather than about layers.**
+`Node::flex(n)` sets **both** axes, and on a container's *cross* axis
+`Sizing::Flex` means "fill the extent", not "share the remainder". So
+`row().flex(1)` used as a horizontal spacer *inside a row* also asks that row
+to be as tall as everything left in the column above it — which is exactly
+right for `row().flex(1)` as a **column** child and exactly wrong as a **row**
+child. Three separate bugs in one wave came from it (a form's fields laid out
+at zero height, a section's legend asking for the rest of the form, a title
+strip covering the whole box). **A spacer flexes along the axis it sits on**;
+say the axis (`.w(Sizing::Flex(1))` or `.h(...)`) rather than reaching for
+`flex`, and where the axis is not known statically, carry it — which is what
+`widgets::Site` does for the adapter.
+
+**And the parity oracle has to be a fold, not a string join.** The five faults
+above all passed a per-variant suite that compared the tree's *run strings*
+against the runtime's entries. A run join cannot see a gap a `Spacer` opened
+between two runs, a blank line nothing painted on, or a border drawn as
+`Draw::Border` rather than as text — and every one of those was the difference.
+`widgets::tests::rows_of` paints the display list into a grid the way
+`fold_native` does and reads the rows back; the composition cases are asserted
+against `render_spec` at that unit. **Compare what the backend would draw.**
+
 And one rule of this migration's own, learned the expensive way and worth
 keeping at the top: **the tree runs first, so anything that used to sit between
 it and the legacy walk now sits behind whatever the tree claims.** Three things
