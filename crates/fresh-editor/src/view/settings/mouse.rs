@@ -7,7 +7,6 @@ use crate::app::Editor;
 use anyhow::Result as AnyhowResult;
 
 use super::items::SettingControl;
-use super::render::ControlLayoutInfo;
 use super::{FocusPanel, SettingsHit, SettingsLayout};
 use crate::view::controls::DualListColumn;
 
@@ -203,7 +202,9 @@ impl Editor {
                         }
                     }
                 }
-                return Ok(self.settings_scrollbar_drag(col, row));
+                // A drag on the body's own bar is the window's; nothing
+                // else in the body answers one.
+                return Ok(false);
             }
             MouseEventKind::Down(MouseButton::Left) => {}
             _ => return Ok(false),
@@ -219,35 +220,14 @@ impl Editor {
             return Ok(false);
         };
 
-        // A click on a main-panel text field enters editing (via dispatch)
-        // AND positions the caret where the click landed (#2573). The
-        // geometry was stamped into the layout at render time; read it
-        // here, where the screen `col` is still available (the web-shared
-        // `dispatch_settings_hit` carries no column). Grab it before
-        // dispatch, since dispatch re-borrows the layout.
-        let text_click_geometry = match hit {
-            SettingsHit::ControlText(idx) => self
-                .active_chrome()
-                .settings_layout
-                .as_ref()
-                .and_then(|l| l.items.iter().find(|it| it.index == idx))
-                .and_then(|it| match &it.control {
-                    ControlLayoutInfo::Text { geometry, .. } => geometry.clone(),
-                    _ => None,
-                }),
-            _ => None,
-        };
-
+        // **A press on a body card never reaches here.** The field that
+        // stamped its click geometry into the layout so the caret could land
+        // where the click did (#2573) is a node now, and its own hit carries
+        // the column inside it — `Editor::settings_widget_hit` places the
+        // caret from that. What is left of this path is the search results
+        // and the narrow layout's category strip.
+        let _ = col;
         self.dispatch_settings_hit(hit, row, is_double_click);
-
-        // Position the caret after dispatch, which ran `start_editing` and
-        // seeded the caret at end-of-value; the click position wins.
-        if let Some(geometry) = text_click_geometry {
-            let byte = geometry.value_byte_at(col);
-            if let Some(state) = self.settings_state.as_mut() {
-                state.position_text_cursor(byte);
-            }
-        }
         Ok(true)
     }
 
@@ -496,7 +476,10 @@ impl Editor {
                     let _ = self.open_config_file(layer);
                 }
             }
-            SettingsHit::Scrollbar => self.settings_scrollbar_click(row),
+            // Nothing produces this any more: the body's bar is the
+            // `viewport`'s, and the framework maps a press on it to an
+            // offset. The variant stays while the *web* still names it.
+            SettingsHit::Scrollbar => {}
             SettingsHit::SearchScrollbar => self.search_scrollbar_click(row),
             SettingsHit::SearchResultsPanel => {
                 // Clicking on search results panel background - no action needed
@@ -559,42 +542,10 @@ impl Editor {
             .unwrap_or(false)
     }
 
-    fn settings_scrollbar_click(&mut self, row: u16) {
-        if let Some(ref scrollbar_area) = self
-            .active_chrome()
-            .settings_layout
-            .as_ref()
-            .and_then(|l| l.scrollbar_area)
-        {
-            if scrollbar_area.height > 0 {
-                let relative_y = row.saturating_sub(scrollbar_area.y);
-                let ratio = relative_y as f32 / scrollbar_area.height as f32;
-                if let Some(ref mut state) = self.settings_state {
-                    state.scroll_to_ratio(ratio);
-                }
-            }
-        }
-    }
-
-    fn settings_scrollbar_drag(&mut self, col: u16, row: u16) -> bool {
-        if let Some(ref scrollbar_area) = self
-            .active_chrome()
-            .settings_layout
-            .as_ref()
-            .and_then(|l| l.scrollbar_area)
-        {
-            let in_scrollbar_x = col >= scrollbar_area.x.saturating_sub(1)
-                && col <= scrollbar_area.x + scrollbar_area.width;
-            if in_scrollbar_x && scrollbar_area.height > 0 {
-                let relative_y = row.saturating_sub(scrollbar_area.y);
-                let ratio = relative_y as f32 / scrollbar_area.height as f32;
-                if let Some(ref mut state) = self.settings_state {
-                    return state.scroll_to_ratio(ratio);
-                }
-            }
-        }
-        false
-    }
+    // **The body's scrollbar is the window's own.** Its track was a
+    // rectangle the painter filed and two handlers compared a cell against;
+    // the `viewport` the cards live in draws its bar in its own gutter and
+    // the framework maps a press or a drag on it to an offset.
 
     fn search_scrollbar_click(&mut self, row: u16) {
         if let Some(ref scrollbar_area) = self

@@ -432,22 +432,6 @@ pub fn category_icon(name: &str, nerd_fonts: bool) -> &'static str {
     }
 }
 
-/// Render a scalar setting control (Toggle/Number/Dropdown) through the
-/// plugin widget framework: map it to a `WidgetSpec`, render with
-/// `render_spec`, and paint the resulting entries into `area` via the
-/// shared `paint_text_property_entry`. Returns the reconciler output so
-/// the caller can derive click geometry from the real hit areas.
-fn render_scalar_via_widget(
-    frame: &mut Frame,
-    area: Rect,
-    control: &SettingControl,
-    name: &str,
-    theme: &Theme,
-    label_width: Option<u16>,
-    prev: &std::collections::HashMap<String, crate::widgets::WidgetInstanceState>,
-) -> crate::widgets::RenderOutput {
-    render_control_via_widget(frame, area, control, name, theme, 0, "", label_width, prev)
-}
 
 /// Like [`render_scalar_via_widget`] but for multi-row controls: paints
 /// entries starting at `skip_rows` (the settings viewport clips tall
@@ -497,105 +481,18 @@ fn render_control_via_widget(
     out
 }
 
-/// Screen rect of the first hit with the given kind + event type,
-/// derived from the *real* rendered geometry: the hit's byte range is
-/// converted to display columns against its row's entry text. Returns
-/// `Rect::default()` (empty, unhittable) when absent or scrolled off.
-fn hit_rect(
-    out: &crate::widgets::RenderOutput,
-    widget_kind: &str,
-    event_type: &str,
-    area: Rect,
-    skip_rows: u16,
-) -> Rect {
-    use crate::primitives::display_width::str_width;
-    for h in &out.hits {
-        if h.widget_kind != widget_kind || h.event_type != event_type {
-            continue;
-        }
-        let Some(dst) = (h.buffer_row as u16).checked_sub(skip_rows) else {
-            continue;
-        };
-        if dst >= area.height {
-            continue;
-        }
-        let Some(entry) = out.entries.get(h.buffer_row as usize) else {
-            continue;
-        };
-        let text = entry.text.trim_end_matches('\n');
-        let s = h.byte_start.min(text.len());
-        let e = h.byte_end.min(text.len());
-        let x = str_width(&text[..s]) as u16;
-        let w = str_width(&text[s..e]).max(1) as u16;
-        if x >= area.width {
-            continue;
-        }
-        return Rect::new(area.x + x, area.y + dst, w.min(area.width - x), 1);
-    }
-    Rect::default()
-}
 
-/// Build the click geometry for a `DualList` from the cells the widget
-/// renderer just painted.
+
+/// Paint one entry-dialog control through the plugin widget framework.
 ///
-/// The widget emits one `dual_focus` hit per occupied cell, carrying
-/// the column name and the row index the settings state indexes by.
-/// Converting each hit's byte range against its own row text (the same
-/// conversion [`hit_rect`] does) keeps the rects correct no matter how
-/// the columns were laid out or how far the panel is scrolled.
-fn dual_list_layout(
-    out: &crate::widgets::RenderOutput,
-    area: Rect,
-    skip_rows: u16,
-) -> crate::view::controls::DualListLayout {
-    use crate::primitives::display_width::str_width;
-    use crate::view::controls::{DualListLayout, DualListRowArea};
-
-    let mut layout = DualListLayout {
-        full_area: area,
-        ..Default::default()
-    };
-    for h in &out.hits {
-        if h.widget_kind != "dual_list" || h.event_type != "dual_focus" {
-            continue;
-        }
-        let (Some(column), Some(index)) = (
-            h.payload.get("column").and_then(|v| v.as_str()),
-            h.payload.get("index").and_then(|v| v.as_u64()),
-        ) else {
-            continue;
-        };
-        let Some(dst) = (h.buffer_row as u16).checked_sub(skip_rows) else {
-            continue;
-        };
-        if dst >= area.height {
-            continue;
-        }
-        let Some(entry) = out.entries.get(h.buffer_row as usize) else {
-            continue;
-        };
-        let text = entry.text.trim_end_matches('\n');
-        let s = h.byte_start.min(text.len());
-        let e = h.byte_end.min(text.len());
-        let x = str_width(&text[..s]) as u16;
-        if x >= area.width {
-            continue;
-        }
-        let w = (str_width(&text[s..e]).max(1) as u16).min(area.width - x);
-        let row = DualListRowArea {
-            area: Rect::new(area.x + x, area.y + dst, w, 1),
-            index: index as usize,
-        };
-        match column {
-            "available" => layout.available_rows.push(row),
-            "included" => layout.included_rows.push(row),
-            _ => {}
-        }
-    }
-    layout
-}
-
-/// Render the appropriate control for a setting
+/// **All that is left of it is the painting.** Every arm used to end by
+/// filing a `ControlLayoutInfo` — a toggle's chip rectangle, a number's value
+/// cell, a dropdown's button and one rect per open option row, a rect per map
+/// entry and per text-list row — so a later click could be compared against
+/// what had been drawn. The settings *body* is a description now and its
+/// controls answer their own presses; what still calls this is the
+/// entry-dialog stack, which paints its fields inline and hit-tests them by
+/// walking its own item list.
 ///
 /// # Arguments
 /// * `name` - Setting name (for controls that render their own label)
@@ -612,429 +509,94 @@ fn render_control(
     theme: &Theme,
     label_width: Option<u16>,
     read_only: bool,
-    // Nullable-null fields previously rendered with dimmed brackets;
-    // the widget-rendered path shows them like any other value for now.
-    _is_null: bool,
-    // Persistent widget instance-state store used as the `prev` for the
-    // widget-rendered controls (runtime-owned cursor / selection / edit
-    // affordances). Empty until a control's input is routed through the
-    // runtime, in which case rendering matches the old per-control State.
     prev: &std::collections::HashMap<String, crate::widgets::WidgetInstanceState>,
-) -> ControlLayoutInfo {
-    match control {
-        // Single-row controls: only render if not skipped.
-        //
-        // Every control renders through the plugin widget framework
-        // (Settings↔widget unification): the control maps to a
-        // `WidgetSpec` (with the page's label column width for
-        // alignment) and paints via `render_spec` +
-        // `paint_text_property_entry`, the same path plugin panels
-        // use. Click geometry comes from the reconciler's real hit
-        // areas (`hit_rect`), not approximations. The control's State
-        // stays the model (input.rs still drives it); the widget rows
-        // faithfully project that state each frame.
-        SettingControl::Toggle(_) => {
+) {
+    // A truly read-only field (a `Key:` row in an entry dialog) is a label and
+    // a value, not a control.
+    if read_only {
+        if let SettingControl::Text(state) = control {
             if skip_rows > 0 {
-                return ControlLayoutInfo::Toggle(Rect::default());
+                return;
             }
-            let out =
-                render_scalar_via_widget(frame, area, control, name, theme, label_width, prev);
-            ControlLayoutInfo::Toggle(hit_rect(&out, "toggle", "toggle", area, 0))
-        }
-
-        SettingControl::Number(_) => {
-            if skip_rows > 0 {
-                return ControlLayoutInfo::Number {
-                    decrement: Rect::default(),
-                    increment: Rect::default(),
-                    value: Rect::default(),
-                };
-            }
-            let out =
-                render_scalar_via_widget(frame, area, control, name, theme, label_width, prev);
-            ControlLayoutInfo::Number {
-                decrement: Rect::default(),
-                increment: Rect::default(),
-                value: hit_rect(&out, "number", "number_value", area, 0),
-            }
-        }
-
-        SettingControl::Dropdown(state) => {
-            if skip_rows > 0 {
-                return ControlLayoutInfo::Dropdown {
-                    button_area: Rect::default(),
-                    option_areas: Vec::new(),
-                    scroll_offset: 0,
-                };
-            }
-            let out =
-                render_scalar_via_widget(frame, area, control, name, theme, label_width, prev);
-            let button_area = hit_rect(&out, "dropdown", "dropdown_toggle", area, 0);
-            // When open, paint the option list inline beneath the button.
-            //
-            // The shared widget framework (`collect_dropdown`) surfaces an
-            // open dropdown's options as a *floating* screen-level pop-over
-            // (`RenderOutput::popups`) for plugin panels, and
-            // discards `render_dropdown`'s inline `option_rows`. The Settings
-            // modal does not draw those floating pop-overs — it reserves
-            // inline rows for the open list via `SettingControl::height`. So
-            // relying on `render_scalar_via_widget` alone leaves the reserved
-            // rows blank: the dropdown opens to an empty box (theme and every
-            // other settings dropdown showed no options — #2765).
-            //
-            // Render the option rows directly and paint them under the button
-            // (row 0), exactly where the reserved height expects them. Use the
-            // same label/label-width/selected/scroll the button render used so
-            // the option column aligns under the value cell, and build one hit
-            // rect per visible row in screen order (`layout.rs` pairs them with
-            // `scroll_offset` to recover absolute indices).
-            let mut option_areas = Vec::new();
-            let mut scroll_offset = 0;
-            if state.open {
-                let rendered = crate::widgets::render_dropdown(
-                    &state.options,
-                    state.selected as i32,
-                    &state.label,
-                    false,
-                    label_width.unwrap_or(0) as u32,
-                    true,
-                    state.scroll_offset as u32,
-                    // The settings dialog draws its own selection chrome
-                    // and never reserved the `▸ ` focus-marker gutter.
-                    false,
-                );
-                scroll_offset = rendered.scroll_offset;
-                for (row_i, (_idx, entry)) in rendered.option_rows.iter().enumerate() {
-                    // Row 0 is the button that `render_scalar_via_widget`
-                    // already painted; options start at row 1.
-                    let dst = 1 + row_i as u16;
-                    if dst >= area.height {
-                        break;
-                    }
-                    crate::app::render::paint_text_property_entry(
-                        frame.buffer_mut(),
-                        entry,
-                        area.x,
-                        area.y + dst,
-                        area.width,
-                        theme,
-                        None,
-                    );
-                    option_areas.push(Rect::new(area.x, area.y + dst, area.width, 1));
-                }
-            }
-            ControlLayoutInfo::Dropdown {
-                button_area,
-                option_areas,
-                scroll_offset,
-            }
-        }
-
-        SettingControl::Text(state) => {
-            if skip_rows > 0 {
-                return ControlLayoutInfo::Text {
-                    area: Rect::default(),
-                    geometry: None,
-                };
-            }
-            if read_only {
-                // Truly read-only fields (e.g., Key: in entry dialogs) render as plain text
-                let label_w = label_width.unwrap_or(20);
-                let label_style = Style::default().fg(theme.editor_fg);
-                let value_style = Style::default().fg(theme.line_number_fg);
-                let label = format!("{}: ", state.label);
-                let value = state.value();
-
-                let label_area = Rect::new(area.x, area.y, label_w, 1);
-                let value_area = Rect::new(
+            let label_w = label_width.unwrap_or(20);
+            frame.render_widget(
+                Paragraph::new(format!("{}: ", state.label))
+                    .style(Style::default().fg(theme.editor_fg)),
+                Rect::new(area.x, area.y, label_w, 1),
+            );
+            frame.render_widget(
+                Paragraph::new(state.value()).style(Style::default().fg(theme.line_number_fg)),
+                Rect::new(
                     area.x + label_w,
                     area.y,
                     area.width.saturating_sub(label_w),
                     1,
-                );
-
-                frame.render_widget(Paragraph::new(label.clone()).style(label_style), label_area);
-                frame.render_widget(
-                    Paragraph::new(value.as_str()).style(value_style),
-                    value_area,
-                );
-                ControlLayoutInfo::Text {
-                    area: Rect::default(),
-                    geometry: None,
-                }
-            } else {
-                // Editable text (and nullable-null) render through the
-                // widget framework. While editing, focus the widget (by
-                // its name key) so it paints the focus highlight and
-                // the block caret the mapping carries.
-                let focus_key = if state.editing { name } else { "" };
-                let out = render_control_via_widget(
-                    frame,
-                    area,
-                    control,
-                    name,
-                    theme,
-                    0,
-                    focus_key,
-                    label_width,
-                    prev,
-                );
-                let rect = hit_rect(&out, "text", "focus", area, 0);
-                // Stamp the field's click geometry from the render we just
-                // did, so a later click maps to a caret position without
-                // reverse-engineering the layout. The row is painted at
-                // `area.x` (its byte 0).
-                let geometry =
-                    crate::widgets::WidgetTextClickGeometry::from_render_output(&out, area.x);
-                ControlLayoutInfo::Text {
-                    area: if rect.width > 0 {
-                        rect
-                    } else {
-                        Rect::new(area.x, area.y, area.width, 1)
-                    },
-                    geometry,
-                }
-            }
-        }
-
-        // Multi-row controls: pass skip_rows to render partial view
-        SettingControl::TextList(state) => {
-            // Bracketed item cells + [x] buttons + the add row, all
-            // projected from the control state by the widget mapping.
-            // Per-row hit rects are derived from the on-screen row
-            // positions so clicks still target the right item; the
-            // trailing entry (index None) is the add row.
-            render_control_via_widget(
-                frame,
-                area,
-                control,
-                name,
-                theme,
-                skip_rows,
-                "",
-                label_width,
-                prev,
+                ),
             );
-            let mut rows = Vec::new();
-            // Row 0 is the label header; items start at row 1, the add
-            // row follows them. The item cell spans `[...]` starting at
-            // the 2-column indent (matching the rendered row).
-            let cell_w = 30u16.min(area.width.saturating_sub(2));
-            for (i, _) in state.items.iter().enumerate() {
-                let logical = 1 + i as u16;
-                if logical >= skip_rows {
-                    let dst = logical - skip_rows;
-                    if dst < area.height {
-                        rows.push((Some(i), Rect::new(area.x + 2, area.y + dst, cell_w, 1)));
-                    }
-                }
-            }
-            let add_logical = 1 + state.items.len() as u16;
-            if add_logical >= skip_rows {
-                let dst = add_logical - skip_rows;
-                if dst < area.height {
-                    rows.push((None, Rect::new(area.x + 2, area.y + dst, cell_w, 1)));
-                }
-            }
-            ControlLayoutInfo::TextList { rows }
-        }
-
-        SettingControl::DualList(state) => {
-            // A keyed widget takes its focus from `focus_key`, not from
-            // the spec's `focused` flag, so the picker only paints its
-            // cursor once we name it as the focused widget. Gate that on
-            // *editing*, not mere selection: outside edit mode ↑↓ walks
-            // the settings list, and a cursor drawn inside the columns
-            // would promise a movement the arrows don't make.
-            let focus_key = if state.editing { name } else { "" };
-            // View migrated to the widget `DualList` kind (two-column
-            // Available/Included picker); editing still runs through the
-            // settings input path. The click geometry is read back from
-            // the cells the widget actually painted, so a click lands on
-            // the row under the pointer instead of nowhere.
-            let out = render_control_via_widget(
-                frame,
-                area,
-                control,
-                name,
-                theme,
-                skip_rows,
-                focus_key,
-                label_width,
-                prev,
-            );
-            ControlLayoutInfo::DualList(dual_list_layout(&out, area, skip_rows))
-        }
-
-        SettingControl::Map(state) => {
-            // Label + optional column header + List-rendered entries +
-            // add row, all projected from the control state.
-            render_control_via_widget(
-                frame,
-                area,
-                control,
-                name,
-                theme,
-                skip_rows,
-                "",
-                label_width,
-                prev,
-            );
-            let row_rect = |logical: u16| -> Option<Rect> {
-                logical.checked_sub(skip_rows).and_then(|dst| {
-                    (dst < area.height).then(|| Rect::new(area.x, area.y + dst, area.width, 1))
-                })
-            };
-            // Row 0 is the `label:` header. When the control has a
-            // `display_field`, the mapping inserts a `Name  <Title>`
-            // column header at row 1, so entries start at row 2; without
-            // it they start at row 1. The hit geometry must track that
-            // offset or clicks land one row above every entry and the
-            // "add new" row.
-            let first_entry_row = if state.display_field.is_some() { 2 } else { 1 };
-            let entry_rows = state
-                .entries
-                .iter()
-                .enumerate()
-                .filter_map(|(i, _)| row_rect(first_entry_row + i as u16).map(|r| (i, r)))
-                .collect();
-            let add_row_area = if state.no_add {
-                None
-            } else {
-                row_rect(first_entry_row + state.entries.len() as u16)
-            };
-            ControlLayoutInfo::Map {
-                entry_rows,
-                add_row_area,
-            }
-        }
-
-        SettingControl::ObjectArray(state) => {
-            render_control_via_widget(
-                frame,
-                area,
-                control,
-                name,
-                theme,
-                skip_rows,
-                "",
-                label_width,
-                prev,
-            );
-            let entry_rows = state
-                .bindings
-                .iter()
-                .enumerate()
-                .filter_map(|(i, _)| {
-                    (1 + i as u16).checked_sub(skip_rows).and_then(|dst| {
-                        (dst < area.height)
-                            .then(|| (i, Rect::new(area.x, area.y + dst, area.width, 1)))
-                    })
-                })
-                .collect();
-            ControlLayoutInfo::ObjectArray { entry_rows }
-        }
-
-        // The multiline JSON editor renders through the widget
-        // framework too: label + bordered line box + block caret +
-        // selection + invalid-JSON warning, projected from the
-        // control's `TextEdit` by the mapping. Editing (and JSON
-        // validation) still runs through the settings input path.
-        SettingControl::Json(state) => {
-            let focus_key = if matches!(state.focus, crate::view::controls::FocusState::Focused) {
-                name
-            } else {
-                ""
-            };
-            render_control_via_widget(
-                frame,
-                area,
-                control,
-                name,
-                theme,
-                skip_rows,
-                focus_key,
-                label_width,
-                prev,
-            );
-            ControlLayoutInfo::Text {
-                area: Rect::new(area.x, area.y, area.width, 1),
-                geometry: None,
-            }
-        }
-
-        SettingControl::Complex { .. } => {
-            if skip_rows > 0 {
-                return ControlLayoutInfo::Complex;
-            }
-            // Uneditable placeholder, rendered through the widget
-            // framework like the other controls.
-            render_control_via_widget(
-                frame,
-                area,
-                control,
-                name,
-                theme,
-                skip_rows,
-                "",
-                label_width,
-                prev,
-            );
-            ControlLayoutInfo::Complex
+            return;
         }
     }
-}
-
-/// Combined layout info for a setting item (control + inherit button)
-#[derive(Debug, Clone, Default)]
-pub struct SettingItemLayoutInfo {
-    pub control: ControlLayoutInfo,
-    pub inherit_button: Option<Rect>,
-}
-
-/// Layout info for a control (for hit testing)
-#[derive(Debug, Clone, Default)]
-pub enum ControlLayoutInfo {
-    Toggle(Rect),
-    Number {
-        decrement: Rect,
-        increment: Rect,
-        value: Rect,
-    },
-    Dropdown {
-        button_area: Rect,
-        option_areas: Vec<Rect>,
-        scroll_offset: usize,
-    },
-    Text {
-        area: Rect,
-        /// Stamped at render time for single-line editable text fields so a
-        /// click can be mapped to a caret position without reconstructing
-        /// the field's label/bracket/truncation layout (#2573). `None` for
-        /// read-only or multi-line (JSON) text. When Settings controls are
-        /// mounted as real widget panels this becomes redundant with the
-        /// registry hit path (see `widgets::WidgetTextClickGeometry`).
-        geometry: Option<crate::widgets::WidgetTextClickGeometry>,
-    },
-    TextList {
-        /// (data_index, screen_area) - None index means "add new" row
-        rows: Vec<(Option<usize>, Rect)>,
-    },
-    DualList(crate::view::controls::DualListLayout),
-    Map {
-        /// (data_index, screen_area)
-        entry_rows: Vec<(usize, Rect)>,
-        add_row_area: Option<Rect>,
-    },
-    ObjectArray {
-        /// (data_index, screen_area)
-        entry_rows: Vec<(usize, Rect)>,
-    },
-    Json {
-        edit_area: Rect,
-    },
-    #[default]
-    Complex,
+    // A keyed widget takes its focus from `focus_key`, not from the spec's
+    // `focused` flag, so only a control actually being edited paints its
+    // caret and its focus band. Outside edit mode ↑↓ walks the dialog's
+    // fields, and a cursor inside one would promise a movement the arrows do
+    // not make.
+    let focus_key = match control.is_editing() {
+        true => name,
+        false => "",
+    };
+    render_control_via_widget(
+        frame,
+        area,
+        control,
+        name,
+        theme,
+        skip_rows,
+        focus_key,
+        label_width,
+        prev,
+    );
+    // An open dropdown's options, under the button.
+    //
+    // The shared widget framework surfaces them as a *floating* screen-level
+    // pop-over and discards `render_dropdown`'s inline rows; the entry dialog
+    // does not draw those pop-overs and reserves inline rows through
+    // `SettingControl::height` instead, so relying on the widget render alone
+    // leaves the reserved rows blank — which is #2765, the dropdown that
+    // opened to an empty box. The settings *body* took the pop-over when it
+    // became a description; this surface has not, and paints them here.
+    if let SettingControl::Dropdown(state) = control {
+        if state.open && skip_rows == 0 {
+            let rendered = crate::widgets::render_dropdown(
+                &state.options,
+                state.selected as i32,
+                &state.label,
+                false,
+                label_width.unwrap_or(0) as u32,
+                true,
+                state.scroll_offset as u32,
+                // The dialog draws its own selection chrome and never
+                // reserved the `▸ ` focus-marker gutter.
+                false,
+            );
+            for (row_i, (_idx, entry)) in rendered.option_rows.iter().enumerate() {
+                // Row 0 is the button the widget render already painted.
+                let dst = 1 + row_i as u16;
+                if dst >= area.height {
+                    break;
+                }
+                crate::app::render::paint_text_property_entry(
+                    frame.buffer_mut(),
+                    entry,
+                    area.x,
+                    area.y + dst,
+                    area.width,
+                    theme,
+                    None,
+                );
+            }
+        }
+    }
 }
 
 /// Render search results with breadcrumbs
@@ -1727,7 +1289,7 @@ fn render_entry_items(
             inner.width.saturating_sub(focus_indicator_width),
             render_height as u16,
         );
-        let _layout = render_control(
+        render_control(
             frame,
             control_area,
             &item.control,
@@ -1736,7 +1298,6 @@ fn render_entry_items(
             theme,
             Some(label_col_width.saturating_sub(focus_indicator_width)),
             item.read_only,
-            item.is_null,
             // Entry-dialog controls will carry their own runtime store once
             // that path is mounted; until then render statelessly (empty prev).
             &std::collections::HashMap::new(),
@@ -2245,19 +1806,6 @@ mod tests {
         assert_eq!(out.chars().count(), 5);
     }
 
-    #[test]
-    fn test_control_layout_info() {
-        let toggle = ControlLayoutInfo::Toggle(Rect::new(0, 0, 10, 1));
-        assert!(matches!(toggle, ControlLayoutInfo::Toggle(_)));
-
-        let number = ControlLayoutInfo::Number {
-            decrement: Rect::new(0, 0, 3, 1),
-            increment: Rect::new(4, 0, 3, 1),
-            value: Rect::new(8, 0, 5, 1),
-        };
-        assert!(matches!(number, ControlLayoutInfo::Number { .. }));
-    }
-
     /// Regression for #2765: an *open* settings dropdown must actually paint
     /// its option rows into the frame.
     ///
@@ -2306,11 +1854,10 @@ mod tests {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        let mut layout: Option<ControlLayoutInfo> = None;
         terminal
             .draw(|frame| {
                 let area = Rect::new(0, 0, width, height);
-                layout = Some(render_control(
+                render_control(
                     frame,
                     area,
                     &control,
@@ -2319,23 +1866,10 @@ mod tests {
                     &theme,
                     Some(10),
                     false,
-                    false,
                     &prev,
-                ));
+                );
             })
             .unwrap();
-
-        // The open list must yield one hit rect per option row.
-        match layout {
-            Some(ControlLayoutInfo::Dropdown { option_areas, .. }) => {
-                assert_eq!(
-                    option_areas.len(),
-                    3,
-                    "open dropdown should expose one hit rect per option row"
-                );
-            }
-            other => panic!("expected Dropdown layout, got {other:?}"),
-        }
 
         // And every option's display name must appear somewhere in the
         // painted buffer — the pre-fix code painted only the button row, so

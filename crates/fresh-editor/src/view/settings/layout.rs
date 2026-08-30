@@ -2,7 +2,6 @@
 //!
 //! Tracks the layout of rendered settings UI elements for mouse interaction.
 
-use super::render::ControlLayoutInfo;
 use crate::view::ui::point_in_rect;
 use ratatui::layout::Rect;
 
@@ -11,23 +10,8 @@ use ratatui::layout::Rect;
 pub struct SettingsLayout {
     /// The modal area
     pub modal_area: Rect,
-    /// Category list items (index, area)
-    /// Setting items (index, path, area, control_layout)
-    pub items: Vec<ItemLayout>,
     /// Search result items (page_index, item_index, area)
     pub search_results: Vec<SearchResultLayout>,
-    /// Layer button area
-    pub layer_button: Option<Rect>,
-    /// Edit config file button area
-    pub edit_button: Option<Rect>,
-    /// Save button area
-    pub save_button: Option<Rect>,
-    /// Cancel button area
-    pub cancel_button: Option<Rect>,
-    /// Reset button area
-    pub reset_button: Option<Rect>,
-    /// Clear category button area (shown in page header for nullable categories)
-    pub clear_category_button: Option<Rect>,
     /// The **narrow** layout's horizontal category strip: (index, area).
     ///
     /// **Four of this family's five are gone.** `sections`,
@@ -40,10 +24,6 @@ pub struct SettingsLayout {
     /// and its bar are the viewport's. The strip below forty columns is still
     /// painted, so it still records these.
     pub categories: Vec<(usize, Rect)>,
-    /// Settings panel area (for scroll hit testing)
-    pub settings_panel_area: Option<Rect>,
-    /// Scrollbar area (for drag detection)
-    pub scrollbar_area: Option<Rect>,
     /// Search results scrollbar area (for search results scrolling)
     pub search_scrollbar_area: Option<Rect>,
     /// Search results content area (for scroll wheel detection)
@@ -66,37 +46,13 @@ pub struct SearchResultLayout {
     pub area: Rect,
 }
 
-/// Layout info for a setting item
-#[derive(Debug, Clone)]
-pub struct ItemLayout {
-    /// Item index within current page
-    pub index: usize,
-    /// JSON path for this setting
-    pub path: String,
-    /// Full item area (for selection)
-    pub area: Rect,
-    /// Control-specific layout info
-    pub control: ControlLayoutInfo,
-    /// Area of the [Inherit] button (only for nullable, explicitly-set items)
-    pub inherit_button: Option<Rect>,
-}
-
 impl SettingsLayout {
     /// Create a new layout for the given modal area
     pub fn new(modal_area: Rect) -> Self {
         Self {
             modal_area,
             categories: Vec::new(),
-            items: Vec::new(),
             search_results: Vec::new(),
-            layer_button: None,
-            edit_button: None,
-            save_button: None,
-            cancel_button: None,
-            reset_button: None,
-            clear_category_button: None,
-            settings_panel_area: None,
-            scrollbar_area: None,
             search_scrollbar_area: None,
             search_results_area: None,
         }
@@ -105,24 +61,6 @@ impl SettingsLayout {
     /// Register a row of the narrow layout's horizontal category strip.
     pub fn add_category(&mut self, index: usize, area: Rect) {
         self.categories.push((index, area));
-    }
-
-    /// Add a setting item to the layout
-    pub fn add_item(
-        &mut self,
-        index: usize,
-        path: String,
-        area: Rect,
-        control: ControlLayoutInfo,
-        inherit_button: Option<Rect>,
-    ) {
-        self.items.push(ItemLayout {
-            index,
-            path,
-            area,
-            control,
-            inherit_button,
-        });
     }
 
     /// Add a search result to the layout. `result_index` is the absolute
@@ -150,37 +88,9 @@ impl SettingsLayout {
             return Some(SettingsHit::Outside);
         }
 
-        // Check footer buttons
-        if let Some(ref layer) = self.layer_button {
-            if point_in_rect(*layer, x, y) {
-                return Some(SettingsHit::LayerButton);
-            }
-        }
-        if let Some(ref edit) = self.edit_button {
-            if point_in_rect(*edit, x, y) {
-                return Some(SettingsHit::EditButton);
-            }
-        }
-        if let Some(ref save) = self.save_button {
-            if point_in_rect(*save, x, y) {
-                return Some(SettingsHit::SaveButton);
-            }
-        }
-        if let Some(ref cancel) = self.cancel_button {
-            if point_in_rect(*cancel, x, y) {
-                return Some(SettingsHit::CancelButton);
-            }
-        }
-        if let Some(ref reset) = self.reset_button {
-            if point_in_rect(*reset, x, y) {
-                return Some(SettingsHit::ResetButton);
-            }
-        }
-        if let Some(ref clear_cat) = self.clear_category_button {
-            if point_in_rect(*clear_cat, x, y) {
-                return Some(SettingsHit::ClearCategoryButton);
-            }
-        }
+        // **The footer's five buttons and the page header's `[Clear …]` are
+        // the tree's**, and answer their own presses. What was here was six
+        // more rectangles the painter filed as it drew them.
 
         // The wide layout's tree answered here through four ordered lists of
         // rectangle — chevrons, then sections, then rows, then the panel. Its
@@ -216,144 +126,13 @@ impl SettingsLayout {
             }
         }
 
-        // Check setting items
-        for item in &self.items {
-            if point_in_rect(item.area, x, y) {
-                // Check inherit button first (highest priority within item)
-                if let Some(ref inherit_area) = item.inherit_button {
-                    if point_in_rect(*inherit_area, x, y) {
-                        return Some(SettingsHit::ControlInherit(item.index));
-                    }
-                }
-
-                // Check specific control areas
-                match &item.control {
-                    ControlLayoutInfo::Toggle(toggle_area) => {
-                        if point_in_rect(*toggle_area, x, y) {
-                            return Some(SettingsHit::ControlToggle(item.index));
-                        }
-                    }
-                    ControlLayoutInfo::Number {
-                        decrement,
-                        increment,
-                        value,
-                    } => {
-                        if point_in_rect(*decrement, x, y) {
-                            return Some(SettingsHit::ControlDecrement(item.index));
-                        }
-                        if point_in_rect(*increment, x, y) {
-                            return Some(SettingsHit::ControlIncrement(item.index));
-                        }
-                        if point_in_rect(*value, x, y) {
-                            return Some(SettingsHit::ControlNumberValue(item.index));
-                        }
-                    }
-                    ControlLayoutInfo::Dropdown {
-                        button_area,
-                        option_areas,
-                        scroll_offset,
-                    } => {
-                        // Check option areas first (when dropdown is open)
-                        for (i, area) in option_areas.iter().enumerate() {
-                            if point_in_rect(*area, x, y) {
-                                return Some(SettingsHit::ControlDropdownOption(
-                                    item.index,
-                                    scroll_offset + i,
-                                ));
-                            }
-                        }
-                        if point_in_rect(*button_area, x, y) {
-                            return Some(SettingsHit::ControlDropdown(item.index));
-                        }
-                    }
-                    ControlLayoutInfo::Text { area, .. } => {
-                        if point_in_rect(*area, x, y) {
-                            return Some(SettingsHit::ControlText(item.index));
-                        }
-                    }
-                    ControlLayoutInfo::TextList { rows } => {
-                        for &(data_idx, row_area) in rows.iter() {
-                            if point_in_rect(row_area, x, y) {
-                                return Some(SettingsHit::ControlTextListRow(
-                                    item.index,
-                                    data_idx.unwrap_or(usize::MAX),
-                                ));
-                            }
-                        }
-                    }
-                    ControlLayoutInfo::Map {
-                        entry_rows,
-                        add_row_area,
-                    } => {
-                        // Check click on add-new row first (so it has priority)
-                        if let Some(add_area) = add_row_area {
-                            if point_in_rect(*add_area, x, y) {
-                                return Some(SettingsHit::ControlMapAddNew(item.index));
-                            }
-                        }
-                        for &(data_idx, row_area) in entry_rows.iter() {
-                            if point_in_rect(row_area, x, y) {
-                                return Some(SettingsHit::ControlMapRow(item.index, data_idx));
-                            }
-                        }
-                    }
-                    ControlLayoutInfo::ObjectArray { entry_rows } => {
-                        for &(data_idx, row_area) in entry_rows.iter() {
-                            if point_in_rect(row_area, x, y) {
-                                return Some(SettingsHit::ControlMapRow(item.index, data_idx));
-                            }
-                        }
-                    }
-                    ControlLayoutInfo::DualList(dual_layout) => {
-                        use crate::view::controls::DualListHit;
-                        if let Some(hit) = dual_layout.hit_test(x, y) {
-                            return Some(match hit {
-                                DualListHit::AvailableRow(row) => {
-                                    SettingsHit::ControlDualListAvailable(item.index, row)
-                                }
-                                DualListHit::IncludedRow(row) => {
-                                    SettingsHit::ControlDualListIncluded(item.index, row)
-                                }
-                                DualListHit::AddButton => {
-                                    SettingsHit::ControlDualListAdd(item.index)
-                                }
-                                DualListHit::RemoveButton => {
-                                    SettingsHit::ControlDualListRemove(item.index)
-                                }
-                                DualListHit::MoveUpButton => {
-                                    SettingsHit::ControlDualListMoveUp(item.index)
-                                }
-                                DualListHit::MoveDownButton => {
-                                    SettingsHit::ControlDualListMoveDown(item.index)
-                                }
-                            });
-                        }
-                    }
-                    ControlLayoutInfo::Json { edit_area } => {
-                        if point_in_rect(*edit_area, x, y) {
-                            return Some(SettingsHit::ControlText(item.index));
-                        }
-                    }
-                    ControlLayoutInfo::Complex => {}
-                }
-
-                return Some(SettingsHit::Item(item.index));
-            }
-        }
-
-        // Check scrollbar area (for drag detection)
-        if let Some(ref scrollbar) = self.scrollbar_area {
-            if point_in_rect(*scrollbar, x, y) {
-                return Some(SettingsHit::Scrollbar);
-            }
-        }
-
-        // Check settings panel area (for scroll wheel)
-        if let Some(ref panel) = self.settings_panel_area {
-            if point_in_rect(*panel, x, y) {
-                return Some(SettingsHit::SettingsPanel);
-            }
-        }
+        // **The body's cards answer their own presses.** Every control filed
+        // a `ControlLayoutInfo` rectangle here so a click could be compared
+        // against what had been drawn — a toggle's chip, a number's value
+        // cell, a dropdown's button and every open option row, each row of a
+        // map and each of a text list. They are the runtime's own hits now,
+        // resolved by `Editor::settings_widget_hit`, and the body's window is
+        // a `viewport` whose wheel and scrollbar are the framework's.
 
         Some(SettingsHit::Background)
     }
@@ -466,39 +245,6 @@ mod tests {
         assert_eq!(layout.hit_test(15, 7), Some(SettingsHit::Category(1)));
     }
 
-    #[test]
-    fn test_hit_test_buttons() {
-        let modal = Rect::new(10, 5, 80, 30);
-        let mut layout = SettingsLayout::new(modal);
-
-        layout.save_button = Some(Rect::new(60, 32, 8, 1));
-        layout.cancel_button = Some(Rect::new(70, 32, 10, 1));
-
-        assert_eq!(layout.hit_test(62, 32), Some(SettingsHit::SaveButton));
-        assert_eq!(layout.hit_test(75, 32), Some(SettingsHit::CancelButton));
-    }
-
-    #[test]
-    fn test_hit_test_item_with_toggle() {
-        let modal = Rect::new(10, 5, 80, 30);
-        let mut layout = SettingsLayout::new(modal);
-
-        layout.add_item(
-            0,
-            "/test".to_string(),
-            Rect::new(35, 10, 50, 2),
-            ControlLayoutInfo::Toggle(Rect::new(49, 11, 3, 1)),
-            None,
-        );
-
-        // Click on toggle chip
-        assert_eq!(layout.hit_test(50, 11), Some(SettingsHit::ControlToggle(0)));
-
-        // Click on item/label but not on toggle
-        assert_eq!(layout.hit_test(35, 10), Some(SettingsHit::Item(0)));
-        assert_eq!(layout.hit_test(40, 11), Some(SettingsHit::Item(0)));
-    }
-
     /// Reproducer for issue #2860: only VISIBLE search results are registered
     /// in the layout, so when the list is scrolled the first registered row
     /// is not result 0. `hit_test` must report the absolute result index the
@@ -518,45 +264,5 @@ mod tests {
         assert_eq!(layout.hit_test(30, 4), Some(SettingsHit::SearchResult(3)));
         assert_eq!(layout.hit_test(30, 7), Some(SettingsHit::SearchResult(4)));
         assert_eq!(layout.hit_test(30, 10), Some(SettingsHit::SearchResult(5)));
-    }
-
-    /// Reproducer for issue #1825: clicking on the value area between the
-    /// brackets of a Number control used to return `Item`, which only
-    /// changes selection. It must now return a dedicated hit that the mouse
-    /// handler can route to "start editing".
-    #[test]
-    fn test_hit_test_number_value_area() {
-        let modal = Rect::new(10, 5, 80, 30);
-        let mut layout = SettingsLayout::new(modal);
-
-        let item_area = Rect::new(35, 10, 50, 1);
-        let decrement = Rect::new(50, 10, 3, 1);
-        let increment = Rect::new(54, 10, 3, 1);
-        let value = Rect::new(42, 10, 7, 1);
-
-        layout.add_item(
-            0,
-            "/tab_size".to_string(),
-            item_area,
-            ControlLayoutInfo::Number {
-                decrement,
-                increment,
-                value,
-            },
-            None,
-        );
-
-        assert_eq!(
-            layout.hit_test(45, 10),
-            Some(SettingsHit::ControlNumberValue(0))
-        );
-        assert_eq!(
-            layout.hit_test(51, 10),
-            Some(SettingsHit::ControlDecrement(0))
-        );
-        assert_eq!(
-            layout.hit_test(55, 10),
-            Some(SettingsHit::ControlIncrement(0))
-        );
     }
 }

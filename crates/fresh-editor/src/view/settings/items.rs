@@ -8,7 +8,7 @@ use crate::view::controls::{
     DropdownState, DualListState, FocusState, KeybindingListState, MapState, NumberInputState,
     TextInputState, TextListState, ToggleState,
 };
-use crate::view::ui::{FocusRegion, ScrollItem, TextEdit};
+use crate::view::ui::TextEdit;
 use std::collections::{HashMap, HashSet};
 
 /// State for multiline JSON editing
@@ -745,152 +745,14 @@ pub fn clean_description(name: &str, description: Option<&str>) -> Option<String
     Some(desc.to_string())
 }
 
-impl ScrollItem for SettingItem {
-    fn height(&self, width: u16) -> u16 {
-        self.layout_box(width, &self.style).total_rows()
-    }
+// **`ScrollItem for SettingItem` is gone, and `ItemBox` with it.** Its
+// `height` re-derived what the painter drew each card with so
+// `ScrollablePanel` could bound the scroll, and its `focus_regions` walked
+// the same rows again so a sub-focus could be scrolled to. The cards are a
+// `col` in a `viewport` now: the column measures them, the window is asked
+// to hold a card by key (`Anchor::reveal_key`), and a sub-row names itself
+// through `SettingControl::sub_row_key`.
 
-    fn focus_regions(&self, width: u16) -> Vec<FocusRegion> {
-        // y_offset is ABSOLUTE within the item — `ScrollablePanel` adds it
-        // to the cumulative item-y to compute a screen y for
-        // `ensure_visible`. Since the item now starts with a section header
-        // and/or a card top border above the control row, y=0 of the
-        // control is `plan.control_y()` rows down from the item top. Using
-        // 0 here scrolls the viewport to the chrome, not to the actual
-        // entry, which is exactly the bug that hid the focused map entry
-        // off-screen on search-jump.
-        let plan = self.layout_box(width, &self.style);
-        let label_y = plan.control_y();
-
-        match &self.control {
-            // TextList: each row is a focus region
-            SettingControl::TextList(state) => {
-                let mut regions = Vec::new();
-                // Label row
-                regions.push(FocusRegion {
-                    id: 0,
-                    y_offset: label_y,
-                    height: 1,
-                });
-                // Each item row (id = 1 + row_index)
-                for i in 0..state.items.len() {
-                    regions.push(FocusRegion {
-                        id: 1 + i,
-                        y_offset: label_y + 1 + i as u16,
-                        height: 1,
-                    });
-                }
-                // Add-new row
-                regions.push(FocusRegion {
-                    id: 1 + state.items.len(),
-                    y_offset: label_y + 1 + state.items.len() as u16,
-                    height: 1,
-                });
-                regions
-            }
-            // DualList: label + header + body rows
-            SettingControl::DualList(state) => {
-                let mut regions = Vec::new();
-                // Label row
-                regions.push(FocusRegion {
-                    id: 0,
-                    y_offset: label_y,
-                    height: 1,
-                });
-                // Header row (not selectable, but takes space)
-                // Body rows (id = 1 + row_index)
-                let body = state.body_rows();
-                for i in 0..body {
-                    regions.push(FocusRegion {
-                        id: 1 + i,
-                        y_offset: label_y + 2 + i as u16, // after label + header
-                        height: 1,
-                    });
-                }
-                regions
-            }
-            // Map: each entry row is a focus region
-            SettingControl::Map(state) => {
-                let mut regions = Vec::new();
-                let mut y = label_y;
-
-                // Label row
-                regions.push(FocusRegion {
-                    id: 0,
-                    y_offset: y,
-                    height: 1,
-                });
-                y += 1;
-
-                // Column header row (if display_field is set)
-                if state.display_field.is_some() {
-                    y += 1;
-                }
-
-                // Each entry (id = 1 + entry_index)
-                for (i, (_, v)) in state.entries.iter().enumerate() {
-                    let mut entry_height = 1u16;
-                    // Add expanded content height if expanded
-                    if state.expanded.contains(&i) {
-                        if let Some(obj) = v.as_object() {
-                            entry_height += obj.len().min(5) as u16;
-                            if obj.len() > 5 {
-                                entry_height += 1;
-                            }
-                        }
-                    }
-                    regions.push(FocusRegion {
-                        id: 1 + i,
-                        y_offset: y,
-                        height: entry_height,
-                    });
-                    y += entry_height;
-                }
-
-                // Add-new row
-                regions.push(FocusRegion {
-                    id: 1 + state.entries.len(),
-                    y_offset: y,
-                    height: 1,
-                });
-                regions
-            }
-            // KeybindingList: each entry row is a focus region
-            SettingControl::ObjectArray(state) => {
-                let mut regions = Vec::new();
-                // Label row
-                regions.push(FocusRegion {
-                    id: 0,
-                    y_offset: label_y,
-                    height: 1,
-                });
-                // Each binding (id = 1 + index)
-                for i in 0..state.bindings.len() {
-                    regions.push(FocusRegion {
-                        id: 1 + i,
-                        y_offset: label_y + 1 + i as u16,
-                        height: 1,
-                    });
-                }
-                // Add-new row
-                regions.push(FocusRegion {
-                    id: 1 + state.bindings.len(),
-                    y_offset: label_y + 1 + state.bindings.len() as u16,
-                    height: 1,
-                });
-                regions
-            }
-            // Other controls: single region covering the card content.
-            _ => {
-                vec![FocusRegion {
-                    id: 0,
-                    y_offset: label_y,
-                    height: plan.content_rows(),
-                }]
-            }
-        }
-    }
-}
 
 /// A page of settings (corresponds to a category)
 #[derive(Debug, Clone)]
