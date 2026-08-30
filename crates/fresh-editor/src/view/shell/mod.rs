@@ -17,6 +17,7 @@
 pub mod calibration;
 pub mod context_menu;
 pub mod dock;
+pub mod event_debug;
 pub mod file_browser;
 pub mod file_explorer;
 pub mod fold;

@@ -191,6 +191,9 @@ pub struct Frame {
     /// rectangles — so what the tree carries is the box those rectangles are
     /// measured from, and the claim.
     pub keybinding: bool,
+    /// The event-debug dialog. Like the calibration wizard, its interior is
+    /// here too: no mouse, no recorded rectangles.
+    pub event_debug: Option<super::event_debug::EventDebug>,
     /// The input calibration wizard. Unlike the other three modals its
     /// *interior* is here too — it has no mouse and no recorded rectangles,
     /// so there was nothing left behind the seam once the box moved.
@@ -241,6 +244,7 @@ impl Default for Frame {
             modal: None,
             settings: false,
             keybinding: false,
+            event_debug: None,
             calibration: None,
             splits: None,
             window: None,
@@ -511,6 +515,12 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     let frame = match f.keybinding {
         true => frame.child(super::keybinding::layer()),
         false => frame,
+    };
+    // The event-debug dialog, which like the wizard below carries its own
+    // exclusivity and its own scrim.
+    let frame = match &f.event_debug {
+        Some(d) => frame.child(super::event_debug::sized(d)),
+        None => frame,
     };
     // The calibration wizard, over the modal slot it shares a rank with. It
     // brings its own exclusivity and its own scrim, so the slot beneath it

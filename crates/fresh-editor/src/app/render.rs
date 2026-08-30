@@ -2074,6 +2074,38 @@ impl Editor {
         })
     }
 
+    /// The event-debug dialog as a description.
+    fn event_debug_description(&self) -> Option<crate::view::shell::event_debug::EventDebug> {
+        use crate::view::shell::event_debug as ed;
+        use fresh_i18n::t;
+        let d = self.active_window().event_debug.as_ref()?;
+        Some(ed::EventDebug {
+            title: t!("event_debug.title").to_string(),
+            instructions: t!("event_debug.instructions").to_string(),
+            help_text: t!("event_debug.help_text").to_string(),
+            recent_label: (!d.history.is_empty())
+                .then(|| format!("{} ({})", t!("event_debug.recent_events"), d.history.len())),
+            empty_label: t!("event_debug.no_events").to_string(),
+            history: d
+                .history
+                .iter()
+                .map(|e| ed::Event {
+                    description: e.description.clone(),
+                    normalized: e.normalized.clone(),
+                })
+                .collect(),
+            controls: vec![
+                ("q".into(), t!("event_debug.close").to_string()),
+                ("Esc".into(), t!("event_debug.close").to_string()),
+                ("c".into(), t!("event_debug.clear").to_string()),
+            ],
+            details: d.last_event_details(),
+            // Resolved against the frame by `event_debug::sized`.
+            width: ed::DIALOG_WIDTH,
+            height: ed::DIALOG_HEIGHT,
+        })
+    }
+
     pub(crate) fn trust_description(
         &self,
         size: ratatui::layout::Rect,
@@ -2939,6 +2971,7 @@ impl Editor {
             browser,
             trust,
             modal,
+            event_debug: self.event_debug_description(),
             settings: self.settings_state.as_ref().is_some_and(|s| s.visible),
             keybinding: self.keybinding_editor.is_some(),
             calibration: self.calibration_description(),
@@ -3443,19 +3476,10 @@ impl Editor {
             }
         }
 
-        // Render event debug dialog if active
-        if draw_aux {
-            if let Some(ref debug) = self.active_window().event_debug {
-                // Dim the editor content behind the dialog modal
-                crate::view::dimming::apply_dimming(frame, area);
-                crate::view::event_debug::render_event_debug(
-                    frame,
-                    area,
-                    debug,
-                    &self.theme.read().unwrap(),
-                );
-            }
-        }
+        // The event-debug dialog is the tree's, box and contents alike
+        // (`view::shell::event_debug`) — the calibration wizard's twin, and
+        // migrated with it for the same reason: no mouse and no recorded
+        // rectangles. Nothing paints here.
     }
 
     /// Apply the theme-key provenance the frame's menu walk recorded.
