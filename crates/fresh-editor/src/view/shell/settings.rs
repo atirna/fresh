@@ -83,6 +83,10 @@ pub enum Target {
     Confirm(usize),
     /// The reset prompt: reset, cancel.
     Reset(usize),
+    /// An entry dialog's "discard your edits?" prompt: keep editing, discard.
+    EntryDiscard(usize),
+    /// Its "delete this entry?" prompt: cancel, delete.
+    EntryDelete(usize),
 }
 
 /// One `label   description` pair of the help overlay. An empty `desc` is a
@@ -107,11 +111,32 @@ pub struct Choice {
     pub help: String,
 }
 
+/// A two-button prompt where one of them destroys something.
+///
+/// **These had no mouse at all** — the painter drew them and only the keyboard
+/// answered — which in a dialog where every other button is clickable reads as
+/// a gap rather than a design. They answer a press now.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Destructive {
+    pub title: String,
+    pub message: String,
+    pub buttons: Vec<String>,
+    pub selected: usize,
+    /// Which button is the destructive one, tinted apart from the rest.
+    pub destructive: usize,
+    pub help: String,
+    /// Whether the box's ring reads as an error rather than a warning.
+    pub grave: bool,
+    pub width: u16,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dialog {
     Confirm(Choice),
     Reset(Choice),
     Help { title: String, lines: Vec<HelpLine> },
+    EntryDiscard(Destructive),
+    EntryDelete(Destructive),
 }
 
 pub fn dialog_key() -> fresh_ui::Key {
@@ -138,25 +163,27 @@ pub fn dialog_layer(d: &Dialog) -> Node<UiMsg> {
         .child(layout_reader(move |info: LayoutInfo| {
             // 50 wide, and as tall as it needs within 20 — the painter's own
             // two lines, with its `saturating_sub(4)` margin.
-            let w = 50.min(info.constraints.max_w.saturating_sub(4));
+            let want_w = match &d {
+                Dialog::EntryDiscard(k) | Dialog::EntryDelete(k) => k.width,
+                _ => 50,
+            };
+            let w = want_w.min(info.constraints.max_w.saturating_sub(4));
             let want = match &d {
                 Dialog::Help { .. } => 20,
                 Dialog::Confirm(c) | Dialog::Reset(c) => (7 + c.changes.len() as u16).min(20),
+                Dialog::EntryDiscard(_) | Dialog::EntryDelete(_) => 7,
             };
             let h = want.min(info.constraints.max_h.saturating_sub(4));
+            let warn = pair("ui.status_warning_fg", "ui.popup_bg");
             let (ring, node) = match &d {
                 Dialog::Help { title, lines } => (
                     pair("ui.menu_highlight_fg", "ui.popup_bg"),
                     help_box(title, lines),
                 ),
-                Dialog::Confirm(c) => (
-                    pair("ui.status_warning_fg", "ui.popup_bg"),
-                    choice_box(c, |i| Target::Confirm(i)),
-                ),
-                Dialog::Reset(c) => (
-                    pair("ui.status_warning_fg", "ui.popup_bg"),
-                    choice_box(c, |i| Target::Reset(i)),
-                ),
+                Dialog::Confirm(c) => (warn.clone(), choice_box(c, Target::Confirm)),
+                Dialog::Reset(c) => (warn.clone(), choice_box(c, Target::Reset)),
+                Dialog::EntryDiscard(k) => (ring_of(k), grave_box(k, Target::EntryDiscard)),
+                Dialog::EntryDelete(k) => (ring_of(k), grave_box(k, Target::EntryDelete)),
             };
             col()
                 .theme(ring)
@@ -240,6 +267,64 @@ fn choice_box(c: &Choice, target: impl Fn(usize) -> Target + 'static) -> Node<Ui
         pair("ui.line_number_fg", "ui.popup_bg"),
     ));
     col().flex(1).children(rows)
+}
+
+fn ring_of(k: &Destructive) -> String {
+    match k.grave {
+        true => pair("ui.diagnostic_error_fg", "ui.popup_bg"),
+        false => pair("ui.status_warning_fg", "ui.popup_bg"),
+    }
+}
+
+fn grave_box(k: &Destructive, target: impl Fn(usize) -> Target + 'static) -> Node<UiMsg> {
+    let target = Rc::new(target);
+    let mut kids: Vec<Node<UiMsg>> = vec![row().flex(1)];
+    for (i, label) in k.buttons.iter().enumerate() {
+        let theme = match (i == k.selected, i == k.destructive) {
+            (true, true) => attrs("ui.diagnostic_error_fg", "ui.popup_selection_bg", &["bold"]),
+            (true, false) => attrs("ui.popup_selection_fg", "ui.popup_selection_bg", &["bold"]),
+            (false, true) => attrs("ui.diagnostic_error_fg", "ui.popup_bg", &["bold"]),
+            (false, false) => ink(),
+        };
+        let marker = match i == k.selected {
+            true => ">",
+            false => " ",
+        };
+        let t = target.clone();
+        kids.push(
+            gesture(text(format!("{marker}[ {label} ]")).theme(theme))
+                .key(button_key(i))
+                .on(
+                    GestureKind::Press,
+                    Rc::new(move |e: &Event| {
+                        if e.button != MouseButton::Left {
+                            return None;
+                        }
+                        e.stop();
+                        Some(UiMsg::Ui(UiFact::SettingsDialog(t(i))))
+                    }),
+                ),
+        );
+        kids.push(text("  ").theme(ink()));
+    }
+    kids.push(row().flex(1));
+    col().flex(1).children([
+        line(
+            format!(" {} ", k.title),
+            attrs(
+                match k.grave {
+                    true => "ui.diagnostic_error_fg",
+                    false => "ui.status_warning_fg",
+                },
+                "ui.popup_bg",
+                &["bold"],
+            ),
+        ),
+        line(k.message.clone(), ink()),
+        row().flex(1),
+        row().h(Sizing::Cells(1)).children(kids),
+        line(k.help.clone(), pair("ui.line_number_fg", "ui.popup_bg")),
+    ])
 }
 
 fn blank() -> Node<UiMsg> {
@@ -537,5 +622,49 @@ mod tests {
             .flatten()
             .collect();
         assert!(painted.iter().any(|r| r.contains("does 1")), "{painted:?}");
+    }
+
+    fn grave(selected: usize) -> Destructive {
+        Destructive {
+            title: "Delete \"rust\"?".into(),
+            message: "This will permanently remove \"rust\".".into(),
+            buttons: vec!["Cancel".into(), "Delete".into()],
+            selected,
+            destructive: 1,
+            help: "Tab/←→: Select".into(),
+            grave: true,
+            width: 60,
+        }
+    }
+
+    /// **The two entry prompts answer a press**, which they never did: the
+    /// painter drew them and only the keyboard replied, in a dialog where
+    /// every other button is clickable.
+    #[test]
+    fn the_entry_prompts_buttons_answer_a_press() {
+        for (i, want) in [(0, Target::EntryDelete(0)), (1, Target::EntryDelete(1))] {
+            let mut ui = with_dialog(Dialog::EntryDelete(grave(0)), 200, 60);
+            let r = ui.rect_of(ui.find_by_key(&button_key(i)).expect("a button"));
+            let got = facts(ui.dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(r.x + 1, r.y),
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            )));
+            assert!(got.contains(&UiFact::SettingsDialog(want)), "{i}: {got:?}");
+        }
+    }
+
+    /// The delete prompt is sixty wide and the discard prompt fifty — the
+    /// painter's two numbers, and the only thing that differed between them
+    /// besides the words.
+    #[test]
+    fn the_two_entry_prompts_keep_their_widths() {
+        let ui = with_dialog(Dialog::EntryDelete(grave(0)), 200, 60);
+        assert_eq!(ui.rect_of(ui.find_by_key(&dialog_key()).unwrap()).w, 60);
+        let mut d = grave(0);
+        d.width = 50;
+        d.grave = false;
+        let ui = with_dialog(Dialog::EntryDiscard(d), 200, 60);
+        assert_eq!(ui.rect_of(ui.find_by_key(&dialog_key()).unwrap()).w, 50);
     }
 }

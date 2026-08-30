@@ -2116,14 +2116,49 @@ impl Editor {
         use fresh_i18n::t;
 
         let s = self.settings_state.as_ref().filter(|s| s.visible)?;
-        // The painter's own precedence, read bottom-up: help sits over
-        // everything, then the entry stack, then reset, then confirm. The
-        // entry stack is still painted, so anything under it stays painted
-        // too — a described dialog is a layer and would land on top of it.
-        if s.showing_entry_dialog()
-            || s.showing_entry_discard_confirm
-            || s.showing_entry_delete_confirm
-        {
+        // The painter's own precedence, topmost first. The entry dialog's two
+        // prompts sit *over* the entry stack, so they cross even though the
+        // stack has not: a layer lands on top of what the painter drew, which
+        // is where they were.
+        if s.showing_entry_delete_confirm {
+            let named = !s.entry_delete_target_name.is_empty();
+            return Some(st::Dialog::EntryDelete(st::Destructive {
+                title: match (named, s.entry_delete_target_is_array_item) {
+                    (true, _) => format!("Delete \"{}\"?", s.entry_delete_target_name),
+                    (false, true) => "Delete item?".into(),
+                    (false, false) => "Delete entry?".into(),
+                },
+                message: match (named, s.entry_delete_target_is_array_item) {
+                    (true, _) => format!(
+                        "This will permanently remove \"{}\".",
+                        s.entry_delete_target_name
+                    ),
+                    (false, true) => "This will permanently remove this item.".into(),
+                    (false, false) => "This will permanently remove the entry.".into(),
+                },
+                buttons: vec!["Cancel".into(), "Delete".into()],
+                selected: s.entry_delete_confirm_selection,
+                destructive: 1,
+                help: "Tab/←→: Select   Enter: Confirm   Esc: Cancel".into(),
+                grave: true,
+                width: 60,
+            }));
+        }
+        if s.showing_entry_discard_confirm {
+            return Some(st::Dialog::EntryDiscard(st::Destructive {
+                title: "Discard changes?".into(),
+                message: "You have uncommitted edits in this dialog.".into(),
+                buttons: vec!["Keep editing".into(), "Discard".into()],
+                selected: s.entry_discard_confirm_selection,
+                destructive: 1,
+                help: "Tab/←→: Select   Enter: Confirm   Esc: Keep editing".into(),
+                grave: false,
+                width: 50,
+            }));
+        }
+        // The stack itself is still painted, so anything *under* it stays
+        // painted too — a described dialog would land on top of it.
+        if s.showing_entry_dialog() {
             return None;
         }
         if s.showing_help {

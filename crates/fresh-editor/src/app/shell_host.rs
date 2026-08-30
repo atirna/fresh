@@ -1435,6 +1435,24 @@ impl Editor {
                             s.showing_reset_dialog = false;
                         }
                     }
+                    // An entry dialog's two prompts, spelled the way their
+                    // `Enter` arms are. Both had no mouse at all before this.
+                    Target::EntryDiscard(i) => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            s.showing_entry_discard_confirm = false;
+                            if i == 1 {
+                                s.close_entry_dialog();
+                            }
+                        }
+                    }
+                    Target::EntryDelete(i) => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            s.showing_entry_delete_confirm = false;
+                            if i == 1 {
+                                s.delete_entry_dialog();
+                            }
+                        }
+                    }
                 }
             }
             UiFact::SettingsDialogHover(t) => {

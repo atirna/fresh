@@ -194,21 +194,10 @@ pub fn render_settings(
         }
     }
 
-    // Render entry-dialog discard-confirm prompt if showing, on top of
-    // the entry dialog stack. Dim first so the user can see the prompt
-    // is asking about the dialog underneath.
-    if state.showing_entry_discard_confirm {
-        crate::view::dimming::apply_dimming(frame, modal_area);
-        render_entry_discard_confirm(frame, modal_area, state, theme);
-    }
-
-    // Render entry-dialog delete-confirm prompt on top of everything
-    // else. Same chrome as the discard prompt but worded for
-    // destructive action.
-    if state.showing_entry_delete_confirm {
-        crate::view::dimming::apply_dimming(frame, modal_area);
-        render_entry_delete_confirm(frame, modal_area, state, theme);
-    }
+    // The entry dialog's two prompts are the tree's. They sit *over* the
+    // entry stack, so a layer lands where they were even though the stack
+    // itself is still painted (`view::shell::settings`). Both answer a press
+    // now, which they never did.
 
     // The help overlay is the tree's too, on the same terms: painted only
     // while the entry stack is, because a layer would sit over it.
@@ -2905,57 +2894,6 @@ fn render_choice_buttons(
     }
 }
 
-/// Render a centered row of `[ label ]` buttons for a destructive-action
-/// confirm dialog: the button at `destructive_idx` is tinted with the danger
-/// foreground, and the selected button gets the popup-selection background.
-/// Shared by the entry discard / delete confirm dialogs.
-fn render_destructive_buttons(
-    frame: &mut Frame,
-    inner: Rect,
-    button_y: u16,
-    options: &[&str],
-    selected: usize,
-    destructive_idx: usize,
-    theme: &Theme,
-) {
-    let total_width: u16 =
-        options.iter().map(|o| o.len() as u16 + 5).sum::<u16>() + 2 * (options.len() as u16 - 1);
-    let mut x = inner.x + (inner.width.saturating_sub(total_width)) / 2;
-
-    for (idx, label) in options.iter().enumerate() {
-        let is_selected = idx == selected;
-        let is_destructive = idx == destructive_idx;
-        let style = if is_selected && is_destructive {
-            Style::default()
-                .fg(theme.diagnostic_error_fg)
-                .bg(theme.popup_selection_bg)
-                .add_modifier(Modifier::BOLD)
-        } else if is_selected {
-            Style::default()
-                .fg(theme.popup_selection_fg)
-                .bg(theme.popup_selection_bg)
-                .add_modifier(Modifier::BOLD)
-        } else if is_destructive {
-            Style::default()
-                .fg(theme.diagnostic_error_fg)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.popup_text_fg)
-        };
-        let text = if is_selected {
-            format!(">[ {} ]", label)
-        } else {
-            format!(" [ {} ]", label)
-        };
-        let w = label.len() as u16 + 5;
-        frame.render_widget(
-            Paragraph::new(text).style(style),
-            Rect::new(x, button_y, w, 1),
-        );
-        x += w + 2;
-    }
-}
-
 fn render_confirm_dialog(
     frame: &mut Frame,
     parent_area: Rect,
@@ -3077,53 +3015,6 @@ fn render_reset_dialog(frame: &mut Frame, parent_area: Rect, state: &SettingsSta
     );
 }
 
-/// Render the "Discard changes?" prompt that appears when the user
-/// presses Esc on a dirty entry dialog.
-fn render_entry_discard_confirm(
-    frame: &mut Frame,
-    parent_area: Rect,
-    state: &SettingsState,
-    theme: &Theme,
-) {
-    let dialog_width = 50.min(parent_area.width.saturating_sub(4));
-    let dialog_height = 7u16.min(parent_area.height.saturating_sub(4));
-    let (dialog_area, inner) = centered_dialog_frame(
-        frame,
-        parent_area,
-        dialog_width,
-        dialog_height,
-        " Discard changes? ".to_string(),
-        theme.diagnostic_warning_fg,
-        theme,
-    );
-
-    frame.render_widget(
-        Paragraph::new("You have uncommitted edits in this dialog.")
-            .style(Style::default().fg(theme.popup_text_fg)),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-
-    // Buttons. 0 = Keep editing (default), 1 = Discard. Discard styled
-    // in the danger fg to make the destructive choice unmistakable.
-    let button_y = dialog_area.y + dialog_area.height - 3;
-    render_destructive_buttons(
-        frame,
-        inner,
-        button_y,
-        &["Keep editing", "Discard"],
-        state.entry_discard_confirm_selection,
-        1,
-        theme,
-    );
-    render_dialog_help(
-        frame,
-        inner,
-        button_y,
-        "Tab/←→: Select   Enter: Confirm   Esc: Keep editing",
-        theme,
-    );
-}
-
 /// Compute the footer Delete-button label for an entry dialog.
 ///
 /// Schema-driven: shows the map key for map entries (e.g.
@@ -3150,69 +3041,6 @@ fn entry_delete_button_label(dialog: &EntryDialogState) -> String {
         };
         format!("[ Delete \"{}\" ]", key)
     }
-}
-
-/// Render the "Delete <name>?" prompt that appears when the user
-/// activates the Delete button on an entry dialog.
-fn render_entry_delete_confirm(
-    frame: &mut Frame,
-    parent_area: Rect,
-    state: &SettingsState,
-    theme: &Theme,
-) {
-    let dialog_width = 60.min(parent_area.width.saturating_sub(4));
-    let dialog_height = 7u16.min(parent_area.height.saturating_sub(4));
-
-    let title = if !state.entry_delete_target_name.is_empty() {
-        format!(" Delete \"{}\"? ", state.entry_delete_target_name)
-    } else if state.entry_delete_target_is_array_item {
-        " Delete item? ".to_string()
-    } else {
-        " Delete entry? ".to_string()
-    };
-
-    let (dialog_area, inner) = centered_dialog_frame(
-        frame,
-        parent_area,
-        dialog_width,
-        dialog_height,
-        title,
-        theme.diagnostic_error_fg,
-        theme,
-    );
-
-    let body = if !state.entry_delete_target_name.is_empty() {
-        format!(
-            "This will permanently remove \"{}\".",
-            state.entry_delete_target_name
-        )
-    } else if state.entry_delete_target_is_array_item {
-        "This will permanently remove this item.".to_string()
-    } else {
-        "This will permanently remove the entry.".to_string()
-    };
-    frame.render_widget(
-        Paragraph::new(body).style(Style::default().fg(theme.popup_text_fg)),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-
-    let button_y = dialog_area.y + dialog_area.height - 3;
-    render_destructive_buttons(
-        frame,
-        inner,
-        button_y,
-        &["Cancel", "Delete"],
-        state.entry_delete_confirm_selection,
-        1,
-        theme,
-    );
-    render_dialog_help(
-        frame,
-        inner,
-        button_y,
-        "Tab/←→: Select   Enter: Confirm   Esc: Cancel",
-        theme,
-    );
 }
 
 /// Render a specific entry dialog from the stack by index.
