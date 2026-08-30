@@ -479,6 +479,7 @@ mod tests {
                     search: crate::view::shell::settings::Search::Hint(Vec::new()),
                     footer: None,
                     categories: None,
+                    strip: None,
                     page: None,
                     items: None,
                 }),

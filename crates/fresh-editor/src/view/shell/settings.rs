@@ -153,11 +153,13 @@ pub fn layer(c: Option<&Chrome>) -> Node<UiMsg> {
                         row().w(Sizing::Cells(1)),
                         page().key(panel_key()),
                     ]),
-                    // The narrow layout's categories are a horizontal strip
-                    // the painter still draws, three rows with a rule under
-                    // it; the page is everything below them.
+                    // The narrow layout's categories are a horizontal strip:
+                    // three rows with a rule under them, and the page below.
                     false => col().flex(1).children([
-                        row().h(Sizing::Cells(4)),
+                        match &c.strip {
+                            Some(s) => strip_band(s).h(Sizing::Cells(4)),
+                            None => row().h(Sizing::Cells(4)),
+                        },
                         page().h(Sizing::Flex(1)).key(panel_key()),
                     ]),
                 };
@@ -336,6 +338,63 @@ pub fn entry_items_key(level: usize) -> fresh_ui::Key {
 
 pub fn items_key() -> fresh_ui::Key {
     fresh_ui::Key::Str("settings_items".into())
+}
+
+/// The narrow layout's category band: the names, the key hint, a blank row
+/// and the rule under them — the painter's three-row strip plus its
+/// separator.
+///
+/// **Each name answers its own press.** The painter tracked a rectangle per
+/// category as it laid the row out and called the result "approximate" in its
+/// own comment, which it was: it advanced by `name.len()`, so a category with
+/// a non-ASCII name put every rectangle after it out by the difference
+/// between its bytes and its columns.
+fn strip_band(s: &Strip) -> Node<UiMsg> {
+    let mut kids: Vec<Node<UiMsg>> = Vec::with_capacity(s.cats.len() * 2);
+    for (n, c) in s.cats.iter().enumerate() {
+        if n > 0 {
+            kids.push(text(" │ ").theme(pair("ui.split_separator_fg", "ui.popup_bg")));
+        }
+        let label = match (c.selected, s.focused) {
+            (true, true) => attrs("ui.menu_highlight_fg", "ui.menu_highlight_bg", &["bold"]),
+            (true, false) => attrs("ui.menu_highlight_fg", "ui.popup_bg", &["bold"]),
+            (false, _) => pair("ui.popup_text_fg", "ui.popup_bg"),
+        };
+        // The dot takes the highlight's colour whatever the name is doing.
+        let dot = match c.dirty {
+            true => pair("ui.menu_highlight_fg", "ui.popup_bg"),
+            false => label.clone(),
+        };
+        let idx = c.idx;
+        kids.push(
+            gesture(
+                row().children([
+                    text(match c.dirty {
+                        true => "● ",
+                        false => "  ",
+                    })
+                    .theme(dot),
+                    text(c.label.clone()).theme(label),
+                ]),
+            )
+            .on(
+                GestureKind::Press,
+                Rc::new(move |e: &Event| {
+                    if e.button != MouseButton::Left {
+                        return None;
+                    }
+                    e.stop();
+                    Some(UiMsg::Ui(UiFact::SettingsCategory(idx)))
+                }),
+            ),
+        );
+    }
+    col().children([
+        row().h(Sizing::Cells(1)).children(kids),
+        line(s.hint.clone(), pair("ui.line_number_fg", "ui.popup_bg")),
+        row().h(Sizing::Cells(1)),
+        rule(),
+    ])
 }
 
 /// The settings panel's header, and the band under it the painter still owns.
@@ -753,6 +812,8 @@ pub struct Chrome {
     /// layout, whose categories are a horizontal strip, and while a search is
     /// running, when the painter replaces the whole body with its results.
     pub categories: Option<Categories>,
+    /// That strip, in the narrow layout — the other half of the same choice.
+    pub strip: Option<Strip>,
     /// The page's own header, above the settings. `None` while a search is
     /// running or the entry-dialog stack is up.
     pub page: Option<Page>,
@@ -844,6 +905,27 @@ pub struct Categories {
     /// Whether the categories panel has the keyboard. It decides both the
     /// highlight's colour and whether the `>` is drawn, exactly as it did.
     pub focused: bool,
+}
+
+/// The narrow layout's categories: one row of names across the top, in place
+/// of the column the wide layout puts down its left.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Strip {
+    pub cats: Vec<StripCat>,
+    /// Whether the strip has the keyboard, which decides whether the selected
+    /// name is banded or merely bright.
+    pub focused: bool,
+    /// The `←→: Switch category` line under it.
+    pub hint: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StripCat {
+    pub idx: usize,
+    pub label: String,
+    /// A dot before a category with unsaved changes in it.
+    pub dirty: bool,
+    pub selected: bool,
 }
 
 /// One row of the category tree.
@@ -1393,6 +1475,7 @@ mod tests {
             search: Search::Hint(vec![Span::new("Press / to search settings...", dim)]),
             footer: Some(footer()),
             categories: Some(tree()),
+            strip: None,
             items: None,
             page: Some(Page {
                 title: "General".into(),
@@ -1475,6 +1558,7 @@ mod tests {
             // header is described.
             footer: Some(footer()),
             categories: None,
+            strip: None,
             page: None,
             items: None,
         }

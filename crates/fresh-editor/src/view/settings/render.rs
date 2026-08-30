@@ -218,6 +218,11 @@ fn render_horizontal_layout(
 }
 
 /// Render vertical layout (narrow mode): categories on top, items below
+///
+/// **Both of its halves are the tree's** — the horizontal category strip
+/// (`view::shell::settings::strip_band`, three rows and the rule under them,
+/// with each name answering its own press) and the page below it. What is
+/// left is the search results, which replace the page while a search runs.
 fn render_vertical_layout(
     frame: &mut Frame,
     content_area: Rect,
@@ -225,132 +230,26 @@ fn render_vertical_layout(
     theme: &Theme,
     layout: &mut SettingsLayout,
 ) {
-    // Calculate footer height for vertical buttons (5 buttons + separators)
-    let footer_height = 7;
-
-    // Layout: [categories (3 lines)] / [separator] / [settings] / [footer]
-    let main_height = content_area.height.saturating_sub(footer_height);
-    let category_height = 3u16.min(main_height);
-    let settings_height = main_height.saturating_sub(category_height + 1); // +1 for separator
-
-    // Categories area (horizontal strip at top)
-    let categories_area = Rect::new(
-        content_area.x,
-        content_area.y,
-        content_area.width,
-        category_height,
-    );
-
-    // Separator line
-    let sep_y = content_area.y + category_height;
-
-    // Settings area
-    let settings_area = Rect::new(
-        content_area.x,
-        sep_y + 1,
-        content_area.width,
-        settings_height,
-    );
-
-    // Render horizontal category strip
-    render_categories_horizontal(frame, categories_area, state, theme, layout);
-
-    // Render horizontal separator
-    if sep_y < content_area.y + content_area.height {
-        let sep_line: String = "─".repeat(content_area.width as usize);
-        frame.render_widget(
-            Paragraph::new(sep_line).style(Style::default().fg(theme.split_separator_fg)),
-            Rect::new(content_area.x, sep_y, content_area.width, 1),
-        );
-    }
-
-    // The body below the strip is the tree's, in this layout too; only the
-    // search results are still painted.
-    if state.search_active && !state.search_results.is_empty() {
-        render_search_results(frame, settings_area, state, theme, layout);
-    }
-}
-
-/// Render categories as a horizontal strip (for narrow mode)
-fn render_categories_horizontal(
-    frame: &mut Frame,
-    area: Rect,
-    state: &SettingsState,
-    theme: &Theme,
-    layout: &mut SettingsLayout,
-) {
-    use super::state::FocusPanel;
-
-    if area.height == 0 || area.width == 0 {
+    if !state.search_active || state.search_results.is_empty() {
         return;
     }
-
-    let is_focused = state.focus_panel() == FocusPanel::Categories;
-
-    // Build category labels with indicators
-    let mut spans = Vec::new();
-    let mut total_width = 0u16;
-
-    for (i, page) in state.pages.iter().enumerate() {
-        let is_selected = i == state.selected_category;
-        let has_modified = state.page_has_pending_changes(i);
-
-        let indicator = if has_modified { "● " } else { "  " };
-        let name = &page.name;
-
-        let style = if is_selected && is_focused {
-            Style::default()
-                .fg(theme.menu_highlight_fg)
-                .bg(theme.menu_highlight_bg)
-                .add_modifier(Modifier::BOLD)
-        } else if is_selected {
-            Style::default()
-                .fg(theme.menu_highlight_fg)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.popup_text_fg)
-        };
-
-        let indicator_style = if has_modified {
-            Style::default().fg(theme.menu_highlight_fg)
-        } else {
-            style
-        };
-
-        // Add separator between categories
-        if i > 0 {
-            spans.push(Span::styled(
-                " │ ",
-                Style::default().fg(theme.split_separator_fg),
-            ));
-            total_width += 3;
-        }
-
-        spans.push(Span::styled(indicator, indicator_style));
-        spans.push(Span::styled(name.as_str(), style));
-        total_width += (indicator.len() + name.len()) as u16;
-
-        // Track category rect for click handling (approximate)
-        let cat_x = area.x + total_width.saturating_sub((indicator.len() + name.len()) as u16);
-        let cat_width = (indicator.len() + name.len()) as u16;
-        layout
-            .categories
-            .push((i, Rect::new(cat_x, area.y, cat_width, 1)));
-    }
-
-    // Render the category line
-    let line = Line::from(spans);
-    frame.render_widget(Paragraph::new(line), area);
-
-    // Show navigation hint on line 2 if space
-    if area.height >= 2 {
-        let hint = "←→: Switch category";
-        let hint_style = Style::default().fg(theme.line_number_fg);
-        frame.render_widget(
-            Paragraph::new(hint).style(hint_style),
-            Rect::new(area.x, area.y + 1, area.width, 1),
-        );
-    }
+    // The strip's three rows and its rule, which the tree lays out above the
+    // page — and the seven the narrow footer takes below it.
+    const STRIP_ROWS: u16 = 4;
+    const FOOTER_ROWS: u16 = 7;
+    let height = content_area.height.saturating_sub(STRIP_ROWS + FOOTER_ROWS);
+    render_search_results(
+        frame,
+        Rect::new(
+            content_area.x,
+            content_area.y + STRIP_ROWS,
+            content_area.width,
+            height,
+        ),
+        state,
+        theme,
+        layout,
+    );
 }
 
 /// Get an icon for a settings category name.

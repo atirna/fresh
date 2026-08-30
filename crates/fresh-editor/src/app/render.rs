@@ -2663,10 +2663,28 @@ impl Editor {
         let items = (!s.search_active)
             .then(|| Self::settings_cards(s))
             .flatten();
+        // The narrow layout's categories, which are the other half of the
+        // same choice the tree above is.
+        let strip = (!wide && !s.search_active).then(|| st::Strip {
+            focused: s.focus_panel() == crate::view::settings::state::FocusPanel::Categories,
+            hint: "←→: Switch category".into(),
+            cats: s
+                .pages
+                .iter()
+                .enumerate()
+                .map(|(idx, page)| st::StripCat {
+                    idx,
+                    label: page.name.clone(),
+                    dirty: s.page_has_pending_changes(idx),
+                    selected: idx == s.selected_category,
+                })
+                .collect(),
+        });
         Some(st::Chrome {
             wide,
             footer,
             categories,
+            strip,
             page,
             items,
             title: match s.has_changes() {

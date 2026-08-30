@@ -12,18 +12,6 @@ pub struct SettingsLayout {
     pub modal_area: Rect,
     /// Search result items (page_index, item_index, area)
     pub search_results: Vec<SearchResultLayout>,
-    /// The **narrow** layout's horizontal category strip: (index, area).
-    ///
-    /// **Four of this family's five are gone.** `sections`,
-    /// `category_disclosures`, `categories_panel_area` and
-    /// `categories_scrollbar_area` belonged to the wide layout's tree, and
-    /// existed so a chain of `point_in_rect` could turn a cell back into a
-    /// row — and, for the chevron, into a *column of* a row. That tree is a
-    /// `widgets::List` now (`view::shell::settings::categories`): a row knows
-    /// its own index, the chevron is a node beside the label, and the window
-    /// and its bar are the viewport's. The strip below forty columns is still
-    /// painted, so it still records these.
-    pub categories: Vec<(usize, Rect)>,
     /// Search results scrollbar area (for search results scrolling)
     pub search_scrollbar_area: Option<Rect>,
     /// Search results content area (for scroll wheel detection)
@@ -51,16 +39,10 @@ impl SettingsLayout {
     pub fn new(modal_area: Rect) -> Self {
         Self {
             modal_area,
-            categories: Vec::new(),
             search_results: Vec::new(),
             search_scrollbar_area: None,
             search_results_area: None,
         }
-    }
-
-    /// Register a row of the narrow layout's horizontal category strip.
-    pub fn add_category(&mut self, index: usize, area: Rect) {
-        self.categories.push((index, area));
     }
 
     /// Add a search result to the layout. `result_index` is the absolute
@@ -92,14 +74,12 @@ impl SettingsLayout {
         // the tree's**, and answer their own presses. What was here was six
         // more rectangles the painter filed as it drew them.
 
-        // The wide layout's tree answered here through four ordered lists of
-        // rectangle — chevrons, then sections, then rows, then the panel. Its
-        // rows answer for themselves now; what is left is the narrow strip.
-        for (index, area) in &self.categories {
-            if point_in_rect(*area, x, y) {
-                return Some(SettingsHit::Category(*index));
-            }
-        }
+        // **Both category surfaces answer for themselves.** The wide
+        // layout's tree came here through four ordered lists of rectangle —
+        // chevrons, then sections, then rows, then the panel — and the narrow
+        // layout's strip through a fifth, which the painter's own comment
+        // called "approximate" because it advanced by the name's *bytes*.
+        // `SettingsHit::Category` survives for the web, which names it.
 
         // Check search scrollbar (before search results, for click/drag priority)
         if let Some(ref scrollbar) = self.search_scrollbar_area {
@@ -214,35 +194,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_layout_creation() {
-        let modal = Rect::new(10, 5, 80, 30);
-        let mut layout = SettingsLayout::new(modal);
-
-        layout.add_category(0, Rect::new(11, 6, 20, 1));
-        layout.add_category(1, Rect::new(11, 7, 20, 1));
-
-        assert_eq!(layout.categories.len(), 2);
-    }
-
-    #[test]
     fn test_hit_test_outside() {
         let modal = Rect::new(10, 5, 80, 30);
         let layout = SettingsLayout::new(modal);
 
         assert_eq!(layout.hit_test(0, 0), Some(SettingsHit::Outside));
         assert_eq!(layout.hit_test(5, 5), Some(SettingsHit::Outside));
-    }
-
-    #[test]
-    fn test_hit_test_category() {
-        let modal = Rect::new(10, 5, 80, 30);
-        let mut layout = SettingsLayout::new(modal);
-
-        layout.add_category(0, Rect::new(11, 6, 20, 1));
-        layout.add_category(1, Rect::new(11, 7, 20, 1));
-
-        assert_eq!(layout.hit_test(15, 6), Some(SettingsHit::Category(0)));
-        assert_eq!(layout.hit_test(15, 7), Some(SettingsHit::Category(1)));
     }
 
     /// Reproducer for issue #2860: only VISIBLE search results are registered

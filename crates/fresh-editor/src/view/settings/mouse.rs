@@ -498,7 +498,9 @@ impl Editor {
             _ => 0,
         };
         if matches!(dialog.items[idx].control, SettingControl::TextList(_)) && sub_row > 0 {
-            let _ = self.entry_text_list_press(idx, sub_row, at.unwrap_or(0));
+            if let Err(e) = self.entry_text_list_press(idx, sub_row, at.unwrap_or(0)) {
+                tracing::warn!("settings entry text-list press failed: {e}");
+            }
             return;
         }
         // A press on a text field also says where in the value the caret goes.
