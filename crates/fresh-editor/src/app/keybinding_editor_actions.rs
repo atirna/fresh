@@ -69,7 +69,7 @@ impl Editor {
     }
 
     /// Save keybinding editor changes to config
-    fn save_keybinding_editor_changes(&mut self, editor: &KeybindingEditor) {
+    pub(crate) fn save_keybinding_editor_changes(&mut self, editor: &KeybindingEditor) {
         if !editor.has_changes {
             return;
         }
@@ -189,68 +189,15 @@ impl Editor {
                 editor.scrollbar_mouse.release();
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                // Handle confirm dialog clicks first
-                if editor.showing_confirm_dialog {
-                    if let Some((save_r, discard_r, cancel_r)) = layout.confirm_buttons {
-                        if point_in_rect(save_r, col, row) {
-                            self.save_keybinding_editor_changes(&editor);
-                            return Ok(true);
-                        } else if point_in_rect(discard_r, col, row) {
-                            self.set_status_message("Keybinding editor closed".to_string());
-                            return Ok(true);
-                        } else if point_in_rect(cancel_r, col, row) {
-                            editor.showing_confirm_dialog = false;
-                        }
-                    }
-                    self.keybinding_editor = Some(editor);
-                    return Ok(true);
-                }
-
-                // Handle edit dialog clicks
-                if editor.edit_dialog.is_some() {
-                    // Button clicks
-                    if let Some((save_r, cancel_r)) = layout.dialog_buttons {
-                        if point_in_rect(save_r, col, row) {
-                            // Save button
-                            if let Some(err) = editor.apply_edit_dialog() {
-                                self.set_status_message(err);
-                            }
-                            self.keybinding_editor = Some(editor);
-                            return Ok(true);
-                        } else if point_in_rect(cancel_r, col, row) {
-                            // Cancel button - close dialog
-                            editor.edit_dialog = None;
-                            self.keybinding_editor = Some(editor);
-                            return Ok(true);
-                        }
-                    }
-                    // Field clicks
-                    if let Some(r) = layout.dialog_key_field {
-                        if point_in_rect(r, col, row) {
-                            if let Some(ref mut dialog) = editor.edit_dialog {
-                                dialog.focus_area = 0;
-                                dialog.mode = crate::app::keybinding_editor::EditMode::RecordingKey;
-                            }
-                        }
-                    }
-                    if let Some(r) = layout.dialog_action_field {
-                        if point_in_rect(r, col, row) {
-                            if let Some(ref mut dialog) = editor.edit_dialog {
-                                dialog.focus_area = 1;
-                                dialog.mode =
-                                    crate::app::keybinding_editor::EditMode::EditingAction;
-                            }
-                        }
-                    }
-                    if let Some(r) = layout.dialog_context_field {
-                        if point_in_rect(r, col, row) {
-                            if let Some(ref mut dialog) = editor.edit_dialog {
-                                dialog.focus_area = 2;
-                                dialog.mode =
-                                    crate::app::keybinding_editor::EditMode::EditingContext;
-                            }
-                        }
-                    }
+                // **The dialogs answer for themselves.** Confirm buttons,
+                // edit-dialog fields and edit-dialog buttons were three
+                // chains of `point_in_rect` against rectangles the painter
+                // filed; they are nodes now and arrive as
+                // `UiFact::KeybindingDialog`. A press that reaches *here*
+                // while one is open belongs to the dialog's own scrim, which
+                // consumes it and does nothing — the same as before, where a
+                // click on the dimmed backdrop hit none of the rectangles.
+                if editor.showing_confirm_dialog || editor.edit_dialog.is_some() {
                     self.keybinding_editor = Some(editor);
                     return Ok(true);
                 }

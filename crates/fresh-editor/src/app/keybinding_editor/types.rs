@@ -271,16 +271,11 @@ pub struct KeybindingEditorLayout {
     pub table_area: Rect,
     /// The y-offset of the first visible row in the table
     pub table_first_row_y: u16,
-    /// Edit dialog button areas: (save_rect, cancel_rect)
-    pub dialog_buttons: Option<(Rect, Rect)>,
-    /// Edit dialog key field area
-    pub dialog_key_field: Option<Rect>,
-    /// Edit dialog action field area
-    pub dialog_action_field: Option<Rect>,
-    /// Edit dialog context field area
-    pub dialog_context_field: Option<Rect>,
-    /// Confirm dialog button areas: (save, discard, cancel)
-    pub confirm_buttons: Option<(Rect, Rect, Rect)>,
+    // **The five the dialogs owned are gone.** `dialog_buttons`,
+    // `dialog_key_field`, `dialog_action_field`, `dialog_context_field` and
+    // `confirm_buttons` were rectangles the painter filed for a chain of
+    // `point_in_rect` in the mouse arm. The dialogs are descriptions now and
+    // their fields and buttons answer their own presses.
     /// Search bar area (for clicking to focus)
     pub search_bar: Option<Rect>,
     /// Vertical scrollbar area for the table (1 column wide), if rendered

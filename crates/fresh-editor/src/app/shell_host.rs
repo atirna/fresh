@@ -1390,6 +1390,47 @@ impl Editor {
             // itself in rank order and stopped at the first taker — and what
             // the event means is the modal's, because its controls are
             // rectangles its own painter recorded.
+            // **The editor's dialogs answer for themselves.** Five of the ten
+            // rectangles its painter recorded were these three boxes' fields
+            // and buttons, and the mouse arm behind them was a chain of
+            // `point_in_rect` against each. What is left here is what the
+            // press *meant*, which was always the editor's own business.
+            UiFact::KeybindingDialog(t) => {
+                use crate::view::shell::keybinding::Target;
+                let Some(mut e) = self.keybinding_editor.take() else {
+                    return;
+                };
+                match t {
+                    Target::KeyField | Target::ActionField | Target::ContextField => {
+                        use crate::app::keybinding_editor::EditMode;
+                        if let Some(d) = e.edit_dialog.as_mut() {
+                            let (area, mode) = match t {
+                                Target::KeyField => (0, EditMode::RecordingKey),
+                                Target::ActionField => (1, EditMode::EditingAction),
+                                _ => (2, EditMode::EditingContext),
+                            };
+                            d.focus_area = area;
+                            d.mode = mode;
+                        }
+                    }
+                    Target::Save => {
+                        if let Some(err) = e.apply_edit_dialog() {
+                            self.set_status_message(err);
+                        }
+                    }
+                    Target::Cancel => e.edit_dialog = None,
+                    Target::ConfirmSave => {
+                        self.save_keybinding_editor_changes(&e);
+                        return;
+                    }
+                    Target::ConfirmDiscard => {
+                        self.set_status_message("Keybinding editor closed".to_string());
+                        return;
+                    }
+                    Target::ConfirmCancel => e.showing_confirm_dialog = false,
+                }
+                self.keybinding_editor = Some(e);
+            }
             UiFact::ModalPointer(slot) => {
                 use crate::view::shell::modal::Slot;
                 let Some((ev, double)) = self.shell_pointer_event else {

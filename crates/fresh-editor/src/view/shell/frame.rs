@@ -191,6 +191,13 @@ pub struct Frame {
     /// rectangles — so what the tree carries is the box those rectangles are
     /// measured from, and the claim.
     pub keybinding: bool,
+    /// The keybinding editor's open dialog, when it has one. **These are the
+    /// tree's and the rest of the interior is not**, which is a statement
+    /// about paint order rather than about how far the migration got: the
+    /// overlay band is folded after every legacy painter, so a described
+    /// dialog lands on top of the table the painter drew — where it belongs —
+    /// and a described *table* would have covered the painter's dialogs.
+    pub keybinding_dialog: Option<super::keybinding::Dialog>,
     /// The event-debug dialog. Like the calibration wizard, its interior is
     /// here too: no mouse, no recorded rectangles.
     pub event_debug: Option<super::event_debug::EventDebug>,
@@ -244,6 +251,7 @@ impl Default for Frame {
             modal: None,
             settings: false,
             keybinding: false,
+            keybinding_dialog: None,
             event_debug: None,
             calibration: None,
             splits: None,
@@ -499,6 +507,11 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // outranks every one of them and is the security gate that must.
     let frame = match f.modal {
         Some(slot) => frame.child(super::modal::layer(slot)),
+        None => frame,
+    };
+    // The keybinding editor's open dialog, over its box.
+    let frame = match &f.keybinding_dialog {
+        Some(d) => frame.child(super::keybinding::dialog_layer(d)),
         None => frame,
     };
     // The settings dialog's box. Like the keybinding editor's below it, this

@@ -347,6 +347,14 @@ pub enum UiFact {
     /// still a painter's and hit-tests rectangles that painter recorded. The
     /// event itself never left the host — see `shell::modal`.
     ModalPointer(super::modal::Slot),
+    /// A press on one of the keybinding editor's dialogs.
+    ///
+    /// **The dialogs answer for themselves, the table does not — yet.** Five
+    /// of the ten rectangles that modal's painter recorded belong to these
+    /// three boxes, and the mouse arm behind them was a chain of
+    /// `point_in_rect` against each. They are nodes now; the table and the
+    /// search bar still go through `ModalPointer`.
+    KeybindingDialog(super::keybinding::Target),
 }
 
 /// What a menu-bar navigation step does to the open chain.

@@ -2106,6 +2106,202 @@ impl Editor {
         })
     }
 
+    /// The keybinding editor's open dialog, as a description.
+    fn keybinding_dialog_description(&self) -> Option<crate::view::shell::keybinding::Dialog> {
+        use crate::app::keybinding_editor::EditMode;
+        use crate::view::shell::keybinding as kb;
+        use fresh_i18n::t;
+
+        let e = self.keybinding_editor.as_ref()?;
+        // The painter's own precedence: help first, then the edit dialog, then
+        // the confirmation. Each returned before reaching the next.
+        if e.showing_help {
+            let head = |k: &str| kb::HelpLine {
+                key: k.to_string(),
+                desc: String::new(),
+                heading: true,
+            };
+            let l = |k: &str, d: String| kb::HelpLine {
+                key: k.to_string(),
+                desc: d,
+                heading: false,
+            };
+            let gap = || kb::HelpLine {
+                key: String::new(),
+                desc: String::new(),
+                heading: false,
+            };
+            return Some(kb::Dialog::Help(kb::Help {
+                title: t!("keybinding_editor.help_title").to_string(),
+                lines: vec![
+                    head(&t!("keybinding_editor.help_navigation")),
+                    l(
+                        "  ↑ / ↓",
+                        t!("keybinding_editor.help_move_up_down").to_string(),
+                    ),
+                    l(
+                        "  PgUp / PgDn",
+                        t!("keybinding_editor.help_page_up_down").to_string(),
+                    ),
+                    l(
+                        "  Home / End",
+                        t!("keybinding_editor.help_first_last").to_string(),
+                    ),
+                    gap(),
+                    head(&t!("keybinding_editor.help_search")),
+                    l(
+                        "  /",
+                        t!("keybinding_editor.help_search_by_name").to_string(),
+                    ),
+                    l(
+                        "  r",
+                        t!("keybinding_editor.help_search_by_key").to_string(),
+                    ),
+                    l(
+                        "  Tab",
+                        t!("keybinding_editor.help_toggle_search").to_string(),
+                    ),
+                    l(
+                        "  Esc",
+                        t!("keybinding_editor.help_cancel_search").to_string(),
+                    ),
+                    gap(),
+                    head(&t!("keybinding_editor.help_editing")),
+                    l(
+                        "  Enter",
+                        t!("keybinding_editor.help_edit_binding").to_string(),
+                    ),
+                    l("  a", t!("keybinding_editor.help_add_binding").to_string()),
+                    l(
+                        "  d / Delete",
+                        t!("keybinding_editor.help_delete_binding").to_string(),
+                    ),
+                    gap(),
+                    head(&t!("keybinding_editor.help_filters")),
+                    l(
+                        "  c",
+                        t!("keybinding_editor.help_cycle_context").to_string(),
+                    ),
+                    l("  s", t!("keybinding_editor.help_cycle_source").to_string()),
+                    gap(),
+                    l(
+                        "  Ctrl+S",
+                        t!("keybinding_editor.help_save_changes").to_string(),
+                    ),
+                    l(
+                        "  Esc / ?",
+                        t!("keybinding_editor.help_close_help").to_string(),
+                    ),
+                ],
+            }));
+        }
+
+        if let Some(d) = &e.edit_dialog {
+            let key_value = match d.key_display.is_empty() {
+                false => d.key_display.clone(),
+                true => match d.mode {
+                    EditMode::RecordingKey => t!("keybinding_editor.key_recording").to_string(),
+                    _ => t!("keybinding_editor.key_none").to_string(),
+                },
+            };
+            let key_focused = d.focus_area == 0;
+            let action_focused = d.focus_area == 1;
+            let ctx_focused = d.focus_area == 2;
+            let action_value = match d.action_text.is_empty() && d.mode != EditMode::EditingAction {
+                true => t!("keybinding_editor.action_placeholder").to_string(),
+                false => d.action_text.clone(),
+            };
+            // Shown only when the resolved form says something the typed name
+            // does not — the painter's own comparison.
+            let described = (!d.action_text.is_empty())
+                .then(|| {
+                    crate::input::keybindings::KeybindingResolver::format_action_from_str(
+                        &d.action_text,
+                    )
+                })
+                .filter(|desc| {
+                    desc.to_lowercase() != d.action_text.replace('_', " ").to_lowercase()
+                });
+            return Some(kb::Dialog::Edit(kb::Edit {
+                title: match d.editing_index.is_some() {
+                    true => t!("keybinding_editor.dialog_edit_title").to_string(),
+                    false => t!("keybinding_editor.dialog_add_title").to_string(),
+                },
+                instructions: match d.capturing_special && key_focused {
+                    true => t!("keybinding_editor.instr_capturing_special").to_string(),
+                    false => match d.mode {
+                        EditMode::RecordingKey => {
+                            t!("keybinding_editor.instr_recording_key").to_string()
+                        }
+                        EditMode::EditingAction => {
+                            t!("keybinding_editor.instr_editing_action").to_string()
+                        }
+                        EditMode::EditingContext => {
+                            t!("keybinding_editor.instr_editing_context").to_string()
+                        }
+                    },
+                },
+                key_field: kb::Field {
+                    label: t!("keybinding_editor.label_key").to_string(),
+                    value: key_value,
+                    hint: key_focused.then(|| match d.capturing_special {
+                        true => t!("keybinding_editor.capture_any_key_hint").to_string(),
+                        false => t!("keybinding_editor.capture_special_hint").to_string(),
+                    }),
+                    focused: key_focused,
+                    invalid: false,
+                    caret: false,
+                    target: kb::Target::KeyField,
+                },
+                action_field: kb::Field {
+                    label: t!("keybinding_editor.label_action").to_string(),
+                    value: action_value,
+                    hint: None,
+                    focused: action_focused,
+                    invalid: d.action_error.is_some(),
+                    caret: action_focused && d.mode == EditMode::EditingAction,
+                    target: kb::Target::ActionField,
+                },
+                action_description: described,
+                context_field: kb::Field {
+                    label: t!("keybinding_editor.label_context").to_string(),
+                    value: format!("[{}]", d.context),
+                    hint: ctx_focused
+                        .then(|| t!("keybinding_editor.context_change_hint").to_string()),
+                    focused: ctx_focused,
+                    invalid: false,
+                    caret: false,
+                    target: kb::Target::ContextField,
+                },
+                error: d.action_error.clone(),
+                conflicts_label: t!("keybinding_editor.conflicts_label").to_string(),
+                conflicts: d.conflicts.clone(),
+                save_label: t!("keybinding_editor.btn_save").to_string(),
+                cancel_label: t!("keybinding_editor.btn_cancel").to_string(),
+                focused_button: (d.focus_area == 3).then_some(d.selected_button),
+                autocomplete: (d.autocomplete_visible && !d.autocomplete_suggestions.is_empty())
+                    .then(|| kb::Autocomplete {
+                        suggestions: d.autocomplete_suggestions.clone(),
+                        selected: d.autocomplete_selected,
+                    }),
+            }));
+        }
+
+        if e.showing_confirm_dialog {
+            return Some(kb::Dialog::Confirm(kb::Confirm {
+                title: t!("keybinding_editor.confirm_title").to_string(),
+                message: t!("keybinding_editor.confirm_message").to_string(),
+                buttons: vec![
+                    t!("keybinding_editor.btn_save").to_string(),
+                    t!("keybinding_editor.btn_discard").to_string(),
+                    t!("keybinding_editor.btn_cancel").to_string(),
+                ],
+                selected: e.confirm_selection,
+            }));
+        }
+        None
+    }
+
     pub(crate) fn trust_description(
         &self,
         size: ratatui::layout::Rect,
@@ -2974,6 +3170,7 @@ impl Editor {
             event_debug: self.event_debug_description(),
             settings: self.settings_state.as_ref().is_some_and(|s| s.visible),
             keybinding: self.keybinding_editor.is_some(),
+            keybinding_dialog: self.keybinding_dialog_description(),
             calibration: self.calibration_description(),
             splits,
             menu_bar: menu_bar_visible,
