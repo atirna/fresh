@@ -291,6 +291,29 @@ API is frozen, and this is a change of what the host does with it.
 | `Popup { anchor, screen_space }` | `layer()`, `Anchor::Point` or the node, `within` the panel unless `screen_space` | `screen_space` is precisely "not confined to the panel's region", which is the `within` the base PR added. |
 | `WindowEmbed` | a `Host` leaf | A real editor window inside a panel: cells, like every other `Host`. G's rule applies — this one never migrates. |
 
+**Started.** `view/shell/widgets.rs` covers `Row` (with `wrap`), `Col`,
+`Spacer`, `Divider`, `HintBar`, `Raw`, `LabeledSection`, `Button` and
+`Toggle`, each asserted against `render_spec`'s own answer. Two things the
+first variants settled:
+
+* **The hit becomes a payload.** `deliver_widget_hit` — the dispatch all three
+  frontends share — takes a `HitArea` and does the rest: focus the owner, run
+  the kind's `on_pointer`, fire the plugin's `widget_event`. It does not
+  change. What changes is that the tree *finds* the widget, by hit-testing a
+  rectangle it laid out, instead of the host reconstructing it from a row and
+  a byte offset. So `UiFact::WidgetHit` carries the same `HitArea` the runtime
+  recorded, and a byte range stops being a hit-test. A toggle in form layout
+  shows what that buys: its hit was restricted to the chip by a pair of byte
+  offsets, and it is now restricted by where the nodes are.
+* **Not every variant can be parity-checked on its cells.** `LabeledSection`
+  draws its frame as *text* — `╭─ label ─…─╮` in an entry, `│ … │` around
+  every child row — because entries are all the runtime has. The tree has a
+  border and uses it, so the cells differ on purpose and the assertion is
+  **geometric**: the child gets `panel_width - 4`, one row down and two
+  columns in, which is `inner_width` plus what `shift_channels` shifted six
+  recorded channels by. Chrome variants are checked that way; leaf and text
+  variants are checked cell for cell.
+
 **Three things the table settles that were open.**
 
 * **`indeterminate` is the only library gap left in the set**, and it is one
