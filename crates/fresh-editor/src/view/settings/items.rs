@@ -753,7 +753,6 @@ pub fn clean_description(name: &str, description: Option<&str>) -> Option<String
 // to hold a card by key (`Anchor::reveal_key`), and a sub-row names itself
 // through `SettingControl::sub_row_key`.
 
-
 /// A page of settings (corresponds to a category)
 #[derive(Debug, Clone)]
 pub struct SettingsPage {

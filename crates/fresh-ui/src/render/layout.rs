@@ -601,12 +601,12 @@ impl<M: 'static> Ui<M> {
     /// the subtree that owns the keys is what makes the answer the right one,
     /// and it is also what keeps a per-item lookup from walking the whole
     /// frame each time.
-    pub fn find_by_key_in(
-        &self,
-        root: ElementId,
-        key: &crate::key::Key,
-    ) -> Option<ElementId> {
-        match self.arena.get(root).is_some_and(|e| e.key.as_ref() == Some(key)) {
+    pub fn find_by_key_in(&self, root: ElementId, key: &crate::key::Key) -> Option<ElementId> {
+        match self
+            .arena
+            .get(root)
+            .is_some_and(|e| e.key.as_ref() == Some(key))
+        {
             true => Some(root),
             false => self.keyed_descendant(root, key),
         }
@@ -617,7 +617,11 @@ impl<M: 'static> Ui<M> {
     fn keyed_descendant(&self, root: ElementId, key: &crate::key::Key) -> Option<ElementId> {
         let el = self.arena.get(root)?;
         for c in &el.children {
-            if self.arena.get(*c).is_some_and(|e| e.key.as_ref() == Some(key)) {
+            if self
+                .arena
+                .get(*c)
+                .is_some_and(|e| e.key.as_ref() == Some(key))
+            {
                 return Some(*c);
             }
         }

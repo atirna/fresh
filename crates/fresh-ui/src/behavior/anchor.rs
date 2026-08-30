@@ -84,9 +84,7 @@ impl Anchor {
     /// (its bottom edge flush with the window's) scrolls past the very thing
     /// the caller asked to see.
     pub fn reveal_key(&self, key: impl Into<crate::key::Key>) {
-        self.queue
-            .borrow_mut()
-            .push(Command::RevealKey(key.into()));
+        self.queue.borrow_mut().push(Command::RevealKey(key.into()));
     }
 
     /// Move the target's window so that the descendant carrying `key` is at

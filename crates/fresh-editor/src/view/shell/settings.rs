@@ -22,7 +22,8 @@
 use std::rc::Rc;
 
 use fresh_ui::{
-    col, gesture, layout_reader, row, stack, text, viewport, Align, Anchor, Event, GestureKind, LayoutInfo, Modality, MouseButton, Node, Place, PointerMode, Scrim, Sizing,
+    col, gesture, layout_reader, row, stack, text, viewport, Align, Anchor, Event, GestureKind,
+    LayoutInfo, Modality, MouseButton, Node, Place, PointerMode, Scrim, Sizing,
 };
 
 use crate::app::shell_host::shell_theme::{attrs, pair};
@@ -145,9 +146,9 @@ pub fn layer(c: Option<&Chrome>) -> Node<UiMsg> {
                 // box's left edge, straight over the divider.
                 let body = match c.wide {
                     true => row().flex(1).children([
-                        col().w(Sizing::Cells(CATEGORY_COLS)).children(
-                            c.categories.iter().map(categories).collect::<Vec<_>>(),
-                        ),
+                        col()
+                            .w(Sizing::Cells(CATEGORY_COLS))
+                            .children(c.categories.iter().map(categories).collect::<Vec<_>>()),
                         // The divider column, which the painter draws.
                         row().w(Sizing::Cells(1)),
                         page().key(panel_key()),
@@ -449,7 +450,9 @@ fn card_box(c: &Card) -> Node<UiMsg> {
     // tall, so they are a one-row layer over the top of the column rather
     // than a sibling in it. Last in the stack, which is first at a point.
     if let Some(i) = &c.inherit {
-        body = stack().w(Sizing::Flex(1)).children([body, inherit(c.index, i, &band)]);
+        body = stack()
+            .w(Sizing::Flex(1))
+            .children([body, inherit(c.index, i, &band)]);
     }
     let inner = row().children([gutter(c, &band), body]);
     match c.bordered {
@@ -493,13 +496,13 @@ fn gutter(c: &Card, band: &str) -> Node<UiMsg> {
     // control beside it, and a flexible filler inside a `viewport` — whose
     // children are measured against an unbounded main axis — asks for every
     // row there could ever be.
-    col().w(Sizing::Cells(3)).child(
-        row().h(Sizing::Cells(1)).children([
+    col()
+        .w(Sizing::Cells(3))
+        .child(row().h(Sizing::Cells(1)).children([
             text(mark).theme(attrs("ui.settings_selected_fg", band, &["bold"])),
             text(dot).theme(pair("ui.settings_selected_fg", band)),
             text(" ").theme(pair("ui.popup_text_fg", band)),
-        ]),
-    )
+        ]))
 }
 
 /// The control itself — the same `WidgetSpec` the widget mapping produced,
@@ -507,7 +510,8 @@ fn gutter(c: &Card, band: &str) -> Node<UiMsg> {
 fn control(c: &Card, band: &str) -> Node<UiMsg> {
     let spec = c.spec.clone();
     let focus_key = c.focus_key.clone();
-    let surface = crate::app::shell_host::shell_theme::Ink::keys("ui.popup_text_fg", band.to_string());
+    let surface =
+        crate::app::shell_host::shell_theme::Ink::keys("ui.popup_text_fg", band.to_string());
     layout_reader(move |info: LayoutInfo| {
         let cx = super::widgets::Ctx {
             slot: super::widgets::Slot::Settings,
@@ -548,25 +552,25 @@ fn description(c: &Card) -> Option<Node<UiMsg>> {
     if body.is_empty() {
         return None;
     }
-    Some(row().children([
-        text(body)
-            .theme(pair("ui.line_number_fg", "ui.popup_bg"))
-            .wrap()
-            .w(Sizing::Flex(1)),
-        // The painter's `description_right_padding_cols`, so wrapped text does
-        // not butt against the card's right border.
-        row().w(Sizing::Cells(2)),
-    ]))
+    Some(
+        row().children([
+            text(body)
+                .theme(pair("ui.line_number_fg", "ui.popup_bg"))
+                .wrap()
+                .w(Sizing::Flex(1)),
+            // The painter's `description_right_padding_cols`, so wrapped text does
+            // not butt against the card's right border.
+            row().w(Sizing::Cells(2)),
+        ]),
+    )
 }
 
 /// `(Inherited)` or `[Inherit]`, flush right on the control's first row.
 fn inherit(idx: usize, i: &Inherit, band: &str) -> Node<UiMsg> {
     let node = match i {
-        Inherit::Badge(label) => text(label.clone()).theme(attrs(
-            "ui.line_number_fg",
-            band,
-            &["italic"],
-        )),
+        Inherit::Badge(label) => {
+            text(label.clone()).theme(attrs("ui.line_number_fg", band, &["italic"]))
+        }
         Inherit::Button { label, hovered } => {
             let theme = match hovered {
                 true => pair("ui.menu_hover_fg", "ui.menu_hover_bg"),
@@ -1543,9 +1547,7 @@ mod tests {
             .filter_map(|i| match &i.draw {
                 fresh_ui::Draw::Lines(l) => {
                     let t = l.first()?.trim().to_string();
-                    (!t.is_empty()
-                        && i.rect.y >= band.y
-                        && i.rect.y < band.y + band.h as i32)
+                    (!t.is_empty() && i.rect.y >= band.y && i.rect.y < band.y + band.h as i32)
                         .then_some((i.rect.y, t))
                 }
                 _ => None,

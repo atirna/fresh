@@ -956,11 +956,7 @@ impl Editor {
 /// `/settings` route calls by name — so a click still does the same thing in
 /// both frontends.
 impl Editor {
-    pub(crate) fn settings_widget_hit(
-        &mut self,
-        hit: &crate::widgets::HitArea,
-        at: Option<u16>,
-    ) {
+    pub(crate) fn settings_widget_hit(&mut self, hit: &crate::widgets::HitArea, at: Option<u16>) {
         use crate::view::settings::items::SettingControl;
         use crate::view::settings::SettingsHit;
 
@@ -1004,9 +1000,7 @@ impl Editor {
                 (SettingControl::TextList(_), "add") => {
                     SettingsHit::ControlTextListRow(idx, usize::MAX)
                 }
-                (SettingControl::TextList(_), _) => {
-                    SettingsHit::ControlTextListRow(idx, row())
-                }
+                (SettingControl::TextList(_), _) => SettingsHit::ControlTextListRow(idx, row()),
                 (_, "add") => SettingsHit::ControlMapAddNew(idx),
                 _ => SettingsHit::ControlMapRow(idx, row()),
             },
@@ -1199,11 +1193,7 @@ impl Editor {
                 }
             }
             UiFact::SettingsItem(idx) => {
-                self.dispatch_settings_hit(
-                    crate::view::settings::SettingsHit::Item(idx),
-                    0,
-                    false,
-                );
+                self.dispatch_settings_hit(crate::view::settings::SettingsHit::Item(idx), 0, false);
             }
             UiFact::SettingsItemHover(idx) => {
                 if let Some(s) = self.settings_state.as_mut() {

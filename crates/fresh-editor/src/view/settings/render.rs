@@ -30,7 +30,6 @@ fn truncate_chars_with_ellipsis(s: &str, max_chars: usize) -> String {
     }
 }
 
-
 /// Render the settings modal
 /// Render the settings dialog into the box the tree placed.
 ///
@@ -432,7 +431,6 @@ pub fn category_icon(name: &str, nerd_fonts: bool) -> &'static str {
     }
 }
 
-
 /// Like [`render_scalar_via_widget`] but for multi-row controls: paints
 /// entries starting at `skip_rows` (the settings viewport clips tall
 /// controls at the top when scrolled) into `area`.
@@ -480,8 +478,6 @@ fn render_control_via_widget(
     }
     out
 }
-
-
 
 /// Paint one entry-dialog control through the plugin widget framework.
 ///

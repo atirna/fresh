@@ -2231,71 +2231,70 @@ impl Editor {
         let page = s.pages.get(s.selected_category)?;
         let focused = s.focus_panel() == crate::view::settings::state::FocusPanel::Settings;
         let label_width = page_label_width(&page.items);
-        let cards = page
-            .items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                let hovered = matches!(
-                    s.hover_hit,
-                    Some(
-                        crate::view::settings::SettingsHit::Item(i)
-                            | crate::view::settings::SettingsHit::ControlToggle(i)
-                            | crate::view::settings::SettingsHit::ControlDropdown(i)
-                            | crate::view::settings::SettingsHit::ControlText(i)
-                            | crate::view::settings::SettingsHit::ControlNumberValue(i)
-                            | crate::view::settings::SettingsHit::ControlTextListRow(i, _)
-                            | crate::view::settings::SettingsHit::ControlMapRow(i, _)
-                            | crate::view::settings::SettingsHit::ControlInherit(i)
-                    ) if i == index
-                );
-                st::Card {
-                    index,
-                    section: item
-                        .section
-                        .clone()
-                        .filter(|_| item.is_section_start && item.style.section_header_rows > 0),
-                    spec: crate::view::settings::widget_map::setting_control_to_widget_aligned(
-                        &item.path,
-                        &item.control,
-                        label_width,
-                    ),
-                    // A field paints its caret only while it is the focused
-                    // widget, and only editing means that — outside edit mode
-                    // ↑↓ walks the settings list and a caret would promise a
-                    // movement the arrows do not make.
-                    focus_key: match item.control.is_editing() {
-                        true => item.path.clone(),
-                        false => String::new(),
-                    },
-                    description: item.description.clone().filter(|d| !d.is_empty()),
-                    layer: match item.layer_source {
-                        crate::config_io::ConfigLayer::System => None,
-                        crate::config_io::ConfigLayer::User => Some("user"),
-                        crate::config_io::ConfigLayer::Project => Some("project"),
-                        crate::config_io::ConfigLayer::Session => Some("session"),
-                    },
-                    selected: focused && index == s.selected_item,
-                    hovered,
-                    dirty: s.path_has_pending_change(&item.path),
-                    inherit: match (item.nullable, item.is_null) {
-                        (false, _) => None,
-                        (true, true) => {
-                            Some(st::Inherit::Badge(t!("settings.inherited_badge").to_string()))
-                        }
-                        (true, false) => Some(st::Inherit::Button {
-                            label: format!("[{}]", t!("settings.btn_inherit")),
-                            hovered: matches!(
-                                s.hover_hit,
-                                Some(crate::view::settings::SettingsHit::ControlInherit(i))
-                                    if i == index
-                            ),
+        let cards =
+            page.items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let hovered = matches!(
+                        s.hover_hit,
+                        Some(
+                            crate::view::settings::SettingsHit::Item(i)
+                                | crate::view::settings::SettingsHit::ControlToggle(i)
+                                | crate::view::settings::SettingsHit::ControlDropdown(i)
+                                | crate::view::settings::SettingsHit::ControlText(i)
+                                | crate::view::settings::SettingsHit::ControlNumberValue(i)
+                                | crate::view::settings::SettingsHit::ControlTextListRow(i, _)
+                                | crate::view::settings::SettingsHit::ControlMapRow(i, _)
+                                | crate::view::settings::SettingsHit::ControlInherit(i)
+                        ) if i == index
+                    );
+                    st::Card {
+                        index,
+                        section: item.section.clone().filter(|_| {
+                            item.is_section_start && item.style.section_header_rows > 0
                         }),
-                    },
-                    bordered: item.style.card_border_rows > 0,
-                }
-            })
-            .collect();
+                        spec: crate::view::settings::widget_map::setting_control_to_widget_aligned(
+                            &item.path,
+                            &item.control,
+                            label_width,
+                        ),
+                        // A field paints its caret only while it is the focused
+                        // widget, and only editing means that — outside edit mode
+                        // ↑↓ walks the settings list and a caret would promise a
+                        // movement the arrows do not make.
+                        focus_key: match item.control.is_editing() {
+                            true => item.path.clone(),
+                            false => String::new(),
+                        },
+                        description: item.description.clone().filter(|d| !d.is_empty()),
+                        layer: match item.layer_source {
+                            crate::config_io::ConfigLayer::System => None,
+                            crate::config_io::ConfigLayer::User => Some("user"),
+                            crate::config_io::ConfigLayer::Project => Some("project"),
+                            crate::config_io::ConfigLayer::Session => Some("session"),
+                        },
+                        selected: focused && index == s.selected_item,
+                        hovered,
+                        dirty: s.path_has_pending_change(&item.path),
+                        inherit: match (item.nullable, item.is_null) {
+                            (false, _) => None,
+                            (true, true) => Some(st::Inherit::Badge(
+                                t!("settings.inherited_badge").to_string(),
+                            )),
+                            (true, false) => Some(st::Inherit::Button {
+                                label: format!("[{}]", t!("settings.btn_inherit")),
+                                hovered: matches!(
+                                    s.hover_hit,
+                                    Some(crate::view::settings::SettingsHit::ControlInherit(i))
+                                        if i == index
+                                ),
+                            }),
+                        },
+                        bordered: item.style.card_border_rows > 0,
+                    }
+                })
+                .collect();
         Some(st::Items {
             cards,
             anchor: Some(s.body_anchor.clone()),

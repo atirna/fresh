@@ -550,7 +550,10 @@ fn a_window_is_moved_to_a_band_it_measured_itself() {
     let anchor = fresh_ui::behavior::anchor::Anchor::new();
     let mut ui: Ui<()> = Ui::new();
     ui.frame(cards(anchor.clone()), FRAME);
-    assert_eq!(shown(&ui), vec!["card 0.0", "card 1.0", "card 1.1", "card 2.0"]);
+    assert_eq!(
+        shown(&ui),
+        vec!["card 0.0", "card 1.0", "card 1.1", "card 2.0"]
+    );
 
     // The cards start at content rows 0, 1, 3, 6, 7 and 9. Card 4 is two
     // cells tall at row 7, so the *shortest* move that holds all of it puts

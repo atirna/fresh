@@ -385,14 +385,12 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
         }
         // Entries the plugin wrote, inlined without interpretation. That is
         // the variant's whole contract, and it is one row per entry.
-        WidgetSpec::Raw { entries, .. } => {
-            col().children(
-                entries
-                    .iter()
-                    .map(|e| entry_row(e, &cx.surface))
-                    .collect::<Vec<_>>(),
-            )
-        }
+        WidgetSpec::Raw { entries, .. } => col().children(
+            entries
+                .iter()
+                .map(|e| entry_row(e, &cx.surface))
+                .collect::<Vec<_>>(),
+        ),
         // **The first variant whose value the host owns.** Instance state is
         // authoritative once the widget has rendered and the spec's `value` is
         // a seed only, so the current value is read from the state map rather

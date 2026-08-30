@@ -1086,9 +1086,7 @@ impl SettingsState {
                 self.sub_focus
                     .and_then(|sub| it.control.sub_row_key(&it.path, sub))
             })
-            .unwrap_or_else(|| {
-                super::super::shell::settings::card_key(self.selected_item)
-            });
+            .unwrap_or_else(|| super::super::shell::settings::card_key(self.selected_item));
         self.body_anchor.reveal_key(key);
         // The tree cursor follows the body's window, and the window has not
         // moved yet — the request is applied between frames. It is synced
