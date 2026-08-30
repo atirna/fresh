@@ -2555,11 +2555,6 @@ impl Editor {
                 }
             }
         };
-        // The box's own width decides which footer, the way
-        // `inner_area.width < 60` did: one row across, or five down.
-        let wide = self
-            .panel_rect(&st::key())
-            .is_some_and(|r| r.width.saturating_sub(2) >= 60);
         let footer = Some(()).map(|()| {
             let nullable_set = s
                 .current_item()
@@ -2603,7 +2598,6 @@ impl Editor {
                     Some(SettingsHit::EditButton) => Some(st::Button::Edit),
                     _ => None,
                 },
-                stacked: !wide,
             }
         });
         // The category tree, in the wide layout and while no search is
@@ -2615,7 +2609,7 @@ impl Editor {
         // described tree would have been drawn *over* the dialog covering it
         // — so the band behind an open dialog was blank. The stack is a layer
         // now (`view::shell::entry`), which lands the right way round.
-        let categories = (wide && !s.search_active).then(|| {
+        let categories = (!s.search_active).then(|| {
             use crate::view::settings::state::{FocusPanel, TreeRow};
             let nerd = s.nerd_font_icons_enabled();
             let cursor = s.tree_cursor_section;
@@ -2695,7 +2689,7 @@ impl Editor {
             .flatten();
         // The narrow layout's categories, which are the other half of the
         // same choice the tree above is.
-        let strip = (!wide && !s.search_active).then(|| st::Strip {
+        let strip = (!s.search_active).then(|| st::Strip {
             focused: s.focus_panel() == crate::view::settings::state::FocusPanel::Categories,
             hint: "←→: Switch category".into(),
             cats: s
@@ -2722,7 +2716,6 @@ impl Editor {
                 .collect(),
         });
         Some(st::Chrome {
-            wide,
             footer,
             categories,
             strip,
