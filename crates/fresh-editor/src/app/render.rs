@@ -4149,6 +4149,11 @@ impl Editor {
         });
         crate::view::shell::frame::Frame {
             panel: self.panel_description(),
+            // The dock's content, described when the adapter covers every
+            // variant of the orchestrator's spec and left to the painter
+            // otherwise — `panel_interior`'s `covered` gate is what makes
+            // that decision, the same way it does for the floating panel.
+            dock_interior: self.panel_interior(crate::app::PanelSlot::Dock),
             // Which workspace the window-owned half of the frame belongs to.
             // One retained tree, N windows: without this the two match each
             // other and window B's first pane inherits window A's element
@@ -7253,7 +7258,11 @@ impl Editor {
         // Whether the tree describes this panel's interior. One question, one
         // answer, asked where the description was built — `panel_description`
         // put the same interior in the frame.
-        let described = !is_dock && self.panel_interior(slot).is_some();
+        // **The dock is no longer an exception.** It was excluded because its
+        // content was the one panel the tree did not describe; now that
+        // `view::shell::dock` carries the same interior the floating panel
+        // does, the gate is the same question for both.
+        let described = self.panel_interior(slot).is_some();
         // **The box is the tree's.** `view::shell::panel` describes it and
         // layout places it; this reads the answer. What was here was the
         // placement arithmetic — a percentage of the area for the width, the
