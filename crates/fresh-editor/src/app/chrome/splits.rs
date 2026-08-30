@@ -478,6 +478,7 @@ impl Editor {
         col: u16,
         row: u16,
         clicks: u8,
+        modifiers: crossterm::event::KeyModifiers,
     ) -> AnyhowResult<()> {
         // The pane's content is a live terminal that wants the mouse, or a
         // Ctrl+Click on a path it printed. Both are the content's, and both
@@ -504,13 +505,7 @@ impl Editor {
             return Ok(());
         };
         match clicks {
-            1 => {
-                let modifiers = self
-                    .shell_pointer_event
-                    .map(|(ev, _)| ev.modifiers)
-                    .unwrap_or_else(crossterm::event::KeyModifiers::empty);
-                self.handle_editor_click(col, row, pane, buffer_id, content_rect, modifiers)
-            }
+            1 => self.handle_editor_click(col, row, pane, buffer_id, content_rect, modifiers),
             2 => self.handle_split_double_click(pane, buffer_id, content_rect, col, row),
             _ => self.handle_split_triple_click(pane, buffer_id, content_rect, col, row),
         }
