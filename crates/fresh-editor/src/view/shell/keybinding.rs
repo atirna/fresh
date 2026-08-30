@@ -284,14 +284,17 @@ pub fn dialog_layer(d: &Dialog) -> Node<UiMsg> {
 }
 
 /// Take every pointer event that reaches this node and do nothing with it.
+///
+/// **The wheel is not on the list, and must not be.** Scrolling is
+/// framework-owned: the library runs its scroll chain only for a notch
+/// *nothing claimed*, so a catch-all that stops the wheel stops the table
+/// inside this box from scrolling at all. There is nothing to replace it
+/// with, either — a notch that scrolls nothing inside an `Exclusive` layer is
+/// already absorbed by that layer, which is what the chain's `Contained`
+/// says. Claiming it here only took the scroll away.
 fn swallow(n: Node<UiMsg>) -> Node<UiMsg> {
     let mut g = gesture(n);
-    for kind in [
-        GestureKind::Press,
-        GestureKind::Release,
-        GestureKind::Move,
-        GestureKind::Wheel,
-    ] {
+    for kind in [GestureKind::Press, GestureKind::Release, GestureKind::Move] {
         g = g.on(
             kind,
             Rc::new(|e: &Event| {

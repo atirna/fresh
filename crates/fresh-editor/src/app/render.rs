@@ -1237,11 +1237,22 @@ impl Editor {
         // topmost surface there was; it is not, now that the chrome over it is
         // the tree's.
         //
-        // The dock is painted later still (`render_panels_and_modals`), so the
-        // dimming this pass applies to it is re-applied there once its cells
-        // exist. The modal itself lays into the chrome column beside the dock,
-        // so nothing of it is at risk from that later paint.
+        // The dock's cells are painted just below, still before the band, so
+        // the dimming this pass applies to it is re-applied by
+        // `render_panels_and_modals` once those cells exist. The modal itself
+        // lays into the chrome column beside the dock, so nothing of it is at
+        // risk from that later paint.
         self.render_modal_overlays(frame, size);
+
+        // The dock's own rows, for the same reason and by the same rule: it
+        // is a legacy painter, and the band goes after every legacy painter.
+        // The dimming that belongs *over* those rows still runs from
+        // `render_panels_and_modals`, after the band, where it always did.
+        if let Some(dock) = dock_area {
+            if self.dock.is_some() {
+                self.render_floating_widget_panel(frame, dock, super::PanelSlot::Dock);
+            }
+        }
 
         if !self.suppress_chrome_cells {
             let palette = self.shell_palette();
@@ -1825,16 +1836,15 @@ impl Editor {
         chrome_area: ratatui::layout::Rect,
         dock_area: Option<ratatui::layout::Rect>,
     ) {
-        // Panels are drawn last so they sit above every other layer
-        // (prompts, popups, animations). The two slots are independent:
-        // the dock paints into its carved column (`dock_area`); a
-        // centered modal paints over the whole frame (dimmed). Draw the
-        // dock first so a centered modal sits visually above it.
-        if let Some(dock) = dock_area {
-            if self.dock.is_some() {
-                self.render_floating_widget_panel(frame, dock, super::PanelSlot::Dock);
-            }
-        }
+        // **The dock's cells are painted before the overlay band now**, by
+        // `render_dock_column`, and what is left here is the dimming that has
+        // to run over them. It was drawn from this method, after everything —
+        // which made it the one legacy painter still exempt from the rule the
+        // band states for all of them, and the exemption showed: a plugin's
+        // anchored context menu is a layer in the tree, its anchor is an
+        // absolute cell that may sit over the dock column, and the dock's own
+        // rows painted straight over it. The menu was mounted, laid out and
+        // folded, and never reached the screen.
 
         // The full-screen modals were painted here once, after the dock, so
         // the dock could not overpaint a modal's left edge. They lay into the
