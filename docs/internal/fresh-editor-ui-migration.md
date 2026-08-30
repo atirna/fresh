@@ -342,10 +342,21 @@ offset is the viewport's, so what is left is "put this row in the window",
 which is `Anchor::reveal`. (`item_height > 1` without `card_borders` does not
 occur — the only producer sets the two together — so there is no third arm.)
 
-**One shape is left**, and it is the one whose *painter* draws the bar:
-multi-line `Text` sets `scrollable` on its box and the panel's scrollbar pass
-draws over it. That is the boundary as originally stated, and it crosses when
-the scroll belongs to the tree.
+**Multi-line `Text` closed it.** It was the last kind whose bar the panel's
+painter drew, and it crossed the same way: the collector is asked for the
+*whole* document — its `rows` is the window, so handing it one as tall as the
+text makes it emit every line and clamp its own scroll to zero — and the
+window is then `List::windowed` over those rows, one cell each, which is the
+row scroll the runtime had. The caret is what the list reveals, which is the
+whole of the auto-clamp. A label stays outside, because the collector windowed
+only the text under it.
+
+**So the boundary is closed.** `covered` answers yes to every variant but
+`WindowEmbed`, which is a real editor window inside a panel and a `Host` leaf
+by G's rule. What is left of C is no longer coverage: it is mounting the dock
+(C.5b), deleting `LayoutBox` and the byte-range scan once nothing reads them
+(C.3), and turning `WidgetInstanceState` into element state (C.2) — of which
+the scroll, for every kind that had one, is now done.
 
 **`List` has already crossed, and it is the proof of the shape.**
 `widgets::List` windows its rows out of a `viewport`, so the scroll is the
