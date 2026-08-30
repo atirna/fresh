@@ -110,11 +110,24 @@ pub fn covered(spec: &WidgetSpec) -> bool {
         WidgetSpec::LabeledSection { child, .. } => covered(child),
         WidgetSpec::Button { .. } | WidgetSpec::Toggle { .. } | WidgetSpec::Number { .. } => true,
         // Through their own collectors — see [`collected`].
-        WidgetSpec::Text { .. }
-        | WidgetSpec::List { .. }
-        | WidgetSpec::Tree { .. }
-        | WidgetSpec::Dropdown { .. }
-        | WidgetSpec::DualList { .. } => true,
+        //
+        // **The scrollable kinds are deliberately not covered yet**, and the
+        // reason is a boundary rather than an omission. Their scroll is the
+        // *runtime's*: the collector windows the rows itself and reports the
+        // offset on a `LayoutBox`, and the painter draws a bar over the
+        // rightmost column from that. The adapter turns rows into nodes and
+        // has nothing to say about a bar, so describing one of these today
+        // would render it correctly and silently lose its scrollbar.
+        //
+        // Wrapping the already-windowed rows in a `viewport` would not fix it
+        // — the rows are pre-windowed, so the viewport would have nothing to
+        // scroll and the bar would be wrong rather than missing. What fixes it
+        // is C.2: `widgets::List` and `widgets::Tree` own their scroll, and
+        // then the bar is the viewport's and comes free. So these cross when
+        // the state does, and until then their panels paint whole.
+        WidgetSpec::Text { rows, .. } => *rows <= 1,
+        WidgetSpec::Dropdown { .. } => true,
+        WidgetSpec::List { .. } | WidgetSpec::Tree { .. } | WidgetSpec::DualList { .. } => false,
         WidgetSpec::Component { child, .. }
         | WidgetSpec::Overlay { child, .. }
         | WidgetSpec::Popup { child, .. } => covered(child),
@@ -1505,56 +1518,29 @@ mod tests {
     /// that routing them through the adapter changes none of them.
     #[test]
     fn the_collected_variants_render_what_the_runtime_renders() {
-        let entry = |t: &str| raw(t);
-        let cases: Vec<(&str, WidgetSpec)> = vec![
-            (
-                "a text field",
-                WidgetSpec::Text {
-                    value: "hello".into(),
-                    cursor_byte: -1,
-                    focused: false,
-                    label: "name".into(),
-                    placeholder: None,
-                    rows: 1,
-                    field_width: 12,
-                    max_visible_chars: 0,
-                    full_width: false,
-                    completions: Vec::new(),
-                    completions_visible_rows: 0,
-                    block_caret: false,
-                    sel_start: -1,
-                    sel_end: -1,
-                    label_width: 0,
-                    read_only: false,
-                    markdown: false,
-                    key: Some("t".into()),
-                },
-            ),
-            (
-                "a list",
-                WidgetSpec::List {
-                    items: vec![entry("one"), entry("two"), entry("three")],
-                    item_specs: Vec::new(),
-                    item_keys: vec!["a".into(), "b".into(), "c".into()],
-                    selected_index: 1,
-                    visible_rows: Some(3),
-                    key: Some("l".into()),
-                    focusable: true,
-                },
-            ),
-            (
-                "an empty list",
-                WidgetSpec::List {
-                    items: Vec::new(),
-                    item_specs: Vec::new(),
-                    item_keys: Vec::new(),
-                    selected_index: -1,
-                    visible_rows: Some(3),
-                    key: Some("l".into()),
-                    focusable: true,
-                },
-            ),
-        ];
+        let cases: Vec<(&str, WidgetSpec)> = vec![(
+            "a text field",
+            WidgetSpec::Text {
+                value: "hello".into(),
+                cursor_byte: -1,
+                focused: false,
+                label: "name".into(),
+                placeholder: None,
+                rows: 1,
+                field_width: 12,
+                max_visible_chars: 0,
+                full_width: false,
+                completions: Vec::new(),
+                completions_visible_rows: 0,
+                block_caret: false,
+                sel_start: -1,
+                sel_end: -1,
+                label_width: 0,
+                read_only: false,
+                markdown: false,
+                key: Some("t".into()),
+            },
+        )];
         for (label, spec) in cases {
             assert!(covered(&spec), "{label} should be covered");
             assert_eq!(
@@ -1563,6 +1549,65 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    /// **The boundary, and why it is where it is.** The scrollable kinds
+    /// window their own rows and report the offset for the painter to draw a
+    /// bar from. The adapter turns rows into nodes and has nothing to say
+    /// about a bar, so describing one today would render it correctly and
+    /// silently lose its scrollbar — which is worse than painting it whole.
+    /// They cross when their state does (C.2), and this pins that they have
+    /// not yet.
+    #[test]
+    fn the_scrollable_kinds_are_not_covered_yet() {
+        let list = WidgetSpec::List {
+            items: vec![raw("one")],
+            item_specs: Vec::new(),
+            item_keys: vec!["a".into()],
+            selected_index: 0,
+            visible_rows: Some(1),
+            key: Some("l".into()),
+            focusable: true,
+        };
+        assert!(!covered(&list), "a list owns its own scroll");
+        assert!(
+            !covered(&col_of(vec![
+                WidgetSpec::Raw {
+                    entries: vec![raw("x")],
+                    key: None
+                },
+                list
+            ])),
+            "and one of them takes its panel with it"
+        );
+    }
+
+    /// A single-line text field is covered; a multi-line one is not, for the
+    /// same reason — it scrolls.
+    #[test]
+    fn a_text_field_crosses_the_boundary_at_its_row_count() {
+        let field = |rows: u32| WidgetSpec::Text {
+            value: "hello".into(),
+            cursor_byte: -1,
+            focused: false,
+            label: String::new(),
+            placeholder: None,
+            rows,
+            field_width: 12,
+            max_visible_chars: 0,
+            full_width: false,
+            completions: Vec::new(),
+            completions_visible_rows: 0,
+            block_caret: false,
+            sel_start: -1,
+            sel_end: -1,
+            label_width: 0,
+            read_only: false,
+            markdown: false,
+            key: Some("t".into()),
+        };
+        assert!(covered(&field(1)));
+        assert!(!covered(&field(4)));
     }
 
     /// **A list row answers its own press**, with the hit the runtime

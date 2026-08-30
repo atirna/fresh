@@ -298,6 +298,23 @@ asserted against `render_spec`'s own answer. Nine are written out
 `LabeledSection`, `Button`, `Toggle`), four are thin (`Component`, `Overlay`,
 `Popup`, `Number`), and five go through the adapter described above.
 
+**The coverage boundary is not the mapping's edge.** Every variant is
+described; not every one is *mounted*. The scrollable kinds — `List`, `Tree`,
+`DualList`, `Dropdown`, and multi-line `Text` — own their scroll in the
+runtime: the collector windows the rows itself and reports the offset on a
+`LayoutBox`, and the painter draws a bar over the rightmost column from that.
+The adapter turns rows into nodes and has nothing to say about a bar, so
+describing one of them today would render it correctly and **silently lose its
+scrollbar**, which is worse than painting it whole. Wrapping already-windowed
+rows in a `viewport` does not fix it either: there would be nothing to scroll,
+so the bar would be wrong rather than missing.
+
+**That is why C.2 comes before full coverage, not after.** `widgets::List` and
+`widgets::Tree` own their scroll, and then the bar is the viewport's and comes
+free. These kinds cross the boundary when their state does. The panels that
+are mounted today are the ones made of controls — forms, confirmations,
+button rows — which is most of what the dock's dialogs are.
+
 **What is left of C is no longer the mapping.** It is: mounting a panel on the
 described path behind `covered()`; deleting `LayoutBox` and the byte-range
 scan once nothing reads them (C.3); and replacing the collectors' formatting
