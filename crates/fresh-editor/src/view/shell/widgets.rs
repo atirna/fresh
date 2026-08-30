@@ -141,18 +141,16 @@ pub fn covered(spec: &WidgetSpec) -> bool {
         // A tree is a *flat, controlled* list of pre-rendered rows — its
         // expansion is the plugin's — so it crosses on `widgets::List` too.
         //
-        // **`card_borders` is the one shape a uniform band cannot say.** With
-        // it, a tree's rows are *heterogeneous*: a card node takes
-        // `item_height + 2` rows and a folder header takes one
-        // (`tree_node_rows`). `List::row_rows` is uniform by design — that is
-        // what lets a window name the items it holds without measuring any of
-        // them — so this is not a matter of raising a number. It wants either
-        // per-item heights in the library or a cells-scrolling viewport over
-        // all the rows, and which of those is right is the same question as
-        // who owns the scroll (C.2), so it is taken there rather than guessed
-        // at here. `item_height > 1` without `card_borders` is not a case that
-        // occurs: the only producer sets the two together.
-        WidgetSpec::Tree { card_borders, .. } => !card_borders,
+        // **`card_borders` scrolls in rows, so it is a viewport rather than a
+        // list.** With it a tree's rows are heterogeneous — a card node takes
+        // `item_height + 2` and a folder header takes one — and the runtime's
+        // offset is a *row* into the flattened list, so a card straddling
+        // either edge is emitted and clipped. `widgets::List` snaps to whole
+        // items, which would be a different behaviour; the cells-scrolling
+        // `viewport` is the same one, and it owns the offset. (`item_height >
+        // 1` without `card_borders` does not occur — the only producer sets
+        // the two together — so there is no third arm.)
+        WidgetSpec::Tree { .. } => true,
         // **`DualList` does not scroll**, which is why it crosses through the
         // adapter with no substitution at all. It emits every row — its body
         // is `max(available, included, visible_rows)` tall and there is no
@@ -816,6 +814,162 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
         // Each row carries up to three hits — the disclosure glyph expands,
         // the checkbox toggles, the rest selects — which is why a row had to
         // stop being one target.
+        // **A tree of cards scrolls in rows, so the rows are the content.**
+        //
+        // With `card_borders` a node is a folder header one row tall or a
+        // bordered card `item_height + 2` tall, and the runtime's offset is a
+        // *row* into the flattened list: a card straddling either edge is
+        // emitted and clipped. A window that snapped to whole nodes would be a
+        // different behaviour, so this is a `viewport` over every visible row
+        // — the library's cells-scrolling window, which clips at both edges by
+        // construction and owns the offset itself.
+        //
+        // The rows are the runtime's, marking included: a selected card gets
+        // the heavy box frame rather than a band, and those heavy glyphs are
+        // also the marker `paint_dock_seamless_active_tab` keys on to merge
+        // the active card into the editor beside it.
+        WidgetSpec::Tree {
+            nodes,
+            item_keys,
+            selected_index,
+            visible_rows,
+            key,
+            expanded_keys,
+            checkable,
+            indent_cols,
+            item_height,
+            card_borders,
+        } if *card_borders && *item_height > 1 => {
+            let expanded: std::collections::HashSet<String> =
+                expanded_keys.iter().cloned().collect();
+            let visible = crate::widgets::collect_visible_tree_indices(nodes, item_keys, &expanded);
+            let tree_key = key.clone().unwrap_or_default();
+            let mut blocks: Vec<CardBlock> = Vec::with_capacity(visible.len());
+            let mut at: u32 = 0;
+            let mut selected: Option<usize> = None;
+            for (i, &abs) in visible.iter().enumerate() {
+                let mut n = nodes[abs].clone();
+                n.text.normalize_widths();
+                for line in n.extra_lines.iter_mut() {
+                    line.normalize_widths();
+                }
+                let item_key = item_keys.get(abs).cloned().unwrap_or_default();
+                let open = n.has_children && !item_key.is_empty() && expanded.contains(&item_key);
+                let r = crate::widgets::render_tree_row(
+                    &n,
+                    open,
+                    *checkable,
+                    *item_height,
+                    true,
+                    width as u32,
+                    *indent_cols,
+                );
+                let is_selected = abs as i32 == *selected_index;
+                if is_selected {
+                    selected = Some(i);
+                }
+                // A card marks selection in its glyphs; a folder header takes
+                // the band. Hover lights every row of the block, because the
+                // block selects as one unit and so must light as one — and
+                // selection outranks it.
+                let as_card = crate::widgets::render::tree_node_is_card(&n, *checkable);
+                let hovered = !is_selected
+                    && !cx.hovered_item_key.is_empty()
+                    && cx.hovered_item_key == item_key;
+                let dress = |e: &mut TextPropertyEntry| {
+                    if is_selected {
+                        match as_card {
+                            true => crate::widgets::render::mark_list_card_selected(e),
+                            false => {
+                                let mut st = e.style.clone().unwrap_or_default();
+                                st.bg = Some(OverlayColorSpec::theme_key("ui.popup_selection_bg"));
+                                st.extend_to_line_end = true;
+                                e.style = Some(st);
+                            }
+                        }
+                    } else if hovered {
+                        crate::widgets::render::apply_hover_band(e);
+                    }
+                };
+                let select = |a: usize, b: usize, row_target: bool| crate::widgets::HitArea {
+                    row_target,
+                    context_click: row_target,
+                    overlay: false,
+                    widget_key: tree_key.clone(),
+                    widget_kind: "tree",
+                    buffer_row: 0,
+                    byte_start: a,
+                    byte_end: b,
+                    payload: serde_json::json!({ "index": abs, "key": item_key }),
+                    event_type: "select",
+                    owner_key: None,
+                };
+                let mut rows: Vec<Node<UiMsg>> = Vec::new();
+                let mut primary = r.entry.clone();
+                dress(&mut primary);
+                let end = primary.text.len();
+                let mut hits: Vec<((usize, usize), crate::widgets::HitArea)> = Vec::new();
+                if let Some((a, b)) = r.disclosure_range {
+                    let mut h = select(a, b, false);
+                    h.event_type = "expand";
+                    h.payload =
+                        serde_json::json!({ "index": abs, "key": item_key, "expanded": !open });
+                    hits.push(((a, b), h));
+                }
+                if let Some((a, b)) = r.checkbox_range {
+                    let mut h = select(a, b, false);
+                    h.event_type = "toggle";
+                    h.payload = serde_json::json!({
+                        "index": abs,
+                        "key": item_key,
+                        "checked": !n.checked.unwrap_or(false),
+                    });
+                    hits.push(((a, b), h));
+                }
+                // The body starts after whatever prefix the glyphs took —
+                // the collector's own rule, so a press on the glyph is the
+                // glyph's and the rest of the row is the card's.
+                let body = match (r.checkbox_range, r.disclosure_range) {
+                    (Some((_, e)), _) => e + 1,
+                    (None, Some((_, e))) => e,
+                    (None, None) => 0,
+                };
+                if body < end {
+                    hits.push(((body, end), select(body, end, true)));
+                }
+                rows.push(entry_row_hits(&primary, cx.slot, &hits));
+                for extra in r.extra_entries.iter() {
+                    let mut e = extra.clone();
+                    dress(&mut e);
+                    let b = e.text.len();
+                    rows.push(match b > 0 {
+                        true => entry_row_hit(&e, (0, b), cx.slot, select(0, b, true)),
+                        false => entry_row(&e),
+                    });
+                }
+                let h = rows.len() as u32;
+                blocks.push(CardBlock {
+                    key: fresh_ui::Key::Str(
+                        match item_key.is_empty() {
+                            true => i.to_string(),
+                            false => item_key.clone(),
+                        }
+                        .into(),
+                    ),
+                    start: at,
+                    rows,
+                });
+                at += h;
+            }
+            let node = fresh_ui::ComponentExt::node(CardTree {
+                blocks: std::rc::Rc::new(blocks),
+                selected,
+            });
+            match visible_rows {
+                Some(r) => node.h(Sizing::Cells(*r as u16)),
+                None => node.flex(1),
+            }
+        }
         WidgetSpec::Tree {
             nodes,
             item_keys,
@@ -979,6 +1133,80 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
     }
 }
 
+/// One node of a card tree: its rows, and where they start in the content.
+struct CardBlock {
+    key: fresh_ui::Key,
+    /// First row of this block within the whole tree's rows.
+    start: u32,
+    rows: Vec<Node<UiMsg>>,
+}
+
+#[derive(Default)]
+struct CardTreeState {
+    anchor: Option<std::rc::Rc<fresh_ui::behavior::Anchor>>,
+    revealed: fresh_ui::behavior::Cache<usize, ()>,
+}
+
+/// A card tree's rows in a window that owns its own scroll.
+///
+/// **A component, for one reason: the reveal.** The runtime scrolled to keep
+/// the selection visible unless the user had scrolled by wheel, and it did
+/// that by writing an offset into the side table it also read. Here the
+/// offset is the viewport's, which is the whole point — so the only thing
+/// left to say is "put this row in the window", which is `Anchor::reveal`,
+/// and an anchor is registered at mount. The memo is what keeps the reveal a
+/// statement about the *selection moving* rather than about every build:
+/// asking on every one would fight the wheel, which is a statement about the
+/// window.
+///
+/// The scroll survives a rebuild because the element does, which is what
+/// retains it — no `scroll_offset` is carried anywhere.
+struct CardTree {
+    blocks: std::rc::Rc<Vec<CardBlock>>,
+    /// Which block is selected, if any.
+    selected: Option<usize>,
+}
+
+impl fresh_ui::Component<UiMsg> for CardTree {
+    type State = CardTreeState;
+
+    fn init(&self, cx: &mut fresh_ui::InitCx<'_, UiMsg>) -> CardTreeState {
+        CardTreeState {
+            anchor: Some(cx.register(fresh_ui::behavior::Anchor::default())),
+            ..CardTreeState::default()
+        }
+    }
+
+    fn build(&self, s: &CardTreeState, _cx: &mut fresh_ui::BuildCx<'_, UiMsg>) -> Node<UiMsg> {
+        if let (Some(a), Some(i)) = (s.anchor.clone(), self.selected) {
+            if let Some(b) = self.blocks.get(i) {
+                let (start, rows) = (b.start, b.rows.len() as u32);
+                s.revealed.get_or(i, move || {
+                    // The last row first, then the first: the shortest move
+                    // that shows the end, then the one that shows the start,
+                    // so a block taller than the window anchors to its top —
+                    // which is the rule the runtime spelled with a `min`.
+                    a.reveal(start + rows.saturating_sub(1));
+                    a.reveal(start);
+                });
+            }
+        }
+        let mut content = col();
+        for b in self.blocks.iter() {
+            content = content.child(
+                col()
+                    .key(b.key.clone())
+                    .children(b.rows.iter().map(|r| r.clone())),
+            );
+        }
+        let body = fresh_ui::viewport(content).scrollbar();
+        match s.anchor.clone() {
+            Some(a) => body.anchor_to(a),
+            None => body,
+        }
+    }
+}
+
 /// **Every remaining variant, through the collector it already has.**
 ///
 /// `Text`, `List`, `Tree`, `Dropdown` and `DualList` are different in kind
@@ -1066,7 +1294,9 @@ fn rows_with_hits(
         // An open dropdown's option list hangs off the row its trigger is on,
         // one row down and at the button's own column.
         for p in popups.iter().filter(|p| p.anchor_row as usize == i) {
-            node = row().h(Sizing::Cells(1)).children([node, popup_layer(p, cx)]);
+            node = row()
+                .h(Sizing::Cells(1))
+                .children([node, popup_layer(p, cx)]);
         }
         kids.push(node);
     }
@@ -1097,9 +1327,7 @@ fn rows_with_hits(
                 .child(
                     row()
                         .h(Sizing::Cells(1))
-                        .theme(
-                            Ink::new(Paint::key(BASE_FG), Paint::key("ui.popup_bg")).to_string(),
-                        )
+                        .theme(Ink::new(Paint::key(BASE_FG), Paint::key("ui.popup_bg")).to_string())
                         .child(entry_row(&o.entry)),
                 ),
         );
@@ -1161,7 +1389,9 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
     // taking the press is what claiming it means.
     let box_node = fresh_ui::gesture(
         col()
-            .theme(Ink::new(Paint::key("ui.popup_border_fg"), Paint::key("ui.popup_bg")).to_string())
+            .theme(
+                Ink::new(Paint::key("ui.popup_border_fg"), Paint::key("ui.popup_bg")).to_string(),
+            )
             .border()
             .children(rows),
     )
@@ -2736,7 +2966,8 @@ mod tests {
             .expect("a pop-over");
         assert_eq!(top.y, 1, "the row after the trigger's");
         assert_eq!(
-            top.x, runtime_popup(&spec).anchor_col as i32,
+            top.x,
+            runtime_popup(&spec).anchor_col as i32,
             "the column the `[` is at"
         );
     }
@@ -2919,7 +3150,10 @@ mod tests {
         let spec = card_list(6, 0, 9);
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
-        let r = ui.rect_of(ui.find_by_key(&fresh_ui::Key::Str("c1".into())).expect("c1"));
+        let r = ui.rect_of(
+            ui.find_by_key(&fresh_ui::Key::Str("c1".into()))
+                .expect("c1"),
+        );
         // The card's *last* row, to prove the whole band is the target.
         let at = fresh_ui::Point::new(2, r.y + r.h as i32 - 1);
         ui.dispatch(fresh_ui::Input::press(
@@ -2967,10 +3201,162 @@ mod tests {
             })
             .expect("twenty cards in nine rows overflow");
         let h0 = ui
-            .rect_of(ui.find_by_key(&fresh_ui::Key::Str("c0".into())).expect("c0"))
+            .rect_of(
+                ui.find_by_key(&fresh_ui::Key::Str("c0".into()))
+                    .expect("c0"),
+            )
             .h;
         assert_eq!(bar.0, 0);
         assert_eq!(bar.1, 20, "twenty items");
         assert_eq!(bar.2, 9 / h0, "however many of them fit");
+    }
+
+    fn card_tree(n: usize, selected: i32, visible: u32) -> WidgetSpec {
+        use fresh_core::api::TreeNode;
+        WidgetSpec::Tree {
+            nodes: (0..n)
+                .map(|i| TreeNode {
+                    text: raw(&format!("session {i}")),
+                    depth: 0,
+                    has_children: false,
+                    checked: None,
+                    extra_lines: vec![raw(&format!("branch-{i}")), raw("2 files")],
+                })
+                .collect(),
+            item_keys: (0..n).map(|i| format!("s{i}")).collect(),
+            selected_index: selected,
+            visible_rows: Some(visible),
+            key: Some("sessions".into()),
+            expanded_keys: Vec::new(),
+            checkable: false,
+            indent_cols: 2,
+            item_height: 3,
+            card_borders: true,
+        }
+    }
+
+    /// **A card node is a bordered block, and the blocks stack.** Three
+    /// content rows plus a top and a bottom border is five, which is
+    /// `tree_node_rows`' answer, arrived at by laying the rows out rather
+    /// than by computing a band.
+    #[test]
+    fn a_card_trees_nodes_are_bordered_blocks() {
+        let spec = card_tree(6, 0, 15);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let band = |k: &str| {
+            let id = ui
+                .find_by_key(&fresh_ui::Key::Str(k.into()))
+                .unwrap_or_else(|| panic!("node {k}"));
+            let r = ui.rect_of(id);
+            (r.y, r.h)
+        };
+        let (y0, h0) = band("s0");
+        assert_eq!(h0, 5, "three content rows between two borders");
+        assert_eq!(band("s1"), (y0 + 5, 5), "and the next block under it");
+    }
+
+    /// The selected card is framed in heavy glyphs — the marker
+    /// `paint_dock_seamless_active_tab` keys on, so a background band here
+    /// would silently lose the seamless-tab treatment.
+    #[test]
+    fn the_selected_card_is_framed_in_heavy_glyphs() {
+        let picked = tree_rows(&card_tree(3, 1, 20));
+        assert!(
+            picked.iter().any(|r| r.contains('┏')),
+            "a heavy frame somewhere: {picked:?}"
+        );
+        let plain = tree_rows(&card_tree(3, -1, 20));
+        assert!(
+            !plain.iter().any(|r| r.contains('┏')),
+            "and only when something is selected: {plain:?}"
+        );
+    }
+
+    /// **A press anywhere on the card selects it**, continuation rows
+    /// included — "a card selects as a unit, so clicking its branch line must
+    /// behave like clicking its title line".
+    #[test]
+    fn pressing_any_row_of_a_card_selects_the_node() {
+        let spec = card_tree(6, 0, 15);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let r = ui.rect_of(
+            ui.find_by_key(&fresh_ui::Key::Str("s1".into()))
+                .expect("s1"),
+        );
+        // Its second content row, which is a continuation line.
+        let got = facts(ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(4, r.y + 3),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        let hit = got
+            .iter()
+            .find_map(|f| match f {
+                UiFact::WidgetHit { hit, .. } => Some(hit),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a select, got {got:?}"));
+        assert_eq!(hit.event_type, "select");
+        assert_eq!(hit.widget_kind, "tree");
+        assert_eq!(hit.payload.get("index").and_then(|v| v.as_i64()), Some(1));
+    }
+
+    /// **The window scrolls to the selection, and the window is the tree's.**
+    /// The runtime kept a row offset in its side table and wrote it as it
+    /// rendered; here the offset is the viewport's and the only thing said is
+    /// "put this row in the window".
+    #[test]
+    fn the_window_follows_a_selected_card_out_of_view() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        // Ten five-row cards in a ten-row window: two fit.
+        ui.frame(
+            node(&card_tree(10, 0, 10), WIDTH, &cx()),
+            Size::new(WIDTH, 24),
+        );
+        let top = |ui: &Ui<UiMsg>, k: &str| {
+            ui.rect_of(ui.find_by_key(&fresh_ui::Key::Str(k.into())).expect(k))
+                .y
+        };
+        assert_eq!(top(&ui, "s0"), 0, "the window starts at the top");
+        // Select the eighth: it is far below the window and the window moves.
+        ui.frame(
+            node(&card_tree(10, 7, 10), WIDTH, &cx()),
+            Size::new(WIDTH, 24),
+        );
+        let y = top(&ui, "s7");
+        assert!(
+            (0..10).contains(&y),
+            "the selected card is inside the window, at {y}"
+        );
+    }
+
+    /// A card tree that fits needs no bar; one that overflows gets the
+    /// viewport's, measured in rows because that is what it scrolls in.
+    #[test]
+    fn a_card_tree_that_overflows_shows_the_viewports_bar() {
+        let bar_of = |spec: &WidgetSpec, h: u16| {
+            let mut ui: Ui<UiMsg> = Ui::new();
+            ui.frame(node(spec, WIDTH, &cx()), Size::new(WIDTH, h));
+            ui.spec().items.iter().find_map(|i| match i.draw {
+                fresh_ui::Draw::Scrollbar {
+                    offset,
+                    content,
+                    window,
+                } => Some((offset, content, window)),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            bar_of(&card_tree(2, 0, 10), 24),
+            None,
+            "two cards fit in ten rows"
+        );
+        assert_eq!(
+            bar_of(&card_tree(10, 0, 10), 24),
+            Some((0, 50, 10)),
+            "ten five-row cards in a ten-row window"
+        );
     }
 }

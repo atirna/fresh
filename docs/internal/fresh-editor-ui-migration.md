@@ -329,15 +329,23 @@ what it needed. The gutter is reserved whether the bar is there or not, which
 also removes the reflow the runtime had (every card re-rendered one column
 narrower the moment one more session made the list overflow).
 
-**Two shapes are left, and they are the same question.** A `Tree` with
-`card_borders` has *heterogeneous* rows — `item_height + 2` for a card node,
-one for a folder header — which a uniform band cannot say, and uniformity is
-not an accident: it is what lets a window name the items it holds without
-measuring them. Multi-line `Text` has a painter-drawn bar over a scroll the
-runtime owns. Both want the same thing, which is for the scroll to belong to
-the tree, so both are taken with C.2 rather than guessed at before it.
-(`item_height > 1` without `card_borders` does not occur — the only producer
-sets the two together — so there is no third case hiding here.)
+A `Tree` with `card_borders` crossed on the other window the library has.
+Its rows are *heterogeneous* — `item_height + 2` for a card node, one for a
+folder header — and reading the renderer through settled which window it
+wants: **it scrolls in rows, not in nodes.** The offset is a row into the
+flattened list and a card straddling either edge is emitted and clipped, so a
+`List` snapping to whole items would have been a behaviour change. A
+cells-scrolling `viewport` is the same behaviour, and it owns the offset. The
+one thing that needed saying afterwards was the reveal — the runtime scrolled
+to keep the selection visible by writing the offset it also read; here the
+offset is the viewport's, so what is left is "put this row in the window",
+which is `Anchor::reveal`. (`item_height > 1` without `card_borders` does not
+occur — the only producer sets the two together — so there is no third arm.)
+
+**One shape is left**, and it is the one whose *painter* draws the bar:
+multi-line `Text` sets `scrollable` on its box and the panel's scrollbar pass
+draws over it. That is the boundary as originally stated, and it crosses when
+the scroll belongs to the tree.
 
 **`List` has already crossed, and it is the proof of the shape.**
 `widgets::List` windows its rows out of a `viewport`, so the scroll is the
