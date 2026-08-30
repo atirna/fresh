@@ -200,6 +200,24 @@ provided at is the scope they belong to.
 | A.4 | `layer_rank` — a central ordered list of surfaces. | Delete it. Precedence is *derived*: layer order, `Modality::Exclusive`, focus-scope containment — all already in the tree. | A `key_rank` property on layers, or a `Behavior` that walks them in order. Goal 2 forbids the central list by name; a renamed one is the same list. |
 | A.5 | `KeyContext` — the mode enum the walk keyed on, and the largest remnant by reference count. | "Which bindings apply" becomes *where focus is*: a scope provides its shortcut set as an ambient, resolution walks the focus path up. | Keeping `KeyContext` as an ambient. That is the enum with a new home; the point is that containment already answers it. |
 
+**Why `base`, `prompt`, `dock` and `floating_modal` are the ones left, and
+what actually blocks them.** Not effort — a rule. Every surface that has
+crossed *claims* the keys it declines: a menu, a popup and a modal are each in
+the way of the keystroke, so the tree can answer "this is yours" before
+anything runs. The four that remain **decline**: an unhandled prompt key falls
+through to keymap resolution (that is how the file browser's Alt toggles and
+Ctrl+P reach their bindings), an unhandled dock shortcut blurs the dock, and
+the base *is* the fall-through. A claim in the tree is made during dispatch;
+whether those four consumed a key is only known after their interior has run,
+in the host. So the tree cannot say it for them — which is exactly the sense
+in which A.1 and A.2 "ride with B and C": what unblocks them is not a shim
+around the dispatcher but the interior itself becoming nodes that answer, at
+which point declining is a node not stopping the flow rather than a handler
+returning `Ignored` afterwards.
+
+That is also why A.4 and A.5 cannot come yet: `layer_rank` still orders the
+walk those four are on, and the PTY gate and `get_key_context` still read it.
+
 ### B. The modal interiors
 
 | # | What | How | Avoid |
