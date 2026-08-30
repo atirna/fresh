@@ -76,6 +76,12 @@ pub struct Ctx<'a> {
     pub hovered_key: Option<String>,
     /// Whether focusable controls reserve the `▸ ` gutter.
     pub marker_gutter: bool,
+    /// The `List`/`Tree` row the pointer is over. Every row of one list
+    /// shares the list's own key, so the row identity travels separately.
+    pub hovered_item_key: String,
+    /// Row budget for auto-sized `List`/`Tree` widgets, when the host knows
+    /// the surface's inner height.
+    pub avail_height: Option<u32>,
 }
 
 impl Ctx<'_> {
@@ -103,6 +109,12 @@ pub fn covered(spec: &WidgetSpec) -> bool {
         }
         WidgetSpec::LabeledSection { child, .. } => covered(child),
         WidgetSpec::Button { .. } | WidgetSpec::Toggle { .. } | WidgetSpec::Number { .. } => true,
+        // Through their own collectors — see [`collected`].
+        WidgetSpec::Text { .. }
+        | WidgetSpec::List { .. }
+        | WidgetSpec::Tree { .. }
+        | WidgetSpec::Dropdown { .. }
+        | WidgetSpec::DualList { .. } => true,
         WidgetSpec::Component { child, .. }
         | WidgetSpec::Overlay { child, .. }
         | WidgetSpec::Popup { child, .. } => covered(child),
@@ -498,12 +510,112 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
                 ]),
             }
         }
+        // The five with collectors of their own. See [`collected`].
+        WidgetSpec::Text { .. }
+        | WidgetSpec::List { .. }
+        | WidgetSpec::Tree { .. }
+        | WidgetSpec::Dropdown { .. }
+        | WidgetSpec::DualList { .. } => collected(spec, width, cx),
         // `covered` gates this; reaching it is a bug in the caller rather than
         // a spec the plugin got wrong, so it is loud in debug and empty in
         // release rather than silently dropping a panel's content.
         other => {
             debug_assert!(false, "widget variant not covered: {other:?}");
             row().h(Sizing::Cells(0))
+        }
+    }
+}
+
+/// **Every remaining variant, through the collector it already has.**
+///
+/// `Text`, `List`, `Tree`, `Dropdown` and `DualList` are different in kind
+/// from the nine written out above. Each of them already has a collector that
+/// knows its rendering — where a list's rows come from, how a dropdown's
+/// trigger reads, what a tree's indent guides look like — and reproducing that
+/// by hand would be rewriting seven thousand lines to get the same cells.
+///
+/// So the collector runs, and this turns what it produced into nodes: its rows
+/// become nodes, each `HitArea` becomes a gesture on the sub-range it names,
+/// each overlay row becomes a layer at the row it anchors to. **That is what
+/// deletes the byte-range scan and the `LayoutBox` arena** — for all five at
+/// once rather than five times over — because after it a press is resolved by
+/// hit-testing a rectangle layout produced, not by walking recorded ranges.
+///
+/// **It is a stage, not the end.** The runtime is a *formatter* here: it still
+/// decides what a list row looks like, and the tree owns where it is and what
+/// a press on it means. Replacing that formatting with `widgets::List` and
+/// `widgets::Tree`, so a plugin's list is the list the settings form uses, is
+/// the step after — and doing this first makes that a substitution rather than
+/// a rewrite.
+fn collected(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
+    // The collector writes the next instance state as it renders. A
+    // description cannot own that write, so it goes to a scratch map and the
+    // host resolves the real one — the same split `Number` makes, at the scale
+    // of a subtree. C.2 is where this stops being a scratch map.
+    let mut scratch = std::collections::HashMap::new();
+    let out = crate::widgets::render::render_collected(
+        spec,
+        cx.states,
+        &mut scratch,
+        crate::widgets::RenderContext {
+            focus_key: &cx.focus_key,
+            hover_key: cx.hovered_key.as_deref().unwrap_or(""),
+            hover_item_key: &cx.hovered_item_key,
+            markdown: None,
+            marker_gutter: cx.marker_gutter,
+            avail_height: cx.avail_height,
+        },
+        width as u32,
+    );
+    rows_with_hits(&out.entries, &out.hits, cx, &out.overlays)
+}
+
+/// The rows of a collected subtree, each carrying whatever hits land on it.
+///
+/// A hit names a row and a byte range within it, which is exactly what
+/// [`entry_row_hit`] turns into a gesture on a piece of that row. A row with
+/// no hit is a plain styled row; a row with several — a list's rows each carry
+/// their own — becomes as many pieces as there are ranges.
+fn rows_with_hits(
+    entries: &[TextPropertyEntry],
+    hits: &[crate::widgets::HitArea],
+    cx: &Ctx<'_>,
+    overlays: &[crate::widgets::OverlayRow],
+) -> Node<UiMsg> {
+    let mut kids: Vec<Node<UiMsg>> = Vec::with_capacity(entries.len());
+    for (i, entry) in entries.iter().enumerate() {
+        let mine: Vec<&crate::widgets::HitArea> =
+            hits.iter().filter(|h| h.buffer_row as usize == i).collect();
+        kids.push(match mine.len() {
+            0 => entry_row(entry),
+            // The common case, and the only one the runtime's own kinds
+            // produce per row: one interactive range.
+            _ => entry_row_hit(
+                entry,
+                (mine[0].byte_start, mine[0].byte_end),
+                cx.slot,
+                mine[0].clone(),
+            ),
+        });
+    }
+    let body = col().children(kids);
+    match overlays.is_empty() {
+        true => body,
+        // Rows the collector floated: they anchor at a row of the body and
+        // paint over what is there, without having consumed its height. A
+        // layer says both.
+        false => {
+            let mut stack = vec![body];
+            for o in overlays {
+                stack.push(
+                    fresh_ui::layer()
+                        .anchor(fresh_ui::Anchor::Point(0, o.buffer_row as u16))
+                        .place(fresh_ui::Place::Over)
+                        .fit(fresh_ui::Fit::CLAMP)
+                        .child(entry_row(&o.entry)),
+                );
+            }
+            fresh_ui::stack().children(stack)
         }
     }
 }
@@ -711,6 +823,8 @@ mod tests {
             focus_key: String::new(),
             hovered_key: None,
             marker_gutter: false,
+            hovered_item_key: String::new(),
+            avail_height: None,
         }
     }
 
@@ -1328,6 +1442,121 @@ mod tests {
         };
         assert_eq!(row_of(&ui, "second"), 1, "the row below did not shift");
         let _ = plain;
+    }
+
+    /// **The five that go through their own collectors.** Their rows are the
+    /// runtime's — reproducing seven thousand lines of formatting by hand
+    /// would be rewriting it to get the same cells — so what this asserts is
+    /// that routing them through the adapter changes none of them.
+    #[test]
+    fn the_collected_variants_render_what_the_runtime_renders() {
+        let entry = |t: &str| raw(t);
+        let cases: Vec<(&str, WidgetSpec)> = vec![
+            (
+                "a text field",
+                WidgetSpec::Text {
+                    value: "hello".into(),
+                    cursor_byte: -1,
+                    focused: false,
+                    label: "name".into(),
+                    placeholder: None,
+                    rows: 1,
+                    field_width: 12,
+                    max_visible_chars: 0,
+                    full_width: false,
+                    completions: Vec::new(),
+                    completions_visible_rows: 0,
+                    block_caret: false,
+                    sel_start: -1,
+                    sel_end: -1,
+                    label_width: 0,
+                    read_only: false,
+                    markdown: false,
+                    key: Some("t".into()),
+                },
+            ),
+            (
+                "a list",
+                WidgetSpec::List {
+                    items: vec![entry("one"), entry("two"), entry("three")],
+                    item_specs: Vec::new(),
+                    item_keys: vec!["a".into(), "b".into(), "c".into()],
+                    selected_index: 1,
+                    visible_rows: Some(3),
+                    key: Some("l".into()),
+                    focusable: true,
+                },
+            ),
+            (
+                "an empty list",
+                WidgetSpec::List {
+                    items: Vec::new(),
+                    item_specs: Vec::new(),
+                    item_keys: Vec::new(),
+                    selected_index: -1,
+                    visible_rows: Some(3),
+                    key: Some("l".into()),
+                    focusable: true,
+                },
+            ),
+        ];
+        for (label, spec) in cases {
+            assert!(covered(&spec), "{label} should be covered");
+            assert_eq!(
+                tree_text(&spec, &cx()),
+                runtime_text(&spec, &cx()),
+                "{label}"
+            );
+        }
+    }
+
+    /// **A list row answers its own press**, with the hit the runtime
+    /// recorded for it — which is what makes the byte-range scan removable.
+    #[test]
+    fn a_list_row_delivers_its_own_hit() {
+        let spec = WidgetSpec::List {
+            items: vec![raw("one"), raw("two")],
+            item_specs: Vec::new(),
+            item_keys: vec!["a".into(), "b".into()],
+            selected_index: 0,
+            visible_rows: Some(2),
+            key: Some("l".into()),
+            focusable: true,
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        // Press the second row.
+        let got = ui
+            .dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(1, 1),
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs
+            .into_iter()
+            .find_map(|m| match m {
+                UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => Some(hit),
+                _ => None,
+            })
+            .expect("a row press is the list's");
+        assert_eq!(got.widget_kind, "list");
+        // The runtime's own hit for that row, for comparison.
+        let out = crate::widgets::render_spec_with_options(
+            &spec,
+            &Default::default(),
+            WIDTH as u32,
+            crate::widgets::RenderOptions {
+                prev_focus_key: "",
+                auto_focus_first: false,
+                ..Default::default()
+            },
+        );
+        let want = out
+            .hits
+            .iter()
+            .find(|h| h.buffer_row == 1)
+            .expect("the runtime's hit for row 1");
+        assert_eq!(&got, want, "the same hit, delivered by the tree");
     }
 
     /// **The variant whose parity is geometric, not textual.** The runtime

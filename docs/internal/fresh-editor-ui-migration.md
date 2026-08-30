@@ -291,10 +291,19 @@ API is frozen, and this is a change of what the host does with it.
 | `Popup { anchor, screen_space }` | `layer()`, `Anchor::Point` or the node, `within` the panel unless `screen_space` | `screen_space` is precisely "not confined to the panel's region", which is the `within` the base PR added. |
 | `WindowEmbed` | a `Host` leaf | A real editor window inside a panel: cells, like every other `Host`. G's rule applies — this one never migrates. |
 
-**Started.** `view/shell/widgets.rs` covers `Row` (with `wrap`), `Col`,
-`Spacer`, `Divider`, `HintBar`, `Raw`, `LabeledSection`, `Button` and
-`Toggle`, each asserted against `render_spec`'s own answer. Two things the
-first variants settled:
+**The mapping is done.** `view/shell/widgets.rs` describes every variant but
+`WindowEmbed` — which is a `Host` leaf by G's rule and never migrates — each
+asserted against `render_spec`'s own answer. Nine are written out
+(`Row` with `wrap`, `Col`, `Spacer`, `Divider`, `HintBar`, `Raw`,
+`LabeledSection`, `Button`, `Toggle`), four are thin (`Component`, `Overlay`,
+`Popup`, `Number`), and five go through the adapter described above.
+
+**What is left of C is no longer the mapping.** It is: mounting a panel on the
+described path behind `covered()`; deleting `LayoutBox` and the byte-range
+scan once nothing reads them (C.3); and replacing the collectors' formatting
+with `widgets::List` / `widgets::Tree` so a plugin's list is the settings
+form's list, which is where `WidgetInstanceState` becomes element state (C.2).
+Two things the first variants settled:
 
 * **The hit becomes a payload.** `deliver_widget_hit` — the dispatch all three
   frontends share — takes a `HitArea` and does the rest: focus the owner, run
