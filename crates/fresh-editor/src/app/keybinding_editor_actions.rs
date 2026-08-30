@@ -6,8 +6,7 @@ use super::keybinding_editor::KeybindingEditor;
 use super::Editor;
 use crate::input::handler::InputResult;
 use crate::view::keybinding_editor::{handle_keybinding_editor_input, KeybindingEditorAction};
-use crate::view::ui::point_in_rect;
-use crossterm::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::KeyEvent;
 
 impl Editor {
     /// Open the keybinding editor modal
@@ -135,54 +134,6 @@ impl Editor {
     /// Check if keybinding editor is active
     pub fn is_keybinding_editor_active(&self) -> bool {
         self.keybinding_editor.is_some()
-    }
-
-    /// Handle mouse events when keybinding editor is active
-    /// Returns Ok(true) if a re-render is needed
-    pub fn handle_keybinding_editor_mouse(
-        &mut self,
-        mouse_event: MouseEvent,
-    ) -> anyhow::Result<bool> {
-        let mut editor = match self.keybinding_editor.take() {
-            Some(e) => e,
-            None => return Ok(false),
-        };
-
-        let col = mouse_event.column;
-        let row = mouse_event.row;
-        let layout = &editor.layout;
-
-        // All mouse events inside modal are consumed (masked from reaching underlying editor)
-        // Events outside the modal are ignored (but still consumed to prevent leaking)
-        if !point_in_rect(layout.modal_area, col, row) {
-            self.keybinding_editor = Some(editor);
-            return Ok(false);
-        }
-
-        // **What is left of the arm.** The wheel and the scrollbar drag were
-        // the viewport's job all along — `widgets::List` scrolls under the
-        // wheel and its bar drags — and the row click is the row's. The
-        // dialogs answer for themselves (`UiFact::KeybindingDialog`), and the
-        // table's rows likewise (`UiFact::KeybindingRow`). The search bar is
-        // the one rectangle still compared against a cell, because it is the
-        // one part of the header this still paints.
-        if let MouseEventKind::Down(MouseButton::Left) = mouse_event.kind {
-            // A press while a dialog is open belongs to that dialog's scrim,
-            // which consumes it and does nothing — the same as before, where
-            // a click on the dimmed backdrop hit none of the rectangles.
-            if editor.showing_confirm_dialog || editor.edit_dialog.is_some() {
-                self.keybinding_editor = Some(editor);
-                return Ok(true);
-            }
-            if let Some(search_r) = layout.search_bar {
-                if point_in_rect(search_r, col, row) {
-                    editor.start_search();
-                }
-            }
-        }
-
-        self.keybinding_editor = Some(editor);
-        Ok(true)
     }
 
     /// Select a display row by index (and toggle it if it's a section header) —

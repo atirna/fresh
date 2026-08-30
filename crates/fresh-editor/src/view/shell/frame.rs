@@ -190,7 +190,10 @@ pub struct Frame {
     /// painter's — a table with its own scrollbar and ten recorded
     /// rectangles — so what the tree carries is the box those rectangles are
     /// measured from, and the claim.
-    pub keybinding: bool,
+    /// The keybinding editor, when it is open: its title, its three header
+    /// rows and its footer. The whole modal is the tree's now — box, chrome,
+    /// table and dialogs — so the flag became the content.
+    pub keybinding: Option<super::keybinding::Chrome>,
     /// Its table, when no dialog covers it. `None` while one does: a dialog is
     /// a layer over this one, so the table would be under it and building it
     /// would be work for cells nobody sees.
@@ -254,7 +257,7 @@ impl Default for Frame {
             trust: None,
             modal: None,
             settings: false,
-            keybinding: false,
+            keybinding: None,
             keybinding_table: None,
             keybinding_dialog: None,
             event_debug: None,
@@ -514,11 +517,6 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
         Some(slot) => frame.child(super::modal::layer(slot)),
         None => frame,
     };
-    // The keybinding editor's open dialog, over its box.
-    let frame = match &f.keybinding_dialog {
-        Some(d) => frame.child(super::keybinding::dialog_layer(d)),
-        None => frame,
-    };
     // The settings dialog's box. Like the keybinding editor's below it, this
     // contributes a rectangle and nothing else — `PointerMode::Ignore`, so the
     // modal slot behind it is still the one asked.
@@ -530,9 +528,16 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // pointer — the same order and for the same reason as the floating panel
     // below: the box is asked first, and the slot behind it catches whatever
     // the box does not answer.
-    let frame = match f.keybinding {
-        true => frame.child(super::keybinding::layer(f.keybinding_table.as_ref())),
-        false => frame,
+    let frame = match &f.keybinding {
+        Some(c) => frame.child(super::keybinding::layer(c, f.keybinding_table.as_ref())),
+        None => frame,
+    };
+    // Its open dialog, **after** the box: layers are offered the pointer in
+    // reverse declaration order, so a dialog declared before the box would be
+    // covered by it and its fields would never see a press.
+    let frame = match &f.keybinding_dialog {
+        Some(d) => frame.child(super::keybinding::dialog_layer(d)),
+        None => frame,
     };
     // The event-debug dialog, which like the wizard below carries its own
     // exclusivity and its own scrim.

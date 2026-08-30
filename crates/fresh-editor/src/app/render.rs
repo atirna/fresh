@@ -1837,9 +1837,9 @@ impl Editor {
         if self.settings_state.as_ref().is_some_and(|s| s.visible) {
             return Some(Slot::Settings);
         }
-        if self.keybinding_editor.is_some() {
-            return Some(Slot::KeybindingEditor);
-        }
+        // The keybinding editor is not here either: box, chrome, table and
+        // dialogs are all descriptions, so every press inside it is answered
+        // or swallowed by a node, and there is nothing left to route.
         // The calibration wizard is not here: it is a *described* modal now,
         // and its own layer carries the exclusivity. A slot beside it would
         // route a pointer to a surface that has never wanted one.
@@ -2103,6 +2103,160 @@ impl Editor {
             // Resolved against the frame by `event_debug::sized`.
             width: ed::DIALOG_WIDTH,
             height: ed::DIALOG_HEIGHT,
+        })
+    }
+
+    /// The keybinding editor's title, header rows and footer.
+    fn keybinding_chrome_description(&self) -> Option<crate::view::shell::keybinding::Chrome> {
+        use crate::app::keybinding_editor::{ContextFilter, SearchMode, SourceFilter};
+        use crate::app::shell_host::shell_theme::{attrs, pair};
+        use crate::view::shell::keybinding as kb;
+        use fresh_i18n::t;
+
+        let e = self.keybinding_editor.as_ref()?;
+        let ink = pair("ui.popup_text_fg", "ui.popup_bg");
+        let accent = pair("ui.diagnostic_info_fg", "ui.popup_bg");
+        let key_ink = attrs("ui.help_key_fg", "ui.popup_bg", &["bold"]);
+
+        let mut path = vec![
+            kb::Span::new(
+                format!(" {} ", t!("keybinding_editor.label_config")),
+                ink.clone(),
+            ),
+            kb::Span::new(e.config_file_path.clone(), accent.clone()),
+        ];
+        if !e.keymap_names.is_empty() {
+            path.push(kb::Span::new(
+                format!("  {} ", t!("keybinding_editor.label_maps")),
+                ink.clone(),
+            ));
+            path.push(kb::Span::new(e.keymap_names.join(", "), ink.clone()));
+        }
+
+        let search = match (e.search_active, &e.search_mode) {
+            (false, _) => vec![
+                kb::Span::new(" ", ink.clone()),
+                kb::Span::new(t!("keybinding_editor.search_hint").to_string(), ink.clone()),
+            ],
+            (true, SearchMode::Text) => {
+                let mut v = vec![
+                    kb::Span::new(
+                        format!(" {} ", t!("keybinding_editor.label_search")),
+                        key_ink.clone(),
+                    ),
+                    kb::Span::new(e.search_query.clone(), ink.clone()),
+                ];
+                if e.search_focused {
+                    v.push(kb::Span::new("_", pair("ui.cursor", "ui.popup_bg")));
+                    v.push(kb::Span::new(
+                        format!("  {}", t!("keybinding_editor.search_text_hint")),
+                        ink.clone(),
+                    ));
+                }
+                v
+            }
+            (true, SearchMode::RecordKey) => vec![
+                kb::Span::new(
+                    format!(" {} ", t!("keybinding_editor.label_record_key")),
+                    attrs("ui.status_warning_fg", "ui.popup_bg", &["bold"]),
+                ),
+                kb::Span::new(
+                    match e.search_key_display.is_empty() {
+                        true => t!("keybinding_editor.press_a_key").to_string(),
+                        false => e.search_key_display.clone(),
+                    },
+                    ink.clone(),
+                ),
+                kb::Span::new(
+                    format!("  {}", t!("keybinding_editor.search_record_hint")),
+                    ink.clone(),
+                ),
+            ],
+        };
+
+        let total = e.bindings.len();
+        let filtered = e.filtered_indices.len();
+        let counts = match filtered == total {
+            true => t!("keybinding_editor.bindings_count", count = total).to_string(),
+            false => t!(
+                "keybinding_editor.bindings_filtered",
+                filtered = filtered,
+                total = total
+            )
+            .to_string(),
+        };
+        let set = |on: bool| match on {
+            true => accent.clone(),
+            false => ink.clone(),
+        };
+        let mut filters = vec![
+            kb::Span::new(
+                format!(" {} ", t!("keybinding_editor.label_context")),
+                ink.clone(),
+            ),
+            kb::Span::new(
+                format!("[{}]", e.context_filter_display()),
+                set(e.context_filter != ContextFilter::All),
+            ),
+            kb::Span::new(
+                format!("  {} ", t!("keybinding_editor.label_source")),
+                ink.clone(),
+            ),
+            kb::Span::new(
+                format!("[{}]", e.source_filter_display()),
+                set(e.source_filter != SourceFilter::All),
+            ),
+            kb::Span::new(format!("  {counts}"), ink.clone()),
+        ];
+        if e.has_changes {
+            filters.push(kb::Span::new(
+                format!("  {}", t!("keybinding_editor.modified")),
+                pair("ui.status_warning_fg", "ui.popup_bg"),
+            ));
+        }
+
+        // The footer's hints, which differ while the search bar has focus.
+        let hint = |k: &str, label: String| {
+            vec![
+                kb::Span::new(k.to_string(), pair("ui.help_key_fg", "ui.popup_bg")),
+                kb::Span::new(format!(":{label}  "), ink.clone()),
+            ]
+        };
+        let footer: Vec<kb::Span> = match e.search_active && e.search_focused {
+            true => [
+                hint(" Esc", t!("keybinding_editor.footer_cancel").to_string()),
+                hint(
+                    "Tab",
+                    t!("keybinding_editor.footer_toggle_mode").to_string(),
+                ),
+                hint("Enter", t!("keybinding_editor.footer_confirm").to_string()),
+            ]
+            .concat(),
+            false => [
+                hint(" Enter", t!("keybinding_editor.footer_edit").to_string()),
+                hint("a", t!("keybinding_editor.footer_add").to_string()),
+                hint("d", t!("keybinding_editor.footer_delete").to_string()),
+                hint("/", t!("keybinding_editor.footer_search").to_string()),
+                hint("r", t!("keybinding_editor.footer_record_key").to_string()),
+                hint("c", t!("keybinding_editor.footer_context").to_string()),
+                hint("s", t!("keybinding_editor.footer_source").to_string()),
+                hint("?", t!("keybinding_editor.footer_help").to_string()),
+                hint("Ctrl+S", t!("keybinding_editor.footer_save").to_string()),
+                hint("Esc", t!("keybinding_editor.footer_close").to_string()),
+            ]
+            .concat(),
+        };
+
+        Some(kb::Chrome {
+            title: format!(
+                "{} \u{2500} [{}]",
+                t!("keybinding_editor.title"),
+                e.active_keymap
+            ),
+            path,
+            search,
+            filters,
+            footer,
         })
     }
 
@@ -3240,7 +3394,7 @@ impl Editor {
             modal,
             event_debug: self.event_debug_description(),
             settings: self.settings_state.as_ref().is_some_and(|s| s.visible),
-            keybinding: self.keybinding_editor.is_some(),
+            keybinding: self.keybinding_chrome_description(),
             keybinding_table: self.keybinding_table_description(),
             keybinding_dialog: self.keybinding_dialog_description(),
             calibration: self.calibration_description(),
@@ -3724,8 +3878,10 @@ impl Editor {
         // cells only for the TUI.
         let draw_aux = !self.suppress_chrome_cells;
 
-        // Keybinding editor: web renders it natively from `keybinding_editor_view`;
-        // paint cells only for the TUI.
+        // The keybinding editor is the tree's — box, chrome, table and dialogs
+        // (`view::shell::keybinding`). What is left here is the one thing the
+        // description cannot say for itself: how many rows a `PgUp` moves by,
+        // which is the box's height less the bands around the rows.
         if draw_aux {
             // **The box is the tree's.** `view::shell::keybinding` places it —
             // ninety percent of the chrome area, capped, floored, centred
@@ -3742,15 +3898,6 @@ impl Editor {
             if let (Some(r), Some(e)) = (modal_area, self.keybinding_editor.as_mut()) {
                 e.scroll
                     .set_viewport(crate::view::shell::keybinding::table_rows(r.height));
-            }
-            if let (Some(modal_area), true) = (modal_area, self.keybinding_editor.is_some()) {
-                let theme = self.theme.read().unwrap().clone();
-                if let Some(ref mut kb_editor) = self.keybinding_editor {
-                    crate::view::dimming::apply_dimming(frame, area);
-                    crate::view::keybinding_editor::render_keybinding_editor(
-                        frame, modal_area, kb_editor, &theme,
-                    );
-                }
             }
         }
 

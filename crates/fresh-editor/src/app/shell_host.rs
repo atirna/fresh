@@ -1408,6 +1408,11 @@ impl Editor {
                     }
                 }
             }
+            UiFact::KeybindingSearch => {
+                if let Some(e) = self.keybinding_editor.as_mut() {
+                    e.start_search();
+                }
+            }
             UiFact::KeybindingDialog(t) => {
                 use crate::view::shell::keybinding::Target;
                 let Some(mut e) = self.keybinding_editor.take() else {
@@ -1451,7 +1456,6 @@ impl Editor {
                 };
                 let r = match slot {
                     Slot::Settings => self.handle_settings_mouse(ev, double),
-                    Slot::KeybindingEditor => self.handle_keybinding_editor_mouse(ev),
                     Slot::FloatingPanel => self.handle_floating_modal_mouse(ev),
                 };
                 if let Err(e) = r {

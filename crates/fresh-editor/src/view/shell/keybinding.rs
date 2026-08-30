@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use fresh_ui::{
     col, gesture, layout_reader, row, text, Align, Anchor, Event, GestureKind, LayoutInfo,
-    Modality, MouseButton, Node, Place, PointerMode, Scrim, Sizing,
+    Modality, MouseButton, Node, Place, Scrim, Sizing,
 };
 
 use crate::app::shell_host::shell_theme::{attrs, pair};
@@ -187,45 +187,52 @@ pub fn fit(info: LayoutInfo) -> (u16, u16) {
 /// The exclusivity is the slot's, not this layer's, for the same reason: two
 /// claims to the same modality is one too many, and the slot is the one that
 /// carries the routing.
-pub fn layer(t: Option<&Table>) -> Node<UiMsg> {
+pub fn layer(c: &Chrome, t: Option<&Table>) -> Node<UiMsg> {
+    let c = c.clone();
     let t = t.cloned();
-    let empty = t.is_none();
     fresh_ui::layer()
         .within(super::frame::chrome_key())
         .anchor(Anchor::Screen(Align::Center))
         .place(Place::Over)
-        // On the layer, not only on the box inside it: the layer is a box of
-        // its own and would produce the path by itself. Only while the box is
-        // empty — a table inside it has rows that answer.
-        .pointer_mode(match empty {
-            true => PointerMode::Ignore,
-            false => PointerMode::Transparent,
-        })
+        // What the capture band was: nothing outside the modal is
+        // interactive, so a press on the editor behind it goes nowhere.
+        .modality(Modality::Exclusive)
         .child(layout_reader(move |info: LayoutInfo| {
             let (w, h) = fit(info);
-            // A column: the bands stack. It was a `row()` while the box was
-            // empty and it did not matter, and it silently laid the header
-            // band beside the table rather than above it the moment one
-            // existed.
-            let n = col().w(Sizing::Cells(w)).h(Sizing::Cells(h)).key(key());
-            match &t {
-                // The header band and the footer are still the painter's, so
-                // the table sits where they left it: three rows down inside
-                // the border, one row up from the bottom.
-                //
-                // **And those bands claim their own presses**, routing them to
-                // the modal slot. A layer that merely lets a hit through is
-                // still a layer with a path at the point, so the slot beneath
-                // would never be asked — the same trap the empty box fell into.
-                // Claiming is what "the parts I do not own yet go to the
-                // router" looks like from inside a layer.
-                Some(t) => n.children([
-                    claim().h(Sizing::Cells(4)),
-                    col().flex(1).children([table(t)]),
-                    claim().h(Sizing::Cells(2)),
+            // `Layout::vertical([Length(3), Min(5), Length(1)])` inside a
+            // bordered block — the painter's own three bands, and the border
+            // it drew around them. A **column**: it was a `row()` while the box
+            // was empty and it did not matter, and it would have laid the
+            // header band beside the table rather than above it.
+            let body = match &t {
+                Some(t) => col().flex(1).children([table(t)]),
+                // A dialog covers the table, so there is nothing to build: the
+                // band is a claim surface, keeping a press off whatever is
+                // behind the modal.
+                None => claim().flex(1),
+            };
+            let inner = col().theme(ring()).border().children([
+                line(
+                    format!(" {} ", c.title),
+                    attrs("ui.popup_border_fg", "ui.popup_bg", &["bold"]),
+                ),
+                col().h(Sizing::Cells(3)).children([
+                    row().h(Sizing::Cells(1)).children(spans(&c.path)),
+                    search_row(&c.search),
+                    row().h(Sizing::Cells(1)).children(spans(&c.filters)),
                 ]),
-                None => n.pointer_mode(PointerMode::Ignore),
-            }
+                body,
+                row().h(Sizing::Cells(1)).children(spans(&c.footer)),
+            ]);
+            // **The box consumes what its parts do not.** A modal absorbs every
+            // press inside it — the capture band's whole job — and the parts
+            // that mean something stop the flow before it reaches here. The
+            // size and the key go on the outside, or the box would be a
+            // full-bounds wrapper with a small child parked in its corner.
+            swallow(inner)
+                .w(Sizing::Cells(w))
+                .h(Sizing::Cells(h))
+                .key(key())
         }))
 }
 
@@ -264,7 +271,28 @@ pub fn dialog_layer(d: &Dialog) -> Node<UiMsg> {
         }))
 }
 
-/// A band the painter still owns, routing its presses to the modal slot.
+/// Take every pointer event that reaches this node and do nothing with it.
+fn swallow(n: Node<UiMsg>) -> Node<UiMsg> {
+    let mut g = gesture(n);
+    for kind in [
+        GestureKind::Press,
+        GestureKind::Release,
+        GestureKind::Move,
+        GestureKind::Wheel,
+    ] {
+        g = g.on(
+            kind,
+            Rc::new(|e: &Event| {
+                e.stop();
+                None
+            }),
+        );
+    }
+    g
+}
+
+/// A band that takes a press and does nothing with it, which is what a modal
+/// backdrop is.
 fn claim() -> Node<UiMsg> {
     // Full width, because an empty box measures to nothing and a band with no
     // width claims no cell.
@@ -279,9 +307,7 @@ fn claim() -> Node<UiMsg> {
             kind,
             Rc::new(|e: &Event| {
                 e.stop();
-                Some(UiMsg::Ui(UiFact::ModalPointer(
-                    super::modal::Slot::KeybindingEditor,
-                )))
+                None
             }),
         );
     }
@@ -521,6 +547,68 @@ fn confirm_box(c: &Confirm) -> Node<UiMsg> {
         ])
 }
 
+/// One styled run of a header or footer line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Span {
+    pub text: String,
+    /// A theme name, already resolved from what the run *is*.
+    pub theme: String,
+}
+
+impl Span {
+    pub fn new(text: impl Into<String>, theme: impl Into<String>) -> Self {
+        Span {
+            text: text.into(),
+            theme: theme.into(),
+        }
+    }
+}
+
+/// The modal's three header rows and its footer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chrome {
+    pub title: String,
+    /// Row one: where the config lives, and which keymaps are active.
+    pub path: Vec<Span>,
+    /// Row two: the search bar, or the hint that says how to open it.
+    pub search: Vec<Span>,
+    /// Row three: the filters and the counts.
+    pub filters: Vec<Span>,
+    /// The key hints along the bottom.
+    pub footer: Vec<Span>,
+}
+
+pub fn search_key() -> fresh_ui::Key {
+    fresh_ui::Key::Str("keybinding_search".into())
+}
+
+fn spans(v: &[Span]) -> Vec<Node<UiMsg>> {
+    v.iter()
+        .map(|s| text(s.text.clone()).theme(s.theme.clone()))
+        .collect()
+}
+
+/// The search row, which is the one part of the chrome that answers a press:
+/// clicking it starts a search, which is what `layout.search_bar` was for.
+fn search_row(v: &[Span]) -> Node<UiMsg> {
+    gesture(
+        row()
+            .h(Sizing::Cells(1))
+            .key(search_key())
+            .children(spans(v)),
+    )
+    .on(
+        GestureKind::Press,
+        Rc::new(|e: &Event| {
+            if e.button != MouseButton::Left {
+                return None;
+            }
+            e.stop();
+            Some(UiMsg::Ui(UiFact::KeybindingSearch))
+        }),
+    )
+}
+
 /// One row of the table.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
@@ -691,11 +779,22 @@ mod tests {
     use crate::view::shell::frame::{frame_tree, Frame};
     use fresh_ui::{Size, Ui};
 
+    fn chrome() -> Chrome {
+        let ink = pair("ui.popup_text_fg", "ui.popup_bg");
+        Chrome {
+            title: "Keybindings — [default]".into(),
+            path: vec![Span::new(" Config: /tmp/fresh.toml", ink.clone())],
+            search: vec![Span::new(" Press / to search", ink.clone())],
+            filters: vec![Span::new(" Scope: [All]  12 bindings", ink.clone())],
+            footer: vec![Span::new(" Enter:Edit  Esc:Close", ink)],
+        }
+    }
+
     fn laid_out(w: u16, h: u16, dock: Option<u16>) -> Ui<UiMsg> {
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(
             frame_tree(Frame {
-                keybinding: true,
+                keybinding: Some(chrome()),
                 dock,
                 menu_bar: false,
                 status_bar: false,
@@ -753,20 +852,18 @@ mod tests {
         );
     }
 
-    /// **The box is a rectangle, not a surface.** Its interior is still the
-    /// painter's — a table, a search bar, three dialogs, all hit-tested
-    /// against rectangles it records — so a press inside it has to reach the
-    /// modal slot that routes to `handle_keybinding_editor_mouse`. A layer
-    /// that answered would be the first one with a path at the point and the
-    /// slot behind it would never be asked, which is a surface that swallows
-    /// every click in the editor it is standing in for.
+    /// **The box is a surface now, and it consumes.** It was a rectangle and
+    /// nothing else while its interior was the painter's — and it had to be,
+    /// because a layer is the first thing asked at a point and the modal slot
+    /// behind it would never have been reached. The interior is here now, so
+    /// the box answers: its own parts by name, and everything else by taking
+    /// the press and doing nothing, which is what a modal backdrop is.
     #[test]
-    fn a_press_inside_the_box_reaches_the_modal_router() {
+    fn a_press_inside_the_box_is_consumed_by_it() {
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(
             frame_tree(Frame {
-                keybinding: true,
-                modal: Some(crate::view::shell::modal::Slot::KeybindingEditor),
+                keybinding: Some(chrome()),
                 menu_bar: false,
                 status_bar: false,
                 ..Frame::default()
@@ -774,49 +871,45 @@ mod tests {
             Size::new(200, 60),
         );
         let r = ui.rect_of(ui.find_by_key(&key()).expect("the box"));
+        // Row four inside the box is the filters row, which says nothing.
         let got = ui.dispatch(fresh_ui::Input::press(
             fresh_ui::Point::new(r.x + 4, r.y + 4),
             fresh_ui::MouseButton::Left,
             fresh_ui::Mods::NONE,
         ));
-        assert!(
-            got.msgs.iter().any(|m| matches!(
-                m,
-                UiMsg::Ui(crate::view::shell::msg::UiFact::ModalPointer(
-                    crate::view::shell::modal::Slot::KeybindingEditor
-                ))
-            )),
-            "the slot behind it answers: {:?}",
-            got.msgs
-        );
+        assert!(got.claimed, "the box takes it");
+        assert!(got.msgs.is_empty(), "and says nothing: {:?}", got.msgs);
     }
 
-    /// And a press *outside* the box is the modal's too — the capture band
-    /// consumed everything, and `Modality::Exclusive` on the slot is that.
+    /// The search row is the exception: clicking it starts a search, which is
+    /// the last of the ten rectangles the painter recorded.
     #[test]
-    fn a_press_outside_the_box_is_still_the_modals() {
-        let mut ui: Ui<UiMsg> = Ui::new();
-        ui.frame(
-            frame_tree(Frame {
-                keybinding: true,
-                modal: Some(crate::view::shell::modal::Slot::KeybindingEditor),
-                menu_bar: false,
-                status_bar: false,
-                ..Frame::default()
-            }),
-            Size::new(200, 60),
-        );
+    fn pressing_the_search_row_starts_a_search() {
+        use crate::view::shell::msg::UiFact;
+        let mut ui = laid_out(200, 60, None);
+        let r = ui.rect_of(ui.find_by_key(&search_key()).expect("the search row"));
+        let got = facts(ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(r.x + 2, r.y),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        assert!(got.contains(&UiFact::KeybindingSearch), "{got:?}");
+    }
+
+    /// **Nothing outside the modal is interactive**, which is what the capture
+    /// band was: it preempted every walk, the shell's included, and consumed
+    /// whatever it did not use. `Modality::Exclusive` says it in the tree.
+    #[test]
+    fn a_press_outside_the_box_reaches_nothing() {
+        let mut ui = laid_out(200, 60, None);
         let got = ui.dispatch(fresh_ui::Input::press(
             fresh_ui::Point::new(2, 2),
             fresh_ui::MouseButton::Left,
             fresh_ui::Mods::NONE,
         ));
         assert!(
-            got.msgs.iter().any(|m| matches!(
-                m,
-                UiMsg::Ui(crate::view::shell::msg::UiFact::ModalPointer(_))
-            )),
-            "consumed by the modal: {:?}",
+            got.msgs.is_empty(),
+            "the editor behind it hears nothing: {:?}",
             got.msgs
         );
     }
@@ -855,9 +948,8 @@ mod tests {
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(
             frame_tree(Frame {
-                keybinding: true,
+                keybinding: Some(chrome()),
                 keybinding_dialog: Some(d),
-                modal: Some(crate::view::shell::modal::Slot::KeybindingEditor),
                 menu_bar: false,
                 status_bar: false,
                 ..Frame::default()
@@ -1094,9 +1186,8 @@ mod tests {
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(
             frame_tree(Frame {
-                keybinding: true,
+                keybinding: Some(chrome()),
                 keybinding_table: Some(t),
-                modal: Some(crate::view::shell::modal::Slot::KeybindingEditor),
                 menu_bar: false,
                 status_bar: false,
                 ..Frame::default()
@@ -1180,22 +1271,23 @@ mod tests {
         );
     }
 
-    /// A press *outside* the table but inside the box still reaches the modal
-    /// router — the header band and the footer are the painter's, and its
-    /// search bar is the one rectangle still compared against a cell.
+    /// **The table sits under the three header rows and over the footer**,
+    /// where `Layout::vertical([Length(3), Min(5), Length(1)])` put it —
+    /// inside the border, which the box now draws.
     #[test]
-    fn a_press_on_the_header_band_reaches_the_modal_router() {
-        use crate::view::shell::msg::UiFact;
-        let mut ui = with_table(a_table(30, 0), 160, 50);
+    fn the_table_sits_between_the_header_and_the_footer() {
+        let ui = with_table(a_table(30, 0), 160, 50);
         let boxed = ui.rect_of(ui.find_by_key(&key()).expect("the box"));
-        let got = facts(ui.dispatch(fresh_ui::Input::press(
-            fresh_ui::Point::new(boxed.x + 4, boxed.y + 2),
-            fresh_ui::MouseButton::Left,
-            fresh_ui::Mods::NONE,
-        )));
+        let search = ui.rect_of(ui.find_by_key(&search_key()).expect("the search row"));
+        let first = ui.rect_of(
+            ui.find_by_key(&fresh_ui::Key::Str("0".into()))
+                .expect("row 0"),
+        );
+        assert!(search.y > boxed.y, "the header is inside the border");
+        assert!(first.y > search.y + 1, "and the table is under it");
         assert!(
-            got.iter().any(|f| matches!(f, UiFact::ModalPointer(_))),
-            "the slot answers: {got:?}"
+            first.y < boxed.y + boxed.h as i32 - 1,
+            "with the footer below"
         );
     }
 }

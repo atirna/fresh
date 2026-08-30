@@ -362,6 +362,9 @@ pub enum UiFact {
     /// existed only because the window belonged to the painter. The row knows
     /// its own index.
     KeybindingRow(usize),
+    /// A press on the keybinding editor's search row, which starts a search.
+    /// The last of that modal's ten recorded rectangles.
+    KeybindingSearch,
 }
 
 /// What a menu-bar navigation step does to the open chain.
