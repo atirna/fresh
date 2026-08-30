@@ -285,7 +285,7 @@ API is frozen, and this is a change of what the host does with it.
 | `DualList` | `widgets::DualList` | |
 | `Button` | `widgets::Button` | |
 | `List` | `widgets::List` | |
-| `Tree` | `widgets::Tree` | |
+| `Tree` | ~~`widgets::Tree`~~ **`widgets::List`** | **The table was wrong here.** `WidgetSpec::Tree` is already *flat* — `nodes: Vec<TreeNode>` with a `depth` and a `has_children` flag — and its expansion is the **plugin's**: `expanded_keys` comes down in the spec and goes back through `WidgetMutation`. `widgets::Tree` builds its own nesting from recursive roots and owns `expanded` in element state, so it would fight the plugin for the one fact the plugin is authoritative for. The spec's tree is a controlled list of pre-rendered rows, and that is what it maps onto. |
 | `Component` | `focus_scope()` + `key()` | Its two jobs are exactly those: trap Tab inside the subtree, and name it. Not a component in the library's sense, and it should not become one — it owns no state. |
 | `Overlay` | `layer()` anchored to its own position | "Anchors at the row it would have occupied but the rows below do not shift" is `Place::Over` on a layer whose anchor is the node's slot. |
 | `Popup { anchor, screen_space }` | `layer()`, `Anchor::Point` or the node, `within` the panel unless `screen_space` | `screen_space` is precisely "not confined to the panel's region", which is the `within` the base PR added. |

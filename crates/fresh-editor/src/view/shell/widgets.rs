@@ -705,15 +705,18 @@ fn rows_with_hits(
     for (i, entry) in entries.iter().enumerate() {
         let mine: Vec<&crate::widgets::HitArea> =
             hits.iter().filter(|h| h.buffer_row as usize == i).collect();
-        kids.push(match mine.len() {
-            0 => entry_row(entry),
-            // The common case, and the only one the runtime's own kinds
-            // produce per row: one interactive range.
-            _ => entry_row_hit(
+        kids.push(match mine.is_empty() {
+            true => entry_row(entry),
+            // **Every hit on the row, not the first.** A tree row has three
+            // and a dual list's has two; keeping only one silently made the
+            // others unclickable.
+            false => entry_row_hits(
                 entry,
-                (mine[0].byte_start, mine[0].byte_end),
                 cx.slot,
-                mine[0].clone(),
+                &mine
+                    .iter()
+                    .map(|h| ((h.byte_start, h.byte_end), (*h).clone()))
+                    .collect::<Vec<_>>(),
             ),
         });
     }
@@ -843,26 +846,56 @@ pub fn entry_row_hit(
     slot: Slot,
     hit: crate::widgets::HitArea,
 ) -> Node<UiMsg> {
-    let runs = entry_runs(entry, &[range.0, range.1]);
-    let mut before: Vec<Run> = Vec::new();
-    let mut inside: Vec<Run> = Vec::new();
-    let mut after: Vec<Run> = Vec::new();
-    for (at, run) in runs {
-        match () {
-            _ if at.end <= range.0 => before.push(run),
-            _ if at.start >= range.1 => after.push(run),
-            _ => inside.push(run),
-        }
+    entry_row_hits(entry, slot, &[(range, hit)])
+}
+
+/// One styled row carrying several hits, each over the bytes it names.
+///
+/// **A row is not one target.** A tree row has three — the disclosure glyph
+/// expands, the checkbox toggles, the rest selects — and the runtime told them
+/// apart by comparing a clicked byte against three ranges. The row is split at
+/// every range's edges and each piece carries its own hit, so the same three
+/// answers come from three rectangles.
+pub fn entry_row_hits(
+    entry: &TextPropertyEntry,
+    slot: Slot,
+    hits: &[((usize, usize), crate::widgets::HitArea)],
+) -> Node<UiMsg> {
+    let mut cuts: Vec<usize> = Vec::with_capacity(hits.len() * 2);
+    for ((a, b), _) in hits {
+        cuts.push(*a);
+        cuts.push(*b);
     }
-    let piece = |rs: Vec<Run>| text_runs(rs).h(Sizing::Cells(1));
+    let runs = entry_runs(entry, &cuts);
+    // Group consecutive runs by which hit covers them. A byte covered by two
+    // ranges takes the first that names it, which is the order the collector
+    // pushed them — the same precedence the byte-range scan had.
+    let owner = |at: &std::ops::Range<usize>| -> Option<usize> {
+        hits.iter()
+            .position(|((a, b), _)| at.start >= *a && at.end <= *b && b > a)
+    };
     let mut kids: Vec<Node<UiMsg>> = Vec::new();
-    if !before.is_empty() {
-        kids.push(piece(before));
+    let mut group: Vec<Run> = Vec::new();
+    let mut group_of: Option<usize> = None;
+    let flush = |kids: &mut Vec<Node<UiMsg>>, group: &mut Vec<Run>, of: Option<usize>| {
+        if group.is_empty() {
+            return;
+        }
+        let piece = text_runs(std::mem::take(group)).h(Sizing::Cells(1));
+        kids.push(match of {
+            Some(i) => hit_node(piece, slot, hits[i].1.clone()),
+            None => piece,
+        });
+    };
+    for (at, run) in runs {
+        let of = owner(&at);
+        if of != group_of {
+            flush(&mut kids, &mut group, group_of);
+            group_of = of;
+        }
+        group.push(run);
     }
-    kids.push(hit_node(piece(inside), slot, hit));
-    if !after.is_empty() {
-        kids.push(piece(after));
-    }
+    flush(&mut kids, &mut group, group_of);
     row().h(Sizing::Cells(1)).children(kids)
 }
 
@@ -1833,6 +1866,56 @@ mod tests {
         };
         assert!(covered(&field(1)));
         assert!(!covered(&field(4)));
+    }
+
+    /// **A row is not one target.** A tree row has three — the disclosure
+    /// glyph expands, the checkbox toggles, the rest selects — and the runtime
+    /// told them apart by comparing a clicked byte against three ranges. Three
+    /// rectangles give the same three answers, and keeping only the first
+    /// would make the other two unclickable without failing anything.
+    #[test]
+    fn a_row_with_several_hits_answers_each_over_its_own_bytes() {
+        let e = raw("[v] > label");
+        let hit = |kind: &'static str, a: usize, b: usize| crate::widgets::HitArea {
+            row_target: false,
+            context_click: false,
+            overlay: false,
+            widget_key: "t".into(),
+            widget_kind: "tree",
+            buffer_row: 0,
+            byte_start: a,
+            byte_end: b,
+            payload: serde_json::json!({}),
+            event_type: kind,
+            owner_key: None,
+        };
+        let node = entry_row_hits(
+            &e,
+            Slot::Floating,
+            &[
+                ((0, 3), hit("toggle", 0, 3)),
+                ((4, 5), hit("expand", 4, 5)),
+                ((6, 11), hit("select", 6, 11)),
+            ],
+        );
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node, Size::new(WIDTH, 4));
+        let at = |ui: &mut Ui<UiMsg>, x: i32| -> Option<&'static str> {
+            ui.dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(x, 0),
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs
+            .into_iter()
+            .find_map(|m| match m {
+                UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => Some(hit.event_type),
+                _ => None,
+            })
+        };
+        assert_eq!(at(&mut ui, 1), Some("toggle"), "the checkbox");
+        assert_eq!(at(&mut ui, 4), Some("expand"), "the disclosure glyph");
+        assert_eq!(at(&mut ui, 8), Some("select"), "the label");
     }
 
     /// **The variant whose parity is geometric, not textual.** The runtime
