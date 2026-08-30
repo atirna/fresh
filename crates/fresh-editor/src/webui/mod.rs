@@ -1931,7 +1931,7 @@ fn scene_json(editor: &mut Editor, cols: u16, rows: u16) -> Value {
     let panes: Vec<Value> = layout
         .split_areas
         .iter()
-        .filter_map(|(leaf, bufid, _content, _bar, thumb_s, thumb_e)| {
+        .filter_map(|(leaf, bufid, thumb_s, thumb_e)| {
             // Owned, because these are read *out* of the tree rather than
             // borrowed from the vector being iterated.
             let content_rect = editor.pane_content_rect(*leaf)?;

@@ -198,7 +198,7 @@ impl<'a> BodyPainter<'a> {
         let active = editor.active_window;
         if let Some(win) = editor.windows.get_mut(&active) {
             record_scrollbar_theme_runs(
-                &out.split_areas,
+                &out.pane_rects,
                 &mut win.chrome_layout.cell_theme_map,
                 screen_width,
             );

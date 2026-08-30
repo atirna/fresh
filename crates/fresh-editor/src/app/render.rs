@@ -832,6 +832,7 @@ impl Editor {
         );
         let crate::app::shell_host::BodyOutput {
             split_areas,
+            pane_rects,
             tab_layouts,
             view_line_mappings,
             horizontal_scrollbar_areas,
@@ -859,7 +860,7 @@ impl Editor {
         // meets the edge of its pane by fading out rather than being cut
         // off mid-line. Runs here, after the content pass, because it
         // reads the rows that pass just painted.
-        self.shade_scroll_edges(frame.buffer_mut(), &split_areas);
+        self.shade_scroll_edges(frame.buffer_mut(), &pane_rects);
 
         // A dormant remote session's shell shows a placeholder page instead
         // of an (empty, uneditable) buffer: nothing can be shown or edited
@@ -1043,25 +1044,8 @@ impl Editor {
         // Render terminal content on top of split content for terminal buffers.
         // Active-window path: cursor blinks normally when terminal_mode is on.
         self.active_window()
-            .render_terminal_splits(frame.buffer_mut(), &split_areas, true);
+            .render_terminal_splits(frame.buffer_mut(), &pane_rects, true);
 
-        // **The oracle E.1 asks for, before the swap it asks for.**
-        //
-        // These rectangles are the painter's record of what it drew, and the
-        // tree has already placed the same three under `content_key`,
-        // `vscroll_key` and `hscroll_key` — `split_layout` even lays
-        // `pane_interior` out in a *throwaway* `Ui` per pane to get them,
-        // which is the same description evaluated a second time. They cannot
-        // disagree in principle; the point of asserting it is that "in
-        // principle" is what every duplicate says right up until it stops
-        // being true, and these rectangles route every click in the editor.
-        //
-        // Debug only, and deliberately: the plan's rule is derive both, prove
-        // they agree, then delete the recorded one — and the proof has to run
-        // against a live editor with real panes, which is what an integration
-        // build is. A release frame pays nothing.
-        #[cfg(debug_assertions)]
-        self.assert_pane_rects_match_layout(&split_areas, &horizontal_scrollbar_areas);
         self.active_layout_mut().split_areas = split_areas;
         self.active_layout_mut().horizontal_scrollbar_areas = horizontal_scrollbar_areas;
         self.active_layout_mut().tab_layouts = tab_layouts;
@@ -5042,98 +5026,6 @@ impl Editor {
     /// and the third row in is fully painted.
     const EDGE_FADE_ROWS: u16 = 2;
 
-    /// Every pane rectangle the painter recorded, against the one the tree
-    /// placed under the same key.
-    ///
-    /// **Half of E.1, and the half that has to come first.** The recorded
-    /// rects are read by mouse handlers *between* frames — they route every
-    /// click, every scrollbar drag and every click-to-byte in the editor — so
-    /// swapping their source is not a change that a unit test can cover. What
-    /// makes it safe is this: derive both for a while, assert they agree
-    /// wherever a real editor with real panes is running, and only then delete
-    /// the recorded one. It is the same shape E.2 used to retire
-    /// `separator_areas`.
-    ///
-    /// **A pane the tree has no node for is a failure, not a skip.** The
-    /// weaker form was there for the session preview, which paints another
-    /// window's grid offscreen — but the preview has its own
-    /// `preview_split_areas` and never reaches this vector, a
-    /// `GroupTabBarOnly` entry returns before the push that fills it, and a
-    /// `SplitNode::Grouped` delegates to its own layout so its inner leaves
-    /// get nodes like any other. So every entry here is a pane of *this*
-    /// window, and a missing node means the tree and the painter disagree
-    /// about which panes exist — which is exactly what the oracle is for, and
-    /// the one disagreement the skip would have hidden.
-    ///
-    /// A pane with no scrollbar is not that case. `pane_interior` does place
-    /// all three parts unconditionally — but it gives the bar the pane does
-    /// not have a width of zero, and `rect_of` drops zero-size elements, so
-    /// the tree's answer for a bar that is not there is `None` rather than a
-    /// zero-width rectangle. That is what `pane_vscroll_rect`'s own doc says,
-    /// and asserting the opposite here contradicted it: the check has to ask
-    /// whether the *painter* drew a bar before it asks the tree for one.
-    #[cfg(debug_assertions)]
-    fn assert_pane_rects_match_layout(
-        &self,
-        split_areas: &[(
-            crate::model::event::LeafId,
-            BufferId,
-            ratatui::layout::Rect,
-            ratatui::layout::Rect,
-            usize,
-            usize,
-        )],
-        hscroll_areas: &[(
-            crate::model::event::LeafId,
-            BufferId,
-            ratatui::layout::Rect,
-            usize,
-            usize,
-            usize,
-        )],
-    ) {
-        use crate::view::shell::splits::{content_key, hscroll_key, vscroll_key};
-        let check = |what: &str, leaf, painted: ratatui::layout::Rect, key: fresh_ui::Key| {
-            // **"No bar" first, because both sides spell it differently.** The
-            // painter records a zero-width rectangle for a bar it did not
-            // draw; the tree has a zero-width *node* for one the pane does not
-            // have, and `rect_of` drops zero-size elements — so the tree's
-            // spelling is `None`. Neither is a rectangle worth comparing, and
-            // asking for the node before checking this made a pane with no
-            // scrollbar look like a pane the tree had lost.
-            if painted.width == 0 {
-                return;
-            }
-            let Some(placed) = self.panel_rect(&key) else {
-                debug_assert!(
-                    false,
-                    "{what} of pane {leaf:?}: the painter recorded {painted:?} \
-                     and the tree placed nothing under {key:?}"
-                );
-                return;
-            };
-            if placed.width == 0 {
-                return;
-            }
-            debug_assert_eq!(
-                painted, placed,
-                "{what} of pane {leaf:?}: the painter recorded {painted:?}, layout placed {placed:?}"
-            );
-        };
-        for (leaf, _buffer, content, vscroll, _t0, _t1) in split_areas {
-            check("the content", leaf, *content, content_key(*leaf));
-            check("the scrollbar", leaf, *vscroll, vscroll_key(*leaf));
-        }
-        for (leaf, _buffer, hscroll, _w, _t0, _t1) in hscroll_areas {
-            check(
-                "the horizontal scrollbar",
-                leaf,
-                *hscroll,
-                hscroll_key(*leaf),
-            );
-        }
-    }
-
     /// Shade the top and bottom rows of every split's content.
     ///
     /// A pane cuts text off mid-line at its edges; shading the last
@@ -5158,7 +5050,7 @@ impl Editor {
     fn shade_scroll_edges(
         &mut self,
         buf: &mut ratatui::buffer::Buffer,
-        split_areas: &[(
+        panes: &[(
             crate::model::event::LeafId,
             BufferId,
             ratatui::layout::Rect,
@@ -5176,7 +5068,7 @@ impl Editor {
         let Some((_, view_states)) = window.buffers.splits() else {
             return;
         };
-        for (leaf, buffer_id, area, scrollbar, _thumb_start, thumb_end) in split_areas {
+        for (leaf, buffer_id, area, scrollbar, _thumb_start, thumb_end) in panes {
             if area.width == 0 || area.height == 0 {
                 continue;
             }
@@ -5573,7 +5465,10 @@ impl Editor {
         let mut scratch_pending_cursor: Option<(u16, u16)> = None;
         let lsp_waiting = false; // preview never shows LSP-waiting chrome
 
-        let mut preview_split_areas: Vec<(
+        // The preview paints *another window's* grid offscreen, where this
+        // window's tree has no nodes — so its rectangles are the painter's
+        // and travel within the frame, like `pane_rects`.
+        let mut preview_pane_rects: Vec<(
             crate::model::event::LeafId,
             fresh_core::BufferId,
             ratatui::layout::Rect,
@@ -5615,7 +5510,7 @@ impl Editor {
                     &mut scratch_pending_cursor,
                     preview_draw_tab_bar,
                 );
-                preview_split_areas = result.0;
+                preview_pane_rects = result.1;
             });
 
         // Resize the previewed window's terminal PTYs to fit the
@@ -5630,8 +5525,7 @@ impl Editor {
         // `Window::resize_visible_terminals` will resize back up to
         // the dive view's split rect.
         if let Some(win) = self.windows.get_mut(&sid) {
-            for (_split_id, buffer_id, content_rect, _scrollbar_rect, _, _) in &preview_split_areas
-            {
+            for (_split_id, buffer_id, content_rect, _scrollbar_rect, _, _) in &preview_pane_rects {
                 if win.terminal_buffers.contains_key(buffer_id)
                     && content_rect.width > 0
                     && content_rect.height > 0
@@ -5648,7 +5542,7 @@ impl Editor {
         // preview read-only: no blinking cursor over a session
         // the user isn't currently driving.
         if let Some(win) = self.windows.get(&sid) {
-            win.render_terminal_splits(buf, &preview_split_areas, false);
+            win.render_terminal_splits(buf, &preview_pane_rects, false);
         }
     }
 
@@ -6646,9 +6540,7 @@ impl Editor {
                 // it; the thumb's extent is the recorded read of the scroll
                 // state, which is what the record is for.
                 let bar = self.pane_vscroll_rect(*split_id);
-                for (sid, _buffer_id, _content_rect, _bar, thumb_start, thumb_end) in
-                    &self.active_layout().split_areas
-                {
+                for (sid, _buffer_id, thumb_start, thumb_end) in &self.active_layout().split_areas {
                     if let (true, Some(scrollbar_rect)) = (sid == split_id, bar) {
                         let hover_style = Style::default().bg(self
                             .theme
@@ -6673,8 +6565,7 @@ impl Editor {
             Some(HoverTarget::ScrollbarTrack(split_id, hovered_row)) => {
                 // Highlight only the hovered cell on the scrollbar track.
                 let bar = self.pane_vscroll_rect(*split_id);
-                for (sid, _buffer_id, _content_rect, _bar, _thumb_start, _thumb_end) in
-                    &self.active_layout().split_areas
+                for (sid, _buffer_id, _thumb_start, _thumb_end) in &self.active_layout().split_areas
                 {
                     if let (true, Some(scrollbar_rect)) = (sid == split_id, bar) {
                         let track_hover_style = Style::default().bg(self
