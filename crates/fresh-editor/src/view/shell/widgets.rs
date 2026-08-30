@@ -137,9 +137,17 @@ pub fn covered(spec: &WidgetSpec) -> bool {
         WidgetSpec::Text { rows, .. } => *rows <= 1,
         // `Dropdown` carries a `scroll_offset` of its own: its open pop-over
         // windows its options.
-        WidgetSpec::Tree { .. } | WidgetSpec::DualList { .. } | WidgetSpec::Dropdown { .. } => {
-            false
-        }
+        // A tree is a *flat, controlled* list of pre-rendered rows — its
+        // expansion is the plugin's — so it crosses on `widgets::List` too.
+        // Multi-row items (`item_height > 1`, `card_borders`) have not: their
+        // rows are subtrees with their own selection marking, which is the
+        // card substitution.
+        WidgetSpec::Tree {
+            item_height,
+            card_borders,
+            ..
+        } => *item_height <= 1 && !card_borders,
+        WidgetSpec::DualList { .. } | WidgetSpec::Dropdown { .. } => false,
 
         // `WindowEmbed` is a `Host` leaf by rule and never crosses.
         _ => false,
@@ -619,6 +627,169 @@ pub fn node(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>) -> Node<UiMsg> {
             let list = match sel >= 0 {
                 true => list.selected(sel as usize),
                 false => list,
+            };
+            let node = fresh_ui::ComponentExt::node(list);
+            match visible_rows {
+                Some(r) => node.h(Sizing::Cells(*r as u16)),
+                None => node.flex(1),
+            }
+        }
+        // **A tree is a flat list whose expansion belongs to the plugin.**
+        //
+        // `WidgetSpec::Tree` is not the library's `Tree`: it arrives already
+        // flattened, each node carrying a `depth` and a `has_children` flag,
+        // and `expanded_keys` comes down in the spec and goes back through
+        // `WidgetMutation`. The library's `Tree` builds its own nesting and
+        // owns `expanded` in element state, so it would fight the plugin for
+        // the one fact the plugin is authoritative for. What this is, is a
+        // controlled list of pre-rendered rows — `widgets::List`, again.
+        //
+        // Which nodes are *visible* is the plugin's `expanded_keys` applied to
+        // the flat array, and `collect_visible_tree_indices` is that rule.
+        // Reused rather than restated: an ancestor-open walk written twice is
+        // two answers to "what is on screen".
+        //
+        // Each row carries up to three hits — the disclosure glyph expands,
+        // the checkbox toggles, the rest selects — which is why a row had to
+        // stop being one target.
+        WidgetSpec::Tree {
+            nodes,
+            item_keys,
+            selected_index,
+            visible_rows,
+            key,
+            expanded_keys,
+            checkable,
+            indent_cols,
+            item_height,
+            card_borders,
+        } if *item_height <= 1 && !card_borders => {
+            use std::rc::Rc;
+            let expanded: std::collections::HashSet<String> =
+                expanded_keys.iter().cloned().collect();
+            let visible = Rc::new(crate::widgets::collect_visible_tree_indices(
+                nodes, item_keys, &expanded,
+            ));
+            let nodes = Rc::new(nodes.clone());
+            let keys = Rc::new(item_keys.clone());
+            let tree_key = key.clone().unwrap_or_default();
+            let (slot, checkable, indent) = (cx.slot, *checkable, *indent_cols);
+            let sel_abs = *selected_index;
+            let n = visible.len();
+
+            let row_at = {
+                let (nodes, keys, visible) = (nodes.clone(), keys.clone(), visible.clone());
+                let tree_key = tree_key.clone();
+                move |i: usize| -> Node<UiMsg> {
+                    let abs = visible[i];
+                    let mut node = nodes[abs].clone();
+                    node.text.normalize_widths();
+                    let item_key = keys.get(abs).cloned().unwrap_or_default();
+                    let open =
+                        node.has_children && !item_key.is_empty() && expanded.contains(&item_key);
+                    let r = crate::widgets::render_tree_row(
+                        &node,
+                        open,
+                        checkable,
+                        1,
+                        false,
+                        width as u32,
+                        indent,
+                    );
+                    let end = r.entry.text.len();
+                    let hit = |kind: &'static str,
+                               a: usize,
+                               b: usize,
+                               payload: serde_json::Value,
+                               row_target: bool| {
+                        (
+                            (a, b),
+                            crate::widgets::HitArea {
+                                row_target,
+                                context_click: row_target,
+                                overlay: false,
+                                widget_key: tree_key.clone(),
+                                widget_kind: "tree",
+                                buffer_row: i as u32,
+                                byte_start: a,
+                                byte_end: b,
+                                payload,
+                                event_type: kind,
+                                owner_key: None,
+                            },
+                        )
+                    };
+                    // Order is the collector's: the narrow targets are named
+                    // before the row-wide one, so a byte inside the glyph or
+                    // the box belongs to it rather than to `select`.
+                    let mut hits = Vec::new();
+                    if let Some((a, b)) = r.disclosure_range {
+                        hits.push(hit(
+                            "expand",
+                            a,
+                            b,
+                            serde_json::json!({
+                                "index": abs, "key": item_key, "expanded": !open,
+                            }),
+                            false,
+                        ));
+                    }
+                    if let Some((a, b)) = r.checkbox_range {
+                        hits.push(hit(
+                            "toggle",
+                            a,
+                            b,
+                            serde_json::json!({
+                                "index": abs,
+                                "key": item_key,
+                                "checked": !node.checked.unwrap_or(false),
+                            }),
+                            false,
+                        ));
+                    }
+                    hits.push(hit(
+                        "select",
+                        0,
+                        end,
+                        serde_json::json!({ "index": abs, "key": item_key }),
+                        true,
+                    ));
+                    entry_row_hits(&r.entry, slot, &hits)
+                }
+            };
+
+            let list = fresh_ui::List::windowed(
+                n,
+                {
+                    let (keys, visible) = (keys.clone(), visible.clone());
+                    move |i| {
+                        fresh_ui::Key::Str(
+                            keys.get(visible[i])
+                                .cloned()
+                                .unwrap_or_else(|| i.to_string())
+                                .into(),
+                        )
+                    }
+                },
+                row_at,
+            )
+            .focusable(false)
+            .scrollbar()
+            .row_theme(|_, st| match st {
+                fresh_ui::widgets::RowState::Selected
+                | fresh_ui::widgets::RowState::SelectedBlur => Ink::new(
+                    Paint::key("ui.popup_selection_fg"),
+                    Paint::key("ui.popup_selection_bg"),
+                )
+                .to_string(),
+                _ => Ink::new(Paint::key(BASE_FG), Paint::key(BASE_BG)).to_string(),
+            });
+            // The spec's selection is an index into the *whole* array; the
+            // list's is into the visible window, which is the same array with
+            // the collapsed subtrees taken out.
+            let list = match visible.iter().position(|&a| a as i32 == sel_abs) {
+                Some(i) => list.selected(i),
+                None => list,
             };
             let node = fresh_ui::ComponentExt::node(list);
             match visible_rows {
@@ -1866,6 +2037,115 @@ mod tests {
         };
         assert!(covered(&field(1)));
         assert!(!covered(&field(4)));
+    }
+
+    fn tree_node(text: &str, depth: u32, has_children: bool) -> fresh_core::api::TreeNode {
+        fresh_core::api::TreeNode {
+            text: raw(text),
+            depth,
+            has_children,
+            checked: None,
+            extra_lines: Vec::new(),
+        }
+    }
+
+    fn a_tree(expanded: &[&str], selected: i32) -> WidgetSpec {
+        WidgetSpec::Tree {
+            nodes: vec![
+                tree_node("root", 0, true),
+                tree_node("child", 1, false),
+                tree_node("sibling", 0, false),
+            ],
+            item_keys: vec!["r".into(), "c".into(), "s".into()],
+            selected_index: selected,
+            visible_rows: Some(5),
+            key: Some("tr".into()),
+            expanded_keys: expanded.iter().map(|s| s.to_string()).collect(),
+            checkable: false,
+            item_height: 1,
+            card_borders: false,
+            indent_cols: 2,
+        }
+    }
+
+    /// **Expansion stays the plugin's.** A collapsed root hides its child; an
+    /// expanded one shows it. Nothing in the tree owns that — `expanded_keys`
+    /// arrives in the spec, and `collect_visible_tree_indices` is the same
+    /// rule the runtime applies, reused rather than restated.
+    #[test]
+    fn a_trees_visible_rows_are_the_plugins_expansion() {
+        let collapsed = tree_text(&a_tree(&[], -1), &cx());
+        assert!(
+            !collapsed.iter().any(|r| r.contains("child")),
+            "a collapsed root hides its child, got {collapsed:?}"
+        );
+        assert!(collapsed.iter().any(|r| r.contains("sibling")));
+
+        let open = tree_text(&a_tree(&["r"], -1), &cx());
+        assert!(
+            open.iter().any(|r| r.contains("child")),
+            "an expanded one shows it, got {open:?}"
+        );
+    }
+
+    /// A tree row's three targets, over the ranges the runtime named: the
+    /// disclosure glyph expands, the rest selects.
+    #[test]
+    fn a_tree_rows_glyph_expands_and_its_label_selects() {
+        let spec = a_tree(&[], -1);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let at = |ui: &mut Ui<UiMsg>, x: i32| -> Option<(&'static str, serde_json::Value)> {
+            ui.dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(x, 0),
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs
+            .into_iter()
+            .find_map(|m| match m {
+                UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => {
+                    Some((hit.event_type, hit.payload.clone()))
+                }
+                _ => None,
+            })
+        };
+        // The runtime's own answer for where the glyph is.
+        let r = crate::widgets::render_tree_row(
+            &tree_node("root", 0, true),
+            false,
+            false,
+            1,
+            false,
+            WIDTH as u32,
+            2,
+        );
+        let (gs, _) = r.disclosure_range.expect("a branch has a glyph");
+        let col = r.entry.text[..gs].chars().count() as i32;
+        let (kind, payload) = at(&mut ui, col).expect("the glyph");
+        assert_eq!(kind, "expand");
+        assert_eq!(payload["key"], "r");
+        assert_eq!(payload["expanded"], true, "pressing it opens the node");
+
+        let end = r.entry.text.chars().count() as i32;
+        let (kind, payload) = at(&mut ui, end - 1).expect("the label");
+        assert_eq!(kind, "select");
+        assert_eq!(payload["index"], 0);
+    }
+
+    /// The selection is an index into the *whole* array, and the list's is
+    /// into the visible window — the same array with the collapsed subtrees
+    /// taken out. Selecting `sibling` (absolute 2) must land on it whether or
+    /// not the root is open.
+    #[test]
+    fn a_trees_selection_survives_the_collapse_of_what_is_above_it() {
+        for (expanded, label) in [(&[][..], "collapsed"), (&["r"][..], "expanded")] {
+            let shown = tree_text(&a_tree(expanded, 2), &cx());
+            assert!(
+                shown.iter().any(|r| r.contains("sibling")),
+                "{label}: the selected node is on screen, got {shown:?}"
+            );
+        }
     }
 
     /// **A row is not one target.** A tree row has three — the disclosure
