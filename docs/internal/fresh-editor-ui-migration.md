@@ -262,56 +262,60 @@ Everything else in this document is gated on one of these two. That is the
 honest shape of what is left: the ungated items are done, and the remainder is
 two subsystem replacements plus the deletions they unblock.
 
-#### B.1 in full: what is left of the settings dialog, and the one decision in it
+#### B.1 in full: what is left of the settings dialog
 
-**Crossed so far**: the box, the search row, the wide footer, five of the seven
-dialogs, and the **category tree** — which took five families of recorded
-rectangle with it (`categories`, `sections`, `category_disclosures`,
-`categories_panel_area`, `categories_scrollbar_area`), the wheel arm that
-routed through one of them, and `categories_scroll`'s double life as both the
-window and the page. The body band's three columns
-(`[Length(24), Length(1), Min(40)]`) are laid out once now and the painter
-*reads* the panel's rectangle back.
+**Crossed**: the box, the search row, both footers, five of the seven dialogs,
+the **category tree** — which took five families of recorded rectangle with it
+(`categories`, `sections`, `category_disclosures`, `categories_panel_area`,
+`categories_scrollbar_area`), the wheel arm that routed through one of them,
+and `categories_scroll`'s double life as both the window and the page — the
+page header with its `[Clear …]`, and now the **body**.
 
-**Left**: the settings body itself, the entry-dialog stack, and the narrow
-layout's horizontal category strip and seven-row footer.
+The body was the bulk, and what went with it was the second layout tree:
 
-The body is the piece the plan calls the bulk, and its shape is settled:
+* `SettingItem::layout_box` planned each item as five row counts and five
+  `_y()` accessors; `ScrollablePanel::update_content_height` walked the same
+  heights again to bound the scroll; `item_y_offset` walked them a third time
+  to find where a card started; and `render_setting_item_pure` clipped every
+  band against a `BandViewport` as it drew. A `col` of cards in a `viewport`
+  is one walk — the column measures each card once, and the window is a thing
+  that scrolls rather than an offset every band subtracts for itself.
+* Every `hit_rect(&out, "<kind>", "<event>", …)` call filed a
+  `ControlLayoutInfo` rectangle so a later click could be compared against
+  what had been drawn. The control was already a `WidgetSpec`, so
+  `shell::widgets::node` describes it and its own hits answer its presses;
+  `Editor::settings_widget_hit` is that translation table with the geometry
+  taken out of it, and it ends at `dispatch_settings_hit` — which is what the
+  **web** calls by name, so neither path moved.
+* **The window is the tree's and the keyboard addresses it by handle.**
+  `SettingsState::body` is read back off the `viewport` after each layout;
+  `Anchor::reveal_key`, `top_key` and `scroll_to` are what the state's own
+  scroll methods became. That is what removed `ensure_focused_visible`'s copy
+  of every height and `topmost_visible_item_index`'s walk of them.
 
-* `render_settings_panel` walks `page.items` through a `ScrollablePanel` with a
-  per-item `ItemBox` plan — five row counts and five `_y()` accessors computed
-  by hand — plus a `skip_top` for the item hanging off the top edge and a
-  `BandViewport` to clip each band against. `ItemBox` **is** the second layout
-  tree goal 5 forbids; a `col()` is the same thing measured once, by the layout
-  that also paints it.
-* An item is: an optional section heading, a bordered card, a three-column
-  gutter (`>` for the cursor, `●` for a pending change, a space), the control,
-  and the wrapped description under it with its config layer appended. The
-  highlight sits on the label row only, and the `(Inherited)` badge or
-  `[Inherit]` button is right-aligned on that same row — **one row tall**,
-  which is the rule the panel's title strip cost us.
-* **The control is already a `WidgetSpec`.** `widget_map` maps a
-  `SettingControl` onto one and `render_control_via_widget` renders it through
-  `render_spec`, so it becomes `shell::widgets::node` — the adapter a plugin's
-  field goes through. Its press comes back as the runtime's own hit, and
-  `shell_host` turns that back into the `SettingsHit` the dialog's dispatch
-  takes — which is also what the **web** calls by name, so neither path moves.
-  The translation table already exists in the code: every
-  `hit_rect(&out, "<kind>", "<event>", …)` call paired with the
-  `ControlLayoutInfo` field it fills and the `hit_test` arm that reads it.
+**Two decisions it made, both stated in the commit that made them.**
 
-**And one decision it cannot dodge: the open dropdown.** The settings dialog
-draws an open `Dropdown`'s options **inline**, reserving rows for them through
-`SettingControl::height`; the widget runtime surfaces the same options as a
-floating screen-level pop-over and discards the inline rows —
-`render_control`'s own comment records the bug that came of mixing the two
-(#2765: the dropdown opened to an empty box). `shell::widgets::node` describes
-the pop-over. So describing a settings dropdown *changes* it: the list floats
-over the cards instead of pushing the card taller, which is what a plugin
-panel's dropdown and the web's already do. That is almost certainly the better
-answer — one dropdown, everywhere — but it is a **behaviour change with
-e2e tests on the current one**, and it belongs in the commit that makes it,
-stated, rather than arriving as a diff nobody chose.
+* *The open dropdown floats.* The painter drew an open `Dropdown`'s options
+  inline, reserving rows through `SettingControl::height` and growing the
+  card; the widget adapter surfaces the same list as the screen-level pop-over
+  every other dropdown in the editor opens — a plugin panel's, the web's. One
+  dropdown everywhere is the answer, and
+  `test_settings_dropdown_button_click_opens_options` asserts the new form.
+* *The selection band is the whole control's, not the label row's.* The
+  painter drew a highlighted row and painted the control's cells over it, and
+  the cells whose background was unset let the band through. A description has
+  no "already": every run carries both halves, so the band is the background
+  the control's rows are built from (`Ctx::surface`). For a scalar that is the
+  same row it always was; for a multi-row control the band now covers the
+  control rather than its first line. The description under it stays on the
+  dialog's own ground, which is what the original comment was protecting.
+
+**Left**: the entry-dialog stack (~2,431 lines), and the narrow layout's
+horizontal category strip. Both are painted, and the body waits for neither —
+but while the entry dialog is up the tree stands down entirely (`Chrome::items`
+is `None`), because the tree folds *after* every painter and a described body
+would be drawn over the dialog covering it. The band behind it is blank for
+now, exactly as the category tree's has been since it crossed.
 
 #### C.1 in full: the nineteen variants, and where each one lands
 
@@ -698,6 +702,40 @@ strip covering the whole box). **A spacer flexes along the axis it sits on**;
 say the axis (`.w(Sizing::Flex(1))` or `.h(...)`) rather than reaching for
 `flex`, and where the axis is not known statically, carry it — which is what
 `widgets::Site` does for the adapter.
+
+**Flex again, but the other way round: inside a `viewport`, "the rest" is
+unbounded.** A window measures its content against an unbounded main axis, so
+a `Sizing::Flex` filler in a column inside one does not take the remaining
+rows — it takes every row there could be. The settings card's indicator gutter
+carried a flexible filler under its one painted row, which is the ordinary way
+to say "and nothing below"; inside the body's `viewport` it asked for
+`u16::MAX` rows and the first thing to add a coordinate to it overflowed.
+**Nothing under a window flexes on the scrolling axis**: a card's height is
+what its content measures, and a column with nothing to put in a row simply
+has no row.
+
+**A band the painter reads back has to be the band the painter would have
+computed — including the chrome it is measured from.** The settings body band
+was a row too tall and a column too wide for as long as the painter drew the
+body: it never included the blank row under the search bar or the box's own
+border, and nothing depended on it, because everything inside the band came
+from the same tree. The moment the tree *drew* the body, the same rectangle
+became the painter's `content_area` — and the panel sat one column left, on
+the divider between the two columns. **A rectangle handed back across the seam
+is an interface**, and it is only checked where the two sides meet.
+
+**And which layout is in force is a fact, not an inference from which parts
+are described.** The wide settings layout was being told apart from the narrow
+one by "are the categories described" — true until a search takes the tree
+away without making the box narrow, at which point the wide layout's search
+results were laid out at the box's left edge. `Chrome::wide` says it.
+
+**A schema's newlines are for the file, not for the page.** The painter's
+`wrap_text` split on whitespace and dropped them; `fresh-ui`'s wrapping keeps
+them, correctly, as hard breaks. Both are right — for different text. Prose
+that arrives already broken for the sake of the source file it lives in is
+reflowed (`split_whitespace().join(" ")`) before it is wrapped, or every
+paragraph costs a row on a page whose height is why it scrolls at all.
 
 **And a deletion is checked with `--all-features`, because the web is a
 second caller.** Every recorded rectangle this migration removes has *two*
