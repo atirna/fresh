@@ -223,6 +223,28 @@ provided at is the scope they belong to.
 | C.5b | **The dock is editor-global UI built from `Editor.windows`, not from the active window.** Its content is the orchestrator's `WidgetSpec`; its column, grip and blur observer are already nodes. | Its content lands like any other panel (C.1), mounted *outside* the window key per 0.5. Its own two remainders go with it: `chrome::Dock::on_layer_key` (A.2) and the scrollbar-reveal hover, which reads zones the plugin publishes from inside the panel. | Building its description from `active_window()`. `shell_frame` does that for nearly everything else, and the dock is the one surface for which it is wrong. |
 | ~~C.6~~ **Done.** | The floating panel's frame — border, title, `[×]`, placement. | `view::shell::panel`: layout places the box, the fold paints it, the painter reads its rectangle and its content rectangle back with no fallback arithmetic. `[×]` is a node that stops its own press, so `close_button_rect` — a rectangle the painter filed for a mouse arm to compare against — is gone from the state, the arm and the web projection. **The scrim did not move**, and the reason is paint order: the dock's own panel is painted after the tree's overlay band, so a `Scrim` here would be overpainted and the frame would read half-dimmed. It goes with C.5b. | — |
 
+#### What C and B actually weigh
+
+Stated here because the plan describes both as a mapping and a form, and the
+numbers change how they should be scheduled — neither is a wave that lands in
+one change.
+
+| | Lines | What it is |
+|---|---|---|
+| **C.1–C.4** | **~17,200** | `crates/fresh-editor/src/widgets/`: `render.rs` alone is 7,832, `kinds/*` another 7,000, plus `registry`, `actions`, `layout_box`, `text_click`. This is a complete widget runtime — layout, paint, hit-testing, focus and event routing — and C.1 replaces it rather than adapting it. |
+| **B.1–B.3** | **~24,000** | Settings (`view/settings/`, ~20k with `render.rs` at 4,040 and `widget_map.rs` at 1,303), the keybinding editor, the calibration wizard. |
+
+**Why this matters for sequencing.** Both have to land whole. A panel is
+either described as a `Node` or painted by the runtime; there is no frame in
+which half of it is each, and a partial C.1 is precisely the "second widget
+runtime host-side" that C.1's own *Avoid* column forbids. So neither can be
+sliced by variant — they slice by *surface*: one panel slot, or one settings
+page, migrated end to end with the old path still serving the rest.
+
+Everything else in this document is gated on one of these two. That is the
+honest shape of what is left: the ungated items are done, and the remainder is
+two subsystem replacements plus the deletions they unblock.
+
 #### C.1 in full: the nineteen variants, and where each one lands
 
 Written down because C.1 is the largest remaining item and every other
