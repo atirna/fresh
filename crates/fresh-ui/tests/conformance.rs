@@ -715,6 +715,59 @@ fn a_keyboard_modal_layer_swallows_what_it_declines_and_lets_the_pointer_by() {
     assert_eq!(pressed.get(), 1, "the pointer passes through");
 }
 
+/// **A layer that steps out of the way is out of the way.** A modal layer
+/// owns the keys it declines — but a `passing_through` dismissal is the layer
+/// saying "close me, and let the input reach what it was aimed at", so the
+/// modal claim must not put it back in front of the key it just left.
+///
+/// The editor's completion list is the shape: Enter means "close this and
+/// insert a newline", and the newline is the buffer's.
+#[test]
+fn a_pass_through_dismissal_beats_the_modal_claim() {
+    let dismiss_on_any = fresh_ui::Dismiss {
+        any_key: true,
+        ..fresh_ui::Dismiss::default()
+    };
+    let mk = move || -> Node<()> {
+        col().child(
+            layer()
+                .modality(Modality::Keyboard)
+                .dismiss(dismiss_on_any.passing_through())
+                .child(focusable(text("list")).autofocus()),
+        )
+    };
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(mk(), FRAME);
+    assert!(
+        !ui.dispatch(Input::Key(KeyPress {
+            code: KeyCode::Enter,
+            mods: Mods::NONE,
+        }))
+        .claimed,
+        "the layer dismissed itself and said the key goes on"
+    );
+
+    // Without `passing_through` the dismissal spends the key, as it always
+    // has: the layer *was* in the way, and getting rid of it is the gesture.
+    let mk2 = move || -> Node<()> {
+        col().child(
+            layer()
+                .modality(Modality::Keyboard)
+                .dismiss(dismiss_on_any)
+                .child(focusable(text("pane")).autofocus()),
+        )
+    };
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(mk2(), FRAME);
+    assert!(
+        ui.dispatch(Input::Key(KeyPress {
+            code: KeyCode::Enter,
+            mods: Mods::NONE,
+        }))
+        .claimed
+    );
+}
+
 /// The other half of the same rule: without modality an unclaimed key falls
 /// through, and the host behind the tree is told so.
 #[test]

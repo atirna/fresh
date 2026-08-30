@@ -553,8 +553,18 @@ impl<M: 'static> Ui<M> {
         // A key that dismisses a layer is answered by that layer: Escape
         // closing a menu is the menu's reply, not a key that also belongs to
         // whatever is behind it.
-        if self.dismiss_for_key(k, out) {
+        let (dismissed, spent) = self.dismiss_for_key(k, out);
+        if spent {
             return true;
+        }
+        // **A layer that dismissed itself passing through is out of the way.**
+        // It said so: `Dismiss::passing_through` is "close, and let the input
+        // reach what it was aimed at". A completion list is the shape — Enter
+        // there means "close this and insert a newline", and the newline is
+        // the user's, not the popup's — so the modal claim below must not put
+        // the layer back in front of a key it has just stepped out of.
+        if dismissed {
+            return false;
         }
         // **A modal layer owns the keyboard, including the keys it declines.**
         // Nothing above acted on this one, and focus is inside a layer that
