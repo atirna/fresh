@@ -46,19 +46,25 @@
 //! thousands of lines to get the same cells. What moved is where the row is,
 //! what a press on it means, and who owns the window it sits in.
 //!
-//! Two calls into the runtime remain, and both render a *nested spec* rather
-//! than routing a widget: a card list asks it for each item's subtree, and a
-//! multi-line field asks it for the whole document the viewport windows. Those
-//! are the last of it on this path.
+//! Two calls into the collector remain, and both render a *nested spec*
+//! rather than routing a widget: a card list asks it for each item's subtree,
+//! and a markdown document view asks it for the whole reflowed document the
+//! viewport windows. Each is named at its arm, with what blocks it.
 //!
-//! `Dropdown` and `Text` have already left it (Phase 2.2): each is built from
-//! its own spec, calling the runtime's *formatter* through the pure functions
-//! `kinds::dropdown::{resolve, anchor_col, popup_of}` and
-//! `kinds::text::{resolve, single_line, completion_popup}`, which the
-//! collector calls too — one copy of each rule rather than two that can
-//! drift. A multi-line `Text` is the exception still: its rows come from
-//! `render_collected` because a text *area* is a wrapping engine, and it is
-//! windowed here rather than described.
+//! `Dropdown` and `Text` have left it (Phase 2.2): each is built from its own
+//! spec, calling the runtime's *formatter* through the pure functions
+//! `kinds::dropdown::{resolve, anchor_col, popup_of}`,
+//! `kinds::text::{resolve, single_line, completion_popup}` and
+//! `render::{text_area_geom, text_area_row}`, which the collector calls too —
+//! one copy of each rule rather than two that can drift.
+//!
+//! **A plain text area does not wrap**, which is what let the multi-line field
+//! cross: `render_text_area` splits the value on `\n` and pads or
+//! tail-truncates each line to the field width, so a row is a function of one
+//! line and the field's window can format the rows it draws and no others.
+//! The wrapping engine is the *markdown* path only (`wrap_styled_lines` over a
+//! parsed document, with a shadow editor over the result), and that is the one
+//! multi-line shape still going through the collector.
 
 use fresh_core::api::{OverlayColorSpec, OverlayOptions, WidgetSpec};
 use fresh_core::text_property::TextPropertyEntry;
@@ -1090,6 +1096,45 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
         // list overflowed, so adding one session reflowed all of them; a
         // stable gutter is the same column, always, which is what that
         // reflow was an accident of.
+        //
+        // **This arm runs `render_collected` once per card, on every frame,
+        // and that is the last of it on this path besides the markdown
+        // document view.** It is not blocked by a missing arm: `node_body` is
+        // total over every variant but `WindowEmbed`, and the only cards a
+        // bundled plugin emits — `orchestrator.ts`'s session pills, which its
+        // *picker dialog* uses (the dock's list is a card `Tree`, which does
+        // not come through here) — are a `LabeledSection` around a `Col` of
+        // two `Row`s, each a `Raw`, a flexible `Spacer` and a `Raw`, and a
+        // third `Raw` under them. Every one of those has an arm above, and
+        // `LabeledSection` is a real box there rather than text. Two named
+        // things block it, and both are about the *band* rather than about
+        // the kinds in it:
+        //
+        // 1. **`List::row_rows` wants a uniform band height as a number
+        //    before the row builder runs**, and it is right to: that is what
+        //    makes a window onto a million items possible without measuring
+        //    any of them. From nodes there is no height until layout, and the
+        //    only reason a number exists today is that every card — including
+        //    the ones off screen — was formatted into rows so the tallest
+        //    could be counted. Writing a row-count predictor over the spec
+        //    would be a second copy of the container layout rules, which is
+        //    the duplication this migration exists to remove. So this is a
+        //    **library gap**: `fresh-ui`'s windowed list has no form whose
+        //    items are measured by layout. `Anchor::reveal_key` already
+        //    exists for exactly that case — "content whose items differ in
+        //    height", which `reveal` cannot answer — so the piece missing is
+        //    the window itself, not the reveal.
+        //
+        // 2. **`render::mark_list_card_selected` is defined over rendered
+        //    cells**: it rewrites `╭─│` into `┏━┃`, bolds the whole entry and
+        //    tints the leading and trailing bars, because "no background band
+        //    — it reads garish over a multi-row card". As a description that
+        //    has to become "pass `selected` down, and let `LabeledSection`
+        //    pick a heavy border and bold its subtree", which is a redesign
+        //    of the marker rather than a translation of it — and
+        //    `a_selected_card_is_marked_in_its_own_glyphs` pins the *glyphs*
+        //    (`╭` unselected, `┏` selected), not merely the fact that a card
+        //    is marked, so that test changes with the marker.
         WidgetSpec::List {
             item_specs,
             item_keys,
@@ -1554,20 +1599,188 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                 None => node.flex(1),
             }
         }
-        // **A multi-line field's window is the tree's.**
+        // **A multi-line field's rows are built one at a time, from lines.**
         //
         // The collector windows the document itself, reports the offset on a
         // `LayoutBox`, and the panel's scrollbar pass draws a bar over the
         // rightmost column from it — the last kind whose bar the painter drew.
-        // So the collector is asked for the *whole* document instead: its
-        // `rows` is the window, and handing it one as tall as the text makes
-        // it emit every line and clamp its own scroll to zero. The window is
-        // then a `viewport` of the row budget the spec asked for, with the
-        // library's own bar, and the caret is what it reveals.
+        // The window is the tree's instead: a `List::windowed` over one row
+        // per line, with the library's own bar, and the caret is what it
+        // reveals.
         //
-        // A label stays out of it. The collector emits it as row zero and
-        // windows only the text under it, so scrolling it away would be a
-        // different field.
+        // **What made that cheap is that a text area does not wrap.**
+        // `render_text_area` splits the value on `\n` and pads or truncates
+        // each line to the field width, so the row for line `i` is a function
+        // of that line and of five facts resolved once for the whole value —
+        // width, focus, the selection in line coordinates, the caret's line,
+        // and the placeholder. Those are `render::text_area_geom`, and
+        // `render::text_area_row` is the row; the collector is built from the
+        // same two, so there is one answer per row rather than two that can
+        // drift. This arm therefore formats the rows the window asks for and
+        // no others, where it used to ask the collector for the whole
+        // document on every frame so that the list could window the answer.
+        //
+        // A label stays out of the window: it is its own row above the
+        // viewport, which is where the collector put it too — it emitted the
+        // label as row zero and windowed only the text under it, and scrolling
+        // it away would be a different field.
+        WidgetSpec::Text {
+            rows,
+            label,
+            value,
+            key,
+            cursor_byte,
+            focused,
+            placeholder,
+            field_width,
+            full_width,
+            block_caret,
+            sel_start,
+            sel_end,
+            markdown,
+            ..
+        } if *rows > 1 && !*markdown => {
+            use crate::widgets::kinds::text as tx;
+            use crate::widgets::render as fmt;
+            let k = key.as_deref().filter(|k| !k.is_empty());
+            // A keyed widget takes focus from the host's resolved focus key;
+            // an unkeyed one falls back to the spec's initial-only hint. Same
+            // rule the collector applies, and `resolve` is the same call it
+            // makes for the value and the caret. Its stored window is
+            // deliberately not read: the viewport owns that one now, and
+            // reading a fold another party wrote at another width is the
+            // disagreement 2.1 exists to end.
+            let is_focused = match k {
+                Some(_) => cx.is_focused(k),
+                None => *focused,
+            };
+            let st = tx::resolve(value, *cursor_byte, true, k, cx.states);
+            let doc = std::rc::Rc::new(st.editor.value());
+            let caret_byte = match is_focused {
+                true => st.editor.flat_cursor_byte() as i32,
+                false => -1,
+            };
+            let geom = std::rc::Rc::new(fmt::text_area_geom(
+                &doc,
+                caret_byte,
+                tx::selection_of(&st.editor, is_focused, (*sel_start, *sel_end)),
+                is_focused,
+                placeholder.as_deref(),
+                // A multi-line field takes the plugin's `field_width`
+                // verbatim — the rows fill the panel width themselves — and
+                // its label is its own row, so neither the form-column rule
+                // nor the gutter reserve applies. Called rather than restated
+                // for the same reason as everything else here.
+                tx::effective_text_field_width(
+                    *full_width,
+                    true,
+                    label,
+                    width as u32,
+                    *field_width,
+                    cx.marker_gutter,
+                ),
+                width as u32,
+            ));
+            // **The window is padded out, because the editing region is a
+            // block.** A field asked for six rows and given a two-line
+            // document draws four blank rows under them — `text_area_row`
+            // answers for a line past the end with a padded blank, which is
+            // what keeps the focused input-bg rectangle rectangular rather
+            // than the shape of the text in it.
+            let n = geom.rows().max(*rows as usize);
+            let head = usize::from(!label.is_empty());
+            // "Selected" here means "the line the caret is on", which is what
+            // the list reveals when it moves. That is the whole of the
+            // auto-clamp the collector did by hand with a stored offset.
+            let sel = is_focused.then(|| geom.cursor_line());
+            let list = fresh_ui::List::windowed(n, |i| fresh_ui::Key::Str(i.to_string().into()), {
+                let (doc, geom) = (doc.clone(), geom.clone());
+                let widget_key = k.unwrap_or("").to_string();
+                let (slot, surface) = (cx.slot, cx.surface.clone());
+                let block_caret = *block_caret;
+                move |i| {
+                    let (mut e, caret) = fmt::text_area_row(&doc, &geom, i);
+                    // A modal surface paints the caret as a reversed cell in
+                    // the row itself — there is no hardware cursor over a
+                    // modal — and the tree's own marker still goes where
+                    // `row_pieces` puts it, which is what a non-modal
+                    // surface's cursor follows.
+                    if block_caret {
+                        if let Some(b) = caret {
+                            tx::push_block_caret_overlay(&mut e, b);
+                        }
+                    }
+                    // Clicking any row of the editing region focuses the
+                    // field — the collector's one hit per row, stated where
+                    // the row is.
+                    let mine: Vec<((usize, usize), crate::widgets::HitArea)> =
+                        match widget_key.is_empty() {
+                            true => Vec::new(),
+                            false => vec![(
+                                (0, e.text.len()),
+                                crate::widgets::HitArea {
+                                    row_target: false,
+                                    context_click: false,
+                                    overlay: false,
+                                    widget_key: widget_key.clone(),
+                                    widget_kind: "text",
+                                    buffer_row: (i + head) as u32,
+                                    byte_start: 0,
+                                    byte_end: e.text.len(),
+                                    payload: serde_json::json!({}),
+                                    event_type: "focus",
+                                    owner_key: None,
+                                },
+                            )],
+                        };
+                    match mine.is_empty() && caret.is_none() {
+                        true => entry_row(&e, &surface),
+                        false => row_pieces(&e, slot, &surface, &mine, caret, Fill::ToRowEnd),
+                    }
+                }
+            })
+            .focusable(false)
+            .scrollbar_when(cx.scrollbar_reveal)
+            .scrollbar_theme(bar_ink())
+            // The rows carry their own colours — a focused field paints its
+            // own background band per row — so the list's row states must not
+            // paint over them.
+            .row_theme({
+                let plain = cx.surface.to_string();
+                move |_, _| plain.clone()
+            });
+            let list = list.selection(sel);
+            let body = keyed(fresh_ui::ComponentExt::node(list), spec_state_key(spec))
+                .h(Sizing::Cells(*rows as u16));
+            match head {
+                0 => body,
+                _ => col().children([entry_row(&fmt::text_area_label(label), &cx.surface), body]),
+            }
+        }
+        // **The one text field still built by the collector: a markdown
+        // document view.**
+        //
+        // `markdown: true` with more than one row is a different renderer —
+        // `kinds::text::render_markdown_text_area` — and it is the wrapping
+        // engine the plain text area is not: it parses the source, reflows it
+        // to the panel width, and keeps a *shadow* editor over the reflowed
+        // text so the caret, the selection and Copy address rendered lines
+        // rather than source lines. A row is therefore not a function of a
+        // line, which is exactly what lets the arm above format only the rows
+        // it draws; here the document has to be reflowed before anyone knows
+        // how many rows there are or which line each one came from.
+        //
+        // So the collector is asked for the whole document: its `rows` is the
+        // window, and handing it one as tall as the text makes it emit every
+        // line and clamp its own scroll to zero, after which `List::windowed`
+        // windows the result. **That is a full immediate-mode render per
+        // frame**, and it is the last one on this path. Closing it means
+        // factoring the reflow out the way `text_area_geom` was factored out
+        // of `render_text_area`, and giving the shadow editor an owner —
+        // element state, since it is a fold over the reflowed text.
+        //
+        // Among the bundled plugins only `code-tour.ts` (the step body) asks
+        // for it, so the cost is real but narrow.
         WidgetSpec::Text {
             rows,
             label,
@@ -1765,12 +1978,9 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
             ])
         }
         // **The single-line field stops going through the collector** — the
-        // second of the five to leave it, after `Dropdown`.
-        //
-        // Only this half. The multi-line arm above owns the window and the
-        // scrollbar but still asks `render_collected` for its rows, because a
-        // text *area* is a wrapping engine and wrapping is not what this phase
-        // is moving. A one-row field has nothing to wrap.
+        // second of the five to leave it, after `Dropdown`. The multi-line arm
+        // above has since followed it, so what is left on the collector is a
+        // markdown document view, which is a different renderer.
         //
         // A single-line field is one row and, when the plugin has pushed
         // candidates, a list floating under it — and neither half needed the
@@ -3206,9 +3416,59 @@ mod tests {
                     },
                 ]),
             ),
+            // **The multi-line field, in the shapes its window branches on.**
+            // Its rows no longer come from the collector at all — they are
+            // built line by line from `render::text_area_row`, which the
+            // collector also builds its own from — so this is the case where
+            // the two could drift and nothing else would say so. A document
+            // shorter than the budget is the one that pins the blank padding
+            // that keeps the editing block rectangular.
+            (
+                "a text area whose document fills it",
+                area("alpha\nbeta\ngamma", 3, ""),
+            ),
+            (
+                "a text area padded out below its document",
+                area("alpha\nbeta", 5, ""),
+            ),
+            ("a text area with a label", area("alpha\nbeta", 3, "Notes")),
+            ("an empty text area", area("", 3, "")),
+            // A document *longer* than its window is deliberately not here.
+            // The two disagree about where an unfocused window starts and
+            // always have: the collector treats a `cursor_byte` of `-1` as
+            // end-of-value and scrolls the last line into view, while the
+            // description leaves its viewport at the top — which is what a
+            // display-only document should show. `rows_of` could not compare
+            // them anyway: it reads the display list without clipping, so a
+            // windowed list's overscan rows appear in its grid.
         ];
         for (label, spec) in cases {
             assert_eq!(tree_rows(&spec), runtime_rows(&spec), "{label}");
+        }
+    }
+
+    /// A multi-line `Text` at a row budget, with no key and no state — the
+    /// spec is the whole of it, on both paths.
+    fn area(value: &str, rows: u32, label: &str) -> WidgetSpec {
+        WidgetSpec::Text {
+            value: value.into(),
+            cursor_byte: -1,
+            focused: false,
+            label: label.into(),
+            placeholder: None,
+            rows,
+            field_width: 0,
+            max_visible_chars: 0,
+            full_width: false,
+            completions: Vec::new(),
+            completions_visible_rows: 0,
+            block_caret: false,
+            sel_start: -1,
+            sel_end: -1,
+            label_width: 0,
+            read_only: false,
+            markdown: false,
+            key: None,
         }
     }
 
@@ -5668,8 +5928,9 @@ mod tests {
         assert_eq!(window, 6);
     }
 
-    /// **The label does not scroll.** The collector emits it as row zero and
-    /// windows only the text under it, so it stays outside the viewport.
+    /// **The label does not scroll.** It is its own row above the window
+    /// rather than the window's first row, which is where the collector put it
+    /// too — scrolling it away would be a different field.
     #[test]
     fn a_text_areas_label_stays_out_of_the_window() {
         let doc: String = (0..30).map(|i| format!("line {i}\n")).collect();
@@ -5686,6 +5947,34 @@ mod tests {
             ui.rect_of(ui.find_by_key(&k).expect("the area")).h,
             7,
             "the label plus the window's six"
+        );
+    }
+
+    /// **A windowed field formats the rows it draws and no others.**
+    ///
+    /// This arm used to ask the collector for the whole document — widening
+    /// the spec's `rows` to the line count so the collector would emit every
+    /// line — and then let `List::windowed` window the answer, which made a
+    /// frame cost the document's length rather than the window's, on every
+    /// frame including a terminal tick. A text area does not wrap, so a row is
+    /// a function of a line (`render::text_area_row`) and the builder formats
+    /// what it builds.
+    ///
+    /// Pinned because the two are indistinguishable in the cells: every other
+    /// test here would pass either way.
+    #[test]
+    fn a_text_area_formats_only_the_rows_in_its_window() {
+        let doc: String = (0..3000).map(|i| format!("line {i}\n")).collect();
+        crate::widgets::render::ROWS_FORMATTED.with(|c| c.set(0));
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            node(&text_area(&doc, -1, 6, ""), WIDTH, &cx()),
+            Size::new(WIDTH, 40),
+        );
+        let n = crate::widgets::render::ROWS_FORMATTED.with(|c| c.get());
+        assert!(
+            (6..200).contains(&n),
+            "a six-row window onto three thousand lines formatted {n} rows"
         );
     }
 
