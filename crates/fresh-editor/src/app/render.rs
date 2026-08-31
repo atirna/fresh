@@ -2302,7 +2302,6 @@ impl Editor {
     /// button and per-field action answers its own press.
     fn settings_entry_description(&self) -> Vec<crate::view::shell::entry::Dialog> {
         use crate::view::shell::entry as e;
-        use fresh_i18n::t;
 
         let Some(s) = self.settings_state.as_ref() else {
             return Vec::new();
@@ -2378,7 +2377,13 @@ impl Editor {
                 e::Dialog {
                     level,
                     title: match d.is_dirty() {
-                        true => format!(" {} • {} ", d.title, t!("settings.modified_suffix")),
+                        // The painter's own words, not a message key: there is
+                        // no `settings.modified_suffix` in the catalogue, so
+                        // `t!` handed the title the key itself and the dialog
+                        // read "Add Value • settings.modified_suffix". The
+                        // settings box beside it spells its own suffix out the
+                        // same way.
+                        true => format!(" {} • modified ", d.title),
                         false => format!(" {} ", d.title),
                     },
                     dirty: d.is_dirty(),
