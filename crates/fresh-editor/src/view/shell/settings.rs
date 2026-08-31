@@ -784,8 +784,12 @@ fn cat_row(r: &CatRow, selected: bool, focused: bool) -> Node<UiMsg> {
             // Four columns of indent, then the chevron column the category
             // rows spend on their arrow.
             text("     "),
+            // The dirty dot's two columns, and the icon's two. A category
+            // row's icon is a wide glyph — `⚙`, `✎` — so it occupies two
+            // cells, and a section that reserved one for it sat a column to
+            // the left of every category label instead of indented past them.
             text("  "),
-            text(" "),
+            text("  "),
             text(label.clone()),
         ]),
     }
