@@ -7439,7 +7439,6 @@ impl Editor {
         let dock_overlay_scrollbar = is_dock;
         let scrollbar_flash_active =
             scrollbar_flash_until.is_some_and(|until| self.time_source().now() < until);
-        let mut scrollbar_hover_zones: Vec<ratatui::layout::Rect> = Vec::new();
         {
             use crate::view::ui::scrollbar::{render_scrollbar, ScrollbarColors, ScrollbarState};
             let colors = ScrollbarColors::from_theme(&theme);
@@ -7482,16 +7481,6 @@ impl Editor {
                     width: 1,
                     height: sb_h,
                 };
-                // Hover zone = the list's whole visible region; hovering it
-                // anywhere reveals the bar. Recorded every draw so the
-                // mouse-move handler can re-render on enter/leave.
-                let zone = ratatui::layout::Rect {
-                    x: inner.x,
-                    y: sb_y,
-                    width: inner.width,
-                    height: sb_h,
-                };
-                scrollbar_hover_zones.push(zone);
                 let show =
                     !dock_overlay_scrollbar || scrollbar_zone_hovered || scrollbar_flash_active;
                 if !show {
@@ -7676,7 +7665,6 @@ impl Editor {
         if let Some(fwp) = self.panel_mut(slot) {
             fwp.last_inner_rect = Some(inner);
             fwp.scrollbar_tracks = scrollbar_tracks;
-            fwp.scrollbar_hover_zones = scrollbar_hover_zones;
             fwp.popup_hits = popup_hits;
             fwp.popup_rect = popup_rect;
         }
