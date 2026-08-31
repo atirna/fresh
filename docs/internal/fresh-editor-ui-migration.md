@@ -774,7 +774,8 @@ gaps a reader sees in this migration are mostly capabilities the library has
 and the editor has not adopted.
 
 **The real gaps were smaller and more specific than any of those, and every
-one of them was found by driving the editor rather than by reading it.** Each
+one of them was found by driving the editor or by a suite catching what
+driving it had missed — never by reading it.** Each
 is the same shape: a *vocabulary* the painter had that the description had no
 word for, so the thing it said was dropped in silence.
 
@@ -806,13 +807,26 @@ word for, so the thing it said was dropped in silence.
   most themes is close enough to the popup ground to look like nothing at all.
   It `debug_assert!`s now, so the next one fails a test instead of a screen.
 
-The lesson the five share: **a description is exhaustive where a painter was
+- **And `Modality` was one knob for three questions.** A layer either took
+  everything or nothing, and the surfaces whose *interior* lives host-side
+  need one channel without the others: a prompt confines the keyboard but
+  hands back what it declines (`Focus`), and a plugin panel's modal slot takes
+  the pointer while its keys go to its own layer (`Pointer`). Both failures
+  were silent in the same way as the paint ones — the prompt's would have kept
+  it on a ranked walk forever, and the panel's made the slot the focus scope,
+  found nothing focusable inside it, and dropped focus, so the dock's plugin
+  context menu stopped closing on Escape.
+
+The lesson the six share: **a description is exhaustive where a painter was
 incremental.** The painter could leave a cell's background unset and let what
 was already there show through; a description has to say every half of every
 cell, so anything the old vocabulary expressed by *omission* needs a word — and
-until it has one, it is dropped without a diagnostic. Every gap above was
-invisible to the type checker and to the test suite, and visible immediately to
-anyone using the editor.
+until it has one, it is dropped without a diagnostic. The `Modality` pair
+generalises it past paint: a *claim a surface does not make* needs a word as
+much as one it does, because the tree acts on the claim it was given rather
+than on the one the surface meant. Every gap above was invisible to the type
+checker, and all but one were invisible to the test suite too — visible
+immediately to anyone using the editor.
 
 **One suggestion worth keeping and not acting on yet.** Several engines make a
 document scope an *event* boundary as well as a state one, so an event in one
