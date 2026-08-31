@@ -488,3 +488,119 @@ fn an_arrow_key_with_nothing_focused_is_not_traversal() {
         "with a starting point, a direction traverses"
     );
 }
+
+// -- a layer that names its focus scope ---------------------------------------
+
+/// The shape a panel's keyboard needs: a `Modality::Focus` layer that ranks
+/// early, holding no content, and the content elsewhere in the tree.
+///
+/// `sink` stands for the fallback key handler the layer carries; `body` is the
+/// panel, declared after it so it paints later.
+fn scoped_panel(scope: bool) -> Node<()> {
+    let keys = layer()
+        .anchor(Anchor::Screen(Align::Start))
+        .modality(Modality::Focus)
+        .child(focusable(text("sink")).key("sink"));
+    let keys = match scope {
+        true => keys.scope_at("body".into()),
+        false => keys,
+    };
+    col()
+        .child(keys)
+        .child(col().key("body").children([field("one"), field("two")]))
+}
+
+/// **Without a scope, confinement is containment and the content is outside
+/// it.** This is the state the editor's plugin panels are in: every widget is
+/// focusable and none is reachable, because the keyboard layer holds one node
+/// and traversal is confined to the layer.
+#[test]
+fn a_keyboard_layer_confines_traversal_to_itself() {
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(scoped_panel(false), FRAME);
+    let reachable: Vec<_> = ui
+        .focus_scope()
+        .ordered()
+        .into_iter()
+        .filter_map(|e| ui.key_of(e))
+        .collect();
+    assert_eq!(
+        reachable,
+        vec!["sink".into()],
+        "the layer's own subtree is all traversal can reach"
+    );
+}
+
+/// Naming a scope moves the confinement to the content, leaving the rank where
+/// it was declared.
+#[test]
+fn a_named_scope_confines_traversal_to_the_content() {
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(scoped_panel(true), FRAME);
+    let reachable: Vec<_> = ui
+        .focus_scope()
+        .ordered()
+        .into_iter()
+        .filter_map(|e| ui.key_of(e))
+        .collect();
+    assert_eq!(
+        reachable,
+        vec!["one".into(), "two".into()],
+        "the named element's focusables, and not the layer's sink"
+    );
+
+    // A scope that opens takes focus, and the scope is the content now, so
+    // the frame lands on the first control rather than on the sink.
+    assert_eq!(ui.key_of(ui.focused().unwrap()), Some("one".into()));
+    let tab = Input::Key(KeyPress::new(KeyCode::Tab));
+    ui.dispatch(tab);
+    assert_eq!(ui.key_of(ui.focused().unwrap()), Some("two".into()));
+    ui.dispatch(tab);
+    assert_eq!(
+        ui.key_of(ui.focused().unwrap()),
+        Some("one".into()),
+        "wraps inside the scope rather than escaping to the sink"
+    );
+}
+
+/// The containment questions the host asks must follow the scope too.
+///
+/// Focus is outside the layer's own subtree by construction here, so an
+/// ancestor walk alone would report that no keyboard layer is up — and the
+/// host would go on resolving keys the panel had claimed.
+#[test]
+fn a_scoped_layer_still_answers_the_containment_questions() {
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(scoped_panel(true), FRAME);
+    assert_eq!(ui.key_of(ui.focused().unwrap()), Some("one".into()));
+    assert!(
+        ui.focus_confined(),
+        "focus is inside the scope the keyboard layer named"
+    );
+}
+
+/// A scope naming a key nothing carries confines nothing — the same answer as
+/// not naming one, rather than an empty ring.
+#[test]
+fn a_scope_naming_nothing_falls_back_to_the_layer() {
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(
+        col()
+            .child(
+                layer()
+                    .anchor(Anchor::Screen(Align::Start))
+                    .modality(Modality::Focus)
+                    .scope_at("absent".into())
+                    .child(focusable(text("sink")).key("sink")),
+            )
+            .child(col().key("body").children([field("one")])),
+        FRAME,
+    );
+    let reachable: Vec<_> = ui
+        .focus_scope()
+        .ordered()
+        .into_iter()
+        .filter_map(|e| ui.key_of(e))
+        .collect();
+    assert_eq!(reachable, vec!["sink".into()]);
+}

@@ -722,6 +722,24 @@ pub struct LayerProps<M> {
     /// carrying it, else a rectangle the host published for it, else the frame.
     /// So a region the tree does not contain yet can still be named.
     pub within: Option<crate::key::Key>,
+    /// The element whose focusables this layer confines traversal to. `None`
+    /// — the default, and what every layer did before this existed — is the
+    /// layer's own subtree.
+    ///
+    /// **Keyboard precedence and paint order are already independent here**,
+    /// and deliberately: a layer declared early owns the keyboard under one
+    /// declared late, while a layer declared late paints over one declared
+    /// early. A surface whose *content* must paint late and whose *keyboard*
+    /// must rank early therefore cannot say what it means with a single node —
+    /// its keyboard layer sits in one place in the order and its content in
+    /// another, and confinement-by-containment then confines traversal to the
+    /// keyboard layer, which holds no content. The scope names the content, so
+    /// the two facts stop being welded to one node.
+    ///
+    /// Names a key and resolves the way [`Self::within`] does: an element
+    /// carrying it, else nothing — a scope that names a key no element carries
+    /// confines nothing, which is the same answer as not naming one.
+    pub scope: Option<crate::key::Key>,
     /// Where the thing this layer hangs off actually is, relative to the
     /// anchor rectangle the tree can name.
     ///
@@ -749,6 +767,7 @@ impl<M> Default for LayerProps<M> {
             fit: Fit::default(),
             align: None,
             within: None,
+            scope: None,
             offset: (0, 0),
             modality: Modality::default(),
             scrim: None,
@@ -770,6 +789,7 @@ impl<M> Clone for LayerProps<M> {
             dismiss: self.dismiss,
             on_dismiss: self.on_dismiss.clone(),
             within: self.within.clone(),
+            scope: self.scope.clone(),
             offset: self.offset,
         }
     }
@@ -1676,6 +1696,13 @@ impl<M> Node<M> {
     /// See [`LayerProps::within`].
     pub fn within(mut self, key: crate::key::Key) -> Self {
         self.layer_props().within = Some(key);
+        self
+    }
+
+    /// Confine this layer's focus traversal to the element carrying `key`,
+    /// rather than to the layer's own subtree. See [`LayerProps::scope`].
+    pub fn scope_at(mut self, key: crate::key::Key) -> Self {
+        self.layer_props().scope = Some(key);
         self
     }
 

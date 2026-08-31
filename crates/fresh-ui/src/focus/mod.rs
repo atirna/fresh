@@ -377,11 +377,25 @@ impl<M: 'static> Ui<M> {
         FocusScope { nodes }
     }
 
-    /// The topmost layer that owns the keyboard, as an element — which is
-    /// what confines focus traversal.
+    /// The element that confines focus traversal right now.
+    ///
+    /// The topmost layer that owns the keyboard — **or the element that layer
+    /// named as its scope**, when it named one. A layer whose keyboard rank
+    /// and whose content have to sit at different points in the declaration
+    /// order cannot be both; `LayerProps::scope` is how it says which element
+    /// holds the focusables while the layer itself holds the rank.
+    ///
+    /// A scope naming a key no element carries confines nothing and falls back
+    /// to the layer, which is the same answer as not naming one.
     pub(crate) fn topmost_modal(&self) -> Option<ElementId> {
         let i = self.topmost_modal_index(Modality::owns_keyboard)?;
-        self.element_of(self.pending_layers[i].0)
+        let r = self.pending_layers[i].0;
+        if let Some(k) = self.layer_geom(r).and_then(|g| g.scope) {
+            if let Some(e) = self.find_by_key(&k) {
+                return Some(e);
+            }
+        }
+        self.element_of(r)
     }
 
     /// Where the topmost layer answering `channel` sits in resolution order.
@@ -664,13 +678,29 @@ impl<M: 'static> Ui<M> {
     /// The containment question both halves are asking, with the half as an
     /// argument: is any layer on the focused element's ancestor chain one this
     /// predicate accepts.
+    ///
+    /// **A named scope is containment too.** A layer that names one holds the
+    /// modality while some other element holds the focusables, so focus sits
+    /// outside the layer's own subtree by construction — and answering this by
+    /// the ancestor walk alone would say a panel's keyboard layer is not up
+    /// while it plainly is. Both halves would then be wrong at once: the host
+    /// would resolve keys the panel had claimed, and an unfocused popup would
+    /// intercept beneath it.
     fn focus_in_layer(&self, half: fn(crate::desc::Modality) -> bool) -> bool {
         let Some(f) = self.focus else { return false };
-        self.path_to(f).iter().any(|&n| {
+        let by_containment = self.path_to(f).iter().any(|&n| {
             self.render_for(n)
                 .and_then(|r| self.layer_geom(r))
                 .is_some_and(|g| half(g.modality))
-        })
+        });
+        by_containment
+            || self.pending_layers.iter().any(|(r, _)| {
+                self.layer_geom(*r)
+                    .filter(|g| half(g.modality))
+                    .and_then(|g| g.scope)
+                    .and_then(|k| self.find_by_key(&k))
+                    .is_some_and(|e| self.is_within(f, e))
+            })
     }
 
     fn propagate_key(&mut self, chain: &[ElementId], k: KeyPress, out: &mut Vec<M>) -> bool {
