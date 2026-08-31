@@ -543,6 +543,18 @@ pub enum UiFact {
         slot: super::widgets::Slot,
         index: Option<usize>,
     },
+    /// An open widget pop-over was dismissed — a press outside it, or Escape.
+    ///
+    /// **The layer says when, so nobody writes the rule twice.** The settings
+    /// dialog carried its own "if a dropdown is open and the click is outside
+    /// it, cancel and stop" in `dispatch_settings_hit`, and the panel runtime
+    /// had no equivalent at all — so a press inside the dock but outside its
+    /// open dropdown left the list up. `Dismiss::OUTSIDE_POINTER | ESCAPE` on
+    /// the pop-over's own layer is that rule, stated once, for both, and for
+    /// the keyboard as well as the pointer.
+    WidgetPopupDismiss {
+        slot: super::widgets::Slot,
+    },
     SettingsItemHover(Option<usize>),
     /// A press on a nullable setting's `[Inherit]`, which unsets it.
     SettingsInherit(usize),

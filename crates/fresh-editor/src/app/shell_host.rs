@@ -1282,6 +1282,46 @@ impl Editor {
             // and a pop-over is not among them. Stored on the panel beside the
             // hovered widget, which is where every other row-level hover
             // lives, and read back by the dropdown's renderer.
+            UiFact::WidgetPopupDismiss { slot } => {
+                use crate::view::shell::widgets::Slot;
+                match slot {
+                    Slot::Settings | Slot::SettingsEntry => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            s.dropdown_cancel();
+                        }
+                    }
+                    // Closing it *is* toggling it: the runtime owns the open
+                    // flag and `dropdown_toggle` is how every other surface
+                    // flips it, so the dismissal goes through the same
+                    // dispatch rather than reaching into the state map.
+                    Slot::Dock | Slot::Floating => {
+                        let panel = match slot {
+                            Slot::Dock => crate::app::PanelSlot::Dock,
+                            _ => crate::app::PanelSlot::Floating,
+                        };
+                        let open = self.panel(panel).and_then(|p| {
+                            let key = p.popup.as_ref()?.widget_key.clone();
+                            (!key.is_empty()).then(|| (p.panel_key.clone(), key))
+                        });
+                        if let Some((panel_key, widget_key)) = open {
+                            let ha = crate::widgets::HitArea {
+                                overlay: false,
+                                row_target: false,
+                                context_click: false,
+                                widget_key,
+                                widget_kind: "dropdown",
+                                buffer_row: 0,
+                                byte_start: 0,
+                                byte_end: 0,
+                                payload: serde_json::json!({}),
+                                event_type: "dropdown_toggle",
+                                owner_key: None,
+                            };
+                            self.deliver_widget_hit(&panel_key, &ha, None);
+                        }
+                    }
+                }
+            }
             UiFact::WidgetPopupHover { slot, index } => {
                 use crate::view::shell::widgets::Slot;
                 let now = index.map(|i| i.to_string()).unwrap_or_default();
