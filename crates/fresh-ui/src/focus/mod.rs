@@ -262,6 +262,8 @@ impl<M: 'static> Ui<M> {
             kind,
             pos: Point::ZERO,
             local: Point::ZERO,
+            // A focus change is not a pointer event; there is no cell.
+            text_byte: None,
             button: MouseButton::Left,
             mods: key.map(|k| k.mods).unwrap_or(Mods::NONE),
             clicks: 1,

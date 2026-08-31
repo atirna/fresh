@@ -264,6 +264,18 @@ pub trait RenderObject {
         "RenderObject"
     }
 
+    /// The byte of this object's logical string under a cell of its own
+    /// rectangle, when it has one.
+    ///
+    /// Text answers; everything else is not text and says so by default. The
+    /// dispatcher asks the *target* of a pointer event, so a listener anywhere
+    /// up the chain reads `Event::text_byte` without knowing which leaf under
+    /// it holds the string — see that field for why the answer cannot be
+    /// reconstructed from a column outside the library.
+    fn text_byte_at(&self, _local: Point) -> Option<usize> {
+        None
+    }
+
     /// So the framework can push changed props into a live object rather than
     /// replacing it, which would discard its retained state.
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;

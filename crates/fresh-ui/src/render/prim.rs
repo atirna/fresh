@@ -1006,6 +1006,69 @@ impl RenderObject for TextRender {
         }
     }
 
+    /// Where in the logical string the cell at `local` is.
+    ///
+    /// **The rows this walks are the ones layout shaped and paint draws**
+    /// (`Self::rows`), so the answer is the text that is actually on screen
+    /// rather than a second opinion about it — which is the whole reason this
+    /// lives here and not in the caller. See `Event::text_byte`.
+    ///
+    /// Two honest absences. Wrapped text: `Wrap` may drop the whitespace it
+    /// breaks at, so the rows do not concatenate back to the logical string
+    /// and no offset is recoverable. And a click past the end of a row is the
+    /// end of that row, not `None` — a caret placed past the last grapheme is
+    /// what every text field does with a click in its trailing space.
+    ///
+    /// `Elide` is not a third: today it cuts at paint time from these same
+    /// rows and only ever removes a tail, so a cell that has text under it has
+    /// the text this walk finds. If elision ever moves into shaping, this has
+    /// to walk what it produced instead.
+    fn text_byte_at(&self, local: Point) -> Option<usize> {
+        use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+        if self.props.wrap != Wrap::None {
+            return None;
+        }
+        if local.x < 0 || local.y < 0 {
+            return None;
+        }
+        let row = self.rows.get(local.y as usize)?;
+        // Bytes of every earlier row, which for unwrapped text is exactly the
+        // lines above this one.
+        let mut byte: usize = self
+            .rows
+            .iter()
+            .take(local.y as usize)
+            .flat_map(|r| r.iter())
+            .map(|f| f.text.len())
+            .sum();
+        let mut col: i32 = 0;
+        for frag in row {
+            let w = UnicodeWidthStr::width(&*frag.text) as i32;
+            if col + w <= local.x {
+                col += w;
+                byte += frag.text.len();
+                continue;
+            }
+            // Inside this fragment: walk it a character at a time until the
+            // column is spent. Characters rather than graphemes because this
+            // crate depends on `unicode-width` and nothing else, and because
+            // it is what the shaping above already cuts by. A combining mark
+            // measures zero, so a cluster's bytes are taken without the column
+            // advancing and the answer lands after the whole cluster — which
+            // is where a caret goes.
+            for (i, c) in frag.text.char_indices() {
+                let cw = UnicodeWidthChar::width(c).unwrap_or(0) as i32;
+                if cw > 0 && col + cw > local.x {
+                    return Some(byte + i);
+                }
+                col += cw;
+            }
+            return Some(byte + frag.text.len());
+        }
+        // Past the last fragment: the end of the row.
+        Some(byte)
+    }
+
     fn render_name(&self) -> &'static str {
         "TextRun"
     }
