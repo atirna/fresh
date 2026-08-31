@@ -8323,6 +8323,9 @@ impl Editor {
         buffer: fresh_core::BufferId,
     ) -> Option<crate::view::shell::panel::Interior> {
         use std::rc::Rc;
+        if !self.pane_panel_owns_its_scroll(buffer) {
+            return None;
+        }
         let key = self
             .widget_registry
             .panels_for_buffer(buffer)
@@ -8362,12 +8365,46 @@ impl Editor {
     /// right price where the description is built and the wrong one in a
     /// paint loop.
     pub(crate) fn pane_panel_is_described(&self, buffer: fresh_core::BufferId) -> bool {
+        if !self.pane_panel_owns_its_scroll(buffer) {
+            return false;
+        }
         self.widget_registry
             .panels_for_buffer(buffer)
             .into_iter()
             .next()
             .and_then(|key| self.widget_registry.get(&key))
             .is_some_and(|w| crate::view::shell::widgets::covered(&w.spec))
+    }
+
+    /// Whether a mounted panel's buffer is one the **panel** scrolls rather
+    /// than the pane.
+    ///
+    /// **This is C.5's real boundary, and the pre-existing code drew it
+    /// first.** `handle_editor_click` has two answers for a click in a mounted
+    /// panel: a *non-scrollable* buffer — "it owns its own scroll window, e.g.
+    /// Search & Replace" — takes the focus and stops, deliberately, because
+    /// "the buffer's cursor is hidden, but the viewport still follows it, so
+    /// the click scrolls the panel's own header and buttons out of view".
+    /// A *scrollable* one falls through to cursor placement, and that is a
+    /// contract plugins read: `git_log`'s commit list says "Selection is
+    /// cursor-driven … a row click places the buffer cursor, and
+    /// `cursor_moved` mirrors it into the selection."
+    ///
+    /// A described panel cannot honour that half. Its rows are laid out by the
+    /// tree, so the mirror's line *n* is no longer screen row *n* once a list
+    /// inside it scrolls, and the screen→line projection the caret needs
+    /// (`view_line_mappings`) is filled by the very text pass a described pane
+    /// does not run. And it does not need to: the panels that own their scroll
+    /// are the ones this was designed for, and they never had a caret to
+    /// place.
+    ///
+    /// So the flip takes the panels whose scroll is their own and leaves the
+    /// ones that ride the buffer's — not as a deferral of taste, but because
+    /// the second group's scroll and the second group's cursor are the same
+    /// mechanism, and replacing it is C.2's substitution rather than this
+    /// step's.
+    fn pane_panel_owns_its_scroll(&self, buffer: fresh_core::BufferId) -> bool {
+        self.active_window().is_non_scrollable_buffer(buffer)
     }
 
     pub(crate) fn panel_interior(

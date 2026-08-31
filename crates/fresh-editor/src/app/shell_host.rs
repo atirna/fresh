@@ -1405,10 +1405,11 @@ impl Editor {
                     // buffer names its panel.
                     crate::view::shell::widgets::Slot::Pane(pane) => {
                         // The focus half of the press, which a widget's own
-                        // hit would otherwise swallow: clicking a field in the
-                        // panel below has to move the keyboard there, exactly
-                        // as clicking the buffer above does. See
-                        // `UiFact::PaneFocus` for the presses no widget takes.
+                        // hit swallows: a `hit_node` press calls `e.stop()`,
+                        // so the pane's own surface never sees it and the
+                        // keyboard would stay wherever it was. A press no
+                        // widget claims reaches that surface and arrives as
+                        // `PaneContentPress`, which focuses the pane itself.
                         self.focus_pane(pane);
                         if let Some(panel_key) = self.pane_panel_key(pane) {
                             self.deliver_widget_hit(&panel_key, &hit, None);
@@ -1669,10 +1670,6 @@ impl Editor {
                     tracing::warn!("pane content click failed: {e}");
                 }
             }
-            // A press in a described mounted panel that no widget claimed.
-            // Focus is all a panel wants from one: there is no byte under the
-            // pointer to put a caret at.
-            UiFact::PaneFocus(pane) => self.focus_pane(pane),
             // A pane's scrollbars, and its wheel. Every one of these took a
             // `(col, row)` and asked each pane's recorded rectangle in turn
             // whether it contained the point; the node says which pane, and

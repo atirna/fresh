@@ -1282,16 +1282,28 @@ fn panel_content(id: LeafId, i: super::panel::Interior) -> Node<UiMsg> {
         // and no bar to say how far through it you are.
         .h(Sizing::Flex(1))
     });
-    // **The press the widgets did not take still moves the keyboard here.**
-    // The surface this replaced answered every press with `PaneContentPress`,
-    // whose first act is to focus the pane; a panel's rows claim their own and
-    // carry the focus move with them, so what is left for this node is the
-    // panel's dead space — the gap between two fields, the blank right of a
-    // hint bar. Without it the search panel could be typed into but not
-    // clicked into.
+    // **The press stays the pane's, unchanged.** The first instinct here was
+    // that a panel has no byte to put a caret at, so a press only needed to
+    // move the keyboard — and that is wrong, because the mirror still has
+    // bytes and the plugin API depends on it. `git_log`'s own comment says so:
+    // "Selection is cursor-driven (see the `cursor_moved` handler), so the
+    // List's `select` event is ignored — a row click places the buffer cursor,
+    // and `cursor_moved` mirrors it into the selection." Half a press left its
+    // log clickable in the sense that the hit arrived, and dead in the sense
+    // that nothing happened.
     //
-    // A **right** press is left alone for the same reason it was before: it
-    // belongs to the base surface's dismissal of the tab context menu.
+    // So this is `content_surface`'s press verbatim: the caret it places is
+    // invisible now — the text pass does not run and the hardware caret comes
+    // from the description's own marker — and that is exactly right. The
+    // mirror is where a plugin reads a click's *line* from, and it goes on
+    // being that.
+    //
+    // The **wheel** is deliberately not taken, where `content_surface` takes
+    // it: the panel's lists are viewports, and `fresh-ui` chains a notch into
+    // one only when nothing claimed it. The dock learned this the same way.
+    //
+    // A **right** press is left alone for the reason it was before: it belongs
+    // to the base surface's dismissal of the tab context menu.
     gesture(body).on(
         GestureKind::Press,
         Rc::new(move |e: &Event| {
@@ -1299,7 +1311,13 @@ fn panel_content(id: LeafId, i: super::panel::Interior) -> Node<UiMsg> {
                 return None;
             }
             e.stop();
-            Some(UiMsg::Ui(UiFact::PaneFocus(id)))
+            Some(UiMsg::Ui(UiFact::PaneContentPress {
+                pane: id,
+                x: e.pos.x.max(0) as u16,
+                y: e.pos.y.max(0) as u16,
+                clicks: e.clicks,
+                mods: e.mods,
+            }))
         }),
     )
 }
