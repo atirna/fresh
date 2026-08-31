@@ -93,6 +93,63 @@ fn flow_run_start(buffer: &crate::model::buffer::Buffer, top_byte: usize) -> usi
     run_start
 }
 
+/// Turns the fold's painted items into theme-key runs for the inspector.
+///
+/// **The fold reports a rectangle and a name; the grammar is this side's.** A
+/// described surface's theme name is written in `shell_theme`'s notation
+/// (`fg/bg+attrs`, a literal, or a plugin's key over a fallback), so splitting
+/// it into the key pair `ThemeRun` carries has to happen where that notation is
+/// understood — not inside `view::shell::fold`, which is meant to know nothing
+/// about the editor's theme vocabulary.
+///
+/// One recorder for the whole display list, replacing the per-surface
+/// `provenance_runs` walks that each newly described surface would otherwise
+/// have had to grow. Later items overwrite earlier ones, which is the paint
+/// order the inspector wants.
+///
+/// **The region is generic on purpose.** `ThemeRun::region` is a surface label
+/// ("Status Bar", "Editor Content") and the fold does not know which surface an
+/// item belongs to — an item carries a key, a rect and a theme, not a
+/// province. Deriving one from key prefixes would be a stringly guess that goes
+/// stale the moment a key is renamed. What the theme inspector's popup and its
+/// "Open in Theme Editor" action actually consume is the *key pair*, which is
+/// exact; the label is decoration, and an honest generic one beats a confident
+/// wrong one.
+struct FoldProvenance {
+    runs: Vec<crate::app::types::ThemeRun>,
+}
+
+impl crate::view::shell::fold::ProvenanceSink for FoldProvenance {
+    fn item(
+        &mut self,
+        rect: ratatui::layout::Rect,
+        clip: ratatui::layout::Rect,
+        theme: &fresh_ui::ThemeKey,
+    ) {
+        use std::borrow::Cow;
+        let vis = rect.intersection(clip);
+        if vis.width == 0 || vis.height == 0 {
+            return;
+        }
+        let (fg, bg) = crate::app::shell_host::shell_theme::names(theme.as_str());
+        if fg.is_none() && bg.is_none() {
+            return;
+        }
+        let fg = fg.map(Cow::Owned);
+        let bg = bg.map(Cow::Owned);
+        for y in vis.y..vis.y.saturating_add(vis.height) {
+            self.runs.push(crate::app::types::ThemeRun {
+                x: vis.x,
+                y,
+                w: vis.width,
+                fg_key: fg.clone(),
+                bg_key: bg.clone(),
+                region: Cow::Borrowed("Chrome"),
+            });
+        }
+    }
+}
+
 impl Editor {
     /// Render the topmost global popup at its computed area and register its
     /// click region in `global_popup_areas`. Shared by the generic
@@ -838,6 +895,7 @@ impl Editor {
             .map(|s| s.chrome.clone())
             .unwrap_or_default();
         let mut body = crate::app::shell_host::BodyPainter::new(self, body_state, pane_chrome);
+        let mut provenance = FoldProvenance { runs: Vec::new() };
         let pending_hardware_cursor = crate::view::shell::fold::fold_band(
             ui.spec(),
             frame.buffer_mut(),
@@ -845,6 +903,7 @@ impl Editor {
             &mut body,
             crate::view::shell::fold::Band::Background,
             paints,
+            Some(&mut provenance),
         );
         let crate::app::shell_host::BodyOutput {
             split_areas,
@@ -854,6 +913,11 @@ impl Editor {
             horizontal_scrollbar_areas,
         } = body.finish();
         self.shell_ui = Some(ui);
+        // Held until the overlay band has added its own, so the two are
+        // applied together after every described item in the frame has been
+        // seen. Applying the background band here would be overwritten by
+        // nothing, but it would also be a second entry point into the map.
+        self.fold_provenance = provenance.runs;
 
         // **A described mounted panel's caret is still the pane's caret.**
         // Before C.5's flip the runtime wrote the panel's focus cursor into
@@ -1270,12 +1334,27 @@ impl Editor {
                 .shell_ui
                 .take()
                 .expect("the shell tree is taken and returned within one frame");
-            let fold_caret = crate::view::shell::fold::fold_native(
+            let mut provenance = FoldProvenance {
+                runs: std::mem::take(&mut self.fold_provenance),
+            };
+            let fold_caret = crate::view::shell::fold::fold_band(
                 ui.spec(),
                 frame.buffer_mut(),
                 &palette,
+                &mut crate::view::shell::fold::SkipHosts,
                 crate::view::shell::fold::Band::Overlay,
+                crate::view::shell::fold::Paints::All,
+                Some(&mut provenance),
             );
+            // **F.6: one recorder for every described surface.** Applied after
+            // both bands, so the overlay's items land on top of the
+            // background's — the paint order the inspector wants. What this
+            // replaces is nothing: a described surface simply had no writer,
+            // and Ctrl+Right-click reported "No theme key recorded here" over
+            // the menu bar, the status bar, the explorer, settings, the popups
+            // and the dock.
+            let runs = provenance.runs;
+            self.active_chrome_mut().apply_theme_runs(&runs);
             // A native widget that placed a cursor — a focused `TextField` —
             // outranks both the buffer's caret and the sidebar's, which is the
             // rule §4.4 states and the thing
@@ -3810,11 +3889,13 @@ impl Editor {
                     // is what the inspector should say about it.
                     fg_key: fg
                         .as_deref()
-                        .and_then(crate::view::theme::Theme::static_theme_key),
+                        .and_then(crate::view::theme::Theme::static_theme_key)
+                        .map(std::borrow::Cow::Borrowed),
                     bg_key: bg
                         .as_deref()
-                        .and_then(crate::view::theme::Theme::static_theme_key),
-                    region: "Status Bar",
+                        .and_then(crate::view::theme::Theme::static_theme_key)
+                        .map(std::borrow::Cow::Borrowed),
+                    region: std::borrow::Cow::Borrowed("Status Bar"),
                 })
                 .collect::<Vec<_>>()
         };

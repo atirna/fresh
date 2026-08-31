@@ -201,6 +201,7 @@ mod tests {
             &mut out,
             Band::Background,
             Paints::All,
+            None,
         );
         out.0
     }
