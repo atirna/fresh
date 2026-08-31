@@ -29,20 +29,27 @@
 //! leaf by rule and never crosses.
 //!
 //! **Read `covered` as what it says: the adapter has an arm for this variant.**
-//! It does not say the arm is native, and this doc used to imply it did — that
-//! the gate was "what remains of a boundary that has closed". The boundary has
-//! not closed. Most variants are written out below as nodes; three of them —
-//! `List`, `Tree` and `DualList` — still reach [`collected`], which calls
-//! `crate::widgets::render::render_collected`, the immediate-mode runtime, and
-//! wraps what comes back: its rows become nodes, each `HitArea` becomes a
-//! gesture on the sub-range it names, each overlay row becomes a layer. That is
-//! a real gain, and the reason to do it in one step — the byte-range scan and
-//! the `LayoutBox` arena go, and a press is resolved against a rectangle layout
-//! produced. But the runtime is still the thing that decides what a list row
-//! and a tree's indent guides look like, so seventeen thousand lines of it are
-//! still on the render path for those three. `collected`'s own doc puts it
-//! exactly: "It is a stage, not the end." The gate has closed over
-//! `WidgetSpec`'s variants; it has not closed over the runtime.
+//! It does not say the arm is native, and this doc twice used to imply more
+//! than was true — first that the gate was "what remains of a boundary that has
+//! closed", then that three variants still passed whole through a generic
+//! adapter over the immediate-mode runtime.
+//!
+//! Every variant is now written out below as nodes. The generic adapter is
+//! gone: nothing routes a whole widget through `render_collected` and rebuilds
+//! it from the cells that came back, so no press is resolved by matching a byte
+//! range in a row the painter produced.
+//!
+//! What has *not* gone is the runtime as a **formatter**. Each arm still asks
+//! it what a row says — `render_dropdown` for a trigger, `render_text_input`
+//! for a field, the tree's own row renderer for indent guides — because what a
+//! widget's row says is domain knowledge, and rewriting it would be rewriting
+//! thousands of lines to get the same cells. What moved is where the row is,
+//! what a press on it means, and who owns the window it sits in.
+//!
+//! Two calls into the runtime remain, and both render a *nested spec* rather
+//! than routing a widget: a card list asks it for each item's subtree, and a
+//! multi-line field asks it for the whole document the viewport windows. Those
+//! are the last of it on this path.
 //!
 //! `Dropdown` and `Text` have already left it (Phase 2.2): each is built from
 //! its own spec, calling the runtime's *formatter* through the pure functions
@@ -331,9 +338,18 @@ pub fn covered(spec: &WidgetSpec) -> bool {
         // offset is a *row* into the flattened list, so a card straddling
         // either edge is emitted and clipped. `widgets::List` snaps to whole
         // items, which would be a different behaviour; the cells-scrolling
-        // `viewport` is the same one, and it owns the offset. (`item_height >
-        // 1` without `card_borders` does not occur — the only producer sets
-        // the two together — so there is no third arm.)
+        // `viewport` is the same one, and it owns the offset.
+        //
+        // **The two arms split on `card_borders` alone**, so between them they
+        // take every tree. They used to carry `item_height` in their guards as
+        // well, which left two shapes — a bordered tree of one-row cards, and
+        // a borderless one of tall rows — matching neither, and falling
+        // through to a generic adapter that has since been deleted. Neither
+        // shape is one a plugin is expected to emit (the only producer sets
+        // borders and height together), and that is exactly why the guards
+        // should not have mentioned height: a gap no caller happens to walk
+        // into is still a gap, and the fall-through it needed was the last
+        // thing keeping the adapter alive.
         WidgetSpec::Tree { .. } => true,
         // **`DualList` does not scroll**, which is why it crosses through the
         // adapter with no substitution at all. It emits every row — its body
@@ -1273,7 +1289,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             indent_cols,
             item_height,
             card_borders,
-        } if *card_borders && *item_height > 1 => {
+        } if *card_borders => {
             let expanded: std::collections::HashSet<String> =
                 expanded_keys.iter().cloned().collect();
             let visible = crate::widgets::collect_visible_tree_indices(nodes, item_keys, &expanded);
@@ -1438,7 +1454,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             indent_cols,
             item_height,
             card_borders,
-        } if *item_height <= 1 && !card_borders => {
+        } if !*card_borders => {
             use std::rc::Rc;
             let expanded: std::collections::HashSet<String> =
                 expanded_keys.iter().cloned().collect();
@@ -2049,10 +2065,6 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             }
             col().children(kids)
         }
-        // The rest, with collectors of their own. See [`collected`].
-        WidgetSpec::List { .. } | WidgetSpec::Tree { .. } => {
-            collected(spec, width, cx, site.escape)
-        }
         // `covered` gates this; reaching it is a bug in the caller rather than
         // a spec the plugin got wrong, so it is loud in debug and empty in
         // release rather than silently dropping a panel's content.
@@ -2268,173 +2280,6 @@ impl fresh_ui::Component<UiMsg> for Scrolled {
             None => body,
         }
     }
-}
-
-/// **Every remaining variant, through the collector it already has.**
-///
-/// `Text`, `List`, `Tree`, `Dropdown` and `DualList` are different in kind
-/// from the nine written out above. Each of them already has a collector that
-/// knows its rendering — where a list's rows come from, how a dropdown's
-/// trigger reads, what a tree's indent guides look like — and reproducing that
-/// by hand would be rewriting seven thousand lines to get the same cells.
-///
-/// So the collector runs, and this turns what it produced into nodes: its rows
-/// become nodes, each `HitArea` becomes a gesture on the sub-range it names,
-/// each overlay row becomes a layer at the row it anchors to. **That is what
-/// deletes the byte-range scan and the `LayoutBox` arena** — for all five at
-/// once rather than five times over — because after it a press is resolved by
-/// hit-testing a rectangle layout produced, not by walking recorded ranges.
-///
-/// **It is a stage, not the end.** The runtime is a *formatter* here: it still
-/// decides what a list row looks like, and the tree owns where it is and what
-/// a press on it means. Replacing that formatting with `widgets::List` and
-/// `widgets::Tree`, so a plugin's list is the list the settings form uses, is
-/// the step after — and doing this first makes that a substitution rather than
-/// a rewrite.
-fn collected(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, escape: u16) -> Node<UiMsg> {
-    // The collector writes the next instance state as it renders. A
-    // description cannot own that write, so it goes to a scratch map and the
-    // host resolves the real one — the same split `Number` makes, at the scale
-    // of a subtree. C.2 is where this stops being a scratch map.
-    let mut scratch = std::collections::HashMap::new();
-    let out = crate::widgets::render::render_collected(
-        spec,
-        cx.states,
-        &mut scratch,
-        crate::widgets::RenderContext {
-            focus_key: &cx.focus_key,
-            hover_key: cx.hovered_key.as_deref().unwrap_or(""),
-            hover_item_key: &cx.hovered_item_key,
-            hover_popup_row: &cx.hovered_popup_row,
-            markdown: None,
-            marker_gutter: cx.marker_gutter,
-            avail_height: cx.avail_height,
-        },
-        width as u32,
-    );
-    rows_with_hits(
-        &out.entries,
-        &out.hits,
-        cx,
-        &out.overlays,
-        &out.popups,
-        out.focus_cursor,
-        escape,
-    )
-}
-
-/// The rows of a collected subtree, each carrying whatever hits land on it.
-///
-/// A hit names a row and a byte range within it, which is exactly what
-/// [`entry_row_hit`] turns into a gesture on a piece of that row. A row with
-/// no hit is a plain styled row; a row with several — a list's rows each carry
-/// their own — becomes as many pieces as there are ranges.
-///
-/// **The floats anchor to nodes, not to coordinates.** An overlay row and a
-/// dropdown's pop-over both name a position *inside this sub-render* — row 3
-/// of it, or the column the `[value ▼]` button starts at. Neither is a frame
-/// coordinate, and a description cannot turn one into a frame coordinate
-/// because it does not know where the panel is. So each hangs off the node it
-/// actually belongs to — the sub-render's own box, or the trigger's row — and
-/// `offset` says where inside that the real anchor is. That is also what makes
-/// the pop-over's flip correct: it flips clear of the trigger's row.
-fn rows_with_hits(
-    entries: &[TextPropertyEntry],
-    hits: &[crate::widgets::HitArea],
-    cx: &Ctx<'_>,
-    overlays: &[crate::widgets::OverlayRow],
-    popups: &[crate::widgets::PanelPopup],
-    caret: Option<crate::widgets::FocusCursor>,
-    escape: u16,
-) -> Node<UiMsg> {
-    let mut kids: Vec<Node<UiMsg>> = Vec::with_capacity(entries.len());
-    for (i, entry) in entries.iter().enumerate() {
-        let mine: Vec<&crate::widgets::HitArea> =
-            hits.iter().filter(|h| h.buffer_row as usize == i).collect();
-        // The caret is on at most one row, and the marker goes in that row's
-        // pieces so its cell comes from the glyphs rather than from measuring
-        // them a second time.
-        let at = caret
-            .filter(|c| c.buffer_row as usize == i)
-            .map(|c| c.byte_in_row as usize);
-        let mut node = match mine.is_empty() && at.is_none() {
-            true => entry_row(entry, &cx.surface),
-            // **Every hit on the row, not the first.** A tree row has three
-            // and a dual list's has two; keeping only one silently made the
-            // others unclickable.
-            false => row_pieces(
-                entry,
-                cx.slot,
-                &cx.surface,
-                &mine
-                    .iter()
-                    .map(|h| ((h.byte_start, h.byte_end), (*h).clone()))
-                    .collect::<Vec<_>>(),
-                at,
-                Fill::ToRowEnd,
-            ),
-        };
-        // An open dropdown's option list hangs off the row its trigger is on,
-        // one row down and at the button's own column.
-        //
-        // **The row is named, not just the parent.** The layer resolves to the
-        // same rectangle either way — it *is* this row — but naming it says so
-        // to the dismissal as well: a press on the trigger is a press on the
-        // thing the list belongs to, and closes it once instead of dismissing
-        // it and letting the trigger's own toggle re-open it in the same
-        // press. `Anchor::Parent` cannot carry that, because a parent is
-        // wherever the caller attached the layer.
-        for p in popups.iter().filter(|p| p.anchor_row as usize == i) {
-            let anchor = popup_anchor_key(cx.slot, i);
-            node = row().key(anchor.clone()).h(Sizing::Cells(1)).children([
-                node,
-                popup_layer(p, cx).anchor(fresh_ui::Anchor::Node(anchor)),
-            ]);
-        }
-        kids.push(node);
-    }
-    let body = col().children(kids);
-    // A pop-over whose anchor row is past the collector's own rows has no row
-    // to hang off; it falls back to the body, which is where the runtime put
-    // it too (`inner.y + anchor_row`).
-    let stray: Vec<&crate::widgets::PanelPopup> = popups
-        .iter()
-        .filter(|p| p.anchor_row as usize >= entries.len())
-        .collect();
-    if overlays.is_empty() && stray.is_empty() {
-        return body;
-    }
-    let mut stack = vec![body];
-    // Rows the collector floated: they anchor at a row of the sub-render and
-    // paint over what is there, without having consumed its height. A layer
-    // says both — and `offset` says which row, because a completion list runs
-    // past the rows its own sub-render has (a one-line text input's popup is
-    // anchored at rows 1..n) and there is no node at row 4 of a one-row box.
-    for o in overlays {
-        stack.push(
-            fresh_ui::layer()
-                .anchor(fresh_ui::Anchor::Parent)
-                .place(fresh_ui::Place::Over)
-                .offset(-(escape as i16), o.buffer_row as i16)
-                .fit(fresh_ui::Fit::CLAMP)
-                .child(float_route(
-                    row()
-                        .h(Sizing::Cells(1))
-                        .theme(Ink::new(Paint::key(BASE_FG), Paint::key("ui.popup_bg")).to_string())
-                        .child(entry_row(&o.entry, &cx.surface)),
-                    cx.slot,
-                )),
-        );
-    }
-    for p in stray {
-        stack.push(
-            popup_layer(p, cx)
-                .anchor(fresh_ui::Anchor::Parent)
-                .place(fresh_ui::Place::Over)
-                .offset(p.anchor_col as i16, p.anchor_row as i16 + 1),
-        );
-    }
-    fresh_ui::stack().children(stack)
 }
 
 /// Send a float's wheel and hover where the rows behind it would have sent
