@@ -1993,17 +1993,30 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
     });
     let n = fresh_ui::gesture(n).on(
         fresh_ui::GestureKind::Press,
-        std::rc::Rc::new(move |e: &fresh_ui::Event| {
-            if e.button != fresh_ui::MouseButton::Left {
-                return None;
+        std::rc::Rc::new(move |e: &fresh_ui::Event| match e.button {
+            fresh_ui::MouseButton::Left => {
+                e.stop();
+                Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
+                    slot,
+                    hit: hit.clone(),
+                    at: Some(e.local.x.max(0) as u16),
+                    clicks: e.clicks,
+                }))
             }
-            e.stop();
-            Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
-                slot,
-                hit: hit.clone(),
-                at: Some(e.local.x.max(0) as u16),
-                clicks: e.clicks,
-            }))
+            // **Only the kinds that declared the capability.** A right press
+            // on a button or on padding is not this widget's, so it is left
+            // unclaimed and reaches the column behind — which is where a
+            // right press with no widget under it has always gone.
+            fresh_ui::MouseButton::Right if hit.context_click => {
+                e.stop();
+                Some(UiMsg::Ui(super::msg::UiFact::WidgetContext {
+                    slot,
+                    hit: hit.clone(),
+                    x: e.pos.x.max(0) as u16,
+                    y: e.pos.y.max(0) as u16,
+                }))
+            }
+            _ => None,
         }),
     );
     match hover {

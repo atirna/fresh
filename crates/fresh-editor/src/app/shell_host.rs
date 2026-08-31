@@ -1378,6 +1378,27 @@ impl Editor {
                     }
                 }
             }
+            // The right press's second half, from a hit the node carried.
+            //
+            // The re-focus is first for the same reason it is in `DockPress`
+            // and `DockContext`: the un-blur fires a `focus` widget_event, and
+            // any mirror of dock-focus state has to update before the menu the
+            // press raises reads it.
+            UiFact::WidgetContext { slot, hit, x, y } => {
+                use crate::view::shell::widgets::Slot;
+                let panel = match slot {
+                    Slot::Dock => crate::app::PanelSlot::Dock,
+                    Slot::Floating => crate::app::PanelSlot::Floating,
+                    // The settings dialog's rows raise no plugin menu.
+                    _ => return,
+                };
+                if panel == crate::app::PanelSlot::Dock
+                    && self.dock.as_ref().is_some_and(|f| !f.focused)
+                {
+                    self.refocus_floating_panel(crate::app::PanelSlot::Dock);
+                }
+                self.fire_widget_context(panel, &hit, x, y);
+            }
             UiFact::WidgetPopupHover { slot, index } => {
                 use crate::view::shell::widgets::Slot;
                 let now = index.map(|i| i.to_string()).unwrap_or_default();

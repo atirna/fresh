@@ -612,6 +612,25 @@ pub enum UiFact {
         item: String,
         entered: bool,
     },
+    /// A right press on a widget that raises a context menu for itself.
+    ///
+    /// **The last thing a described panel asked the probe.** Deciding *which*
+    /// widget a right press belongs to is geometry, and the node has it;
+    /// deciding what a right press on one means is not, and that half stays
+    /// where it was (`Editor::fire_widget_context`). The probe answered the
+    /// first from a second layout of the same spec — one that reads the
+    /// runtime's own `scroll_offset`, which the description does not — so a
+    /// scrolled list raised the menu for a different row from the one clicked.
+    ///
+    /// `x`/`y` are the screen cell, not the widget's: the plugin anchors its
+    /// popup at the click, and the payload it gets from a list carries only
+    /// the row index.
+    WidgetContext {
+        slot: super::widgets::Slot,
+        hit: crate::widgets::HitArea,
+        x: u16,
+        y: u16,
+    },
     /// An open widget pop-over was dismissed — a press outside it, or Escape.
     ///
     /// **The layer says when, so nobody writes the rule twice.** The settings
