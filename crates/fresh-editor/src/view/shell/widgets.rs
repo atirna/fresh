@@ -1669,11 +1669,112 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 _ => col().children([entry_row(&out.entries[0], &cx.surface), body]),
             }
         }
+        // **The first of the five collected variants to stop being collected.**
+        //
+        // A `Dropdown` is a trigger row and, when it is up, a floating list —
+        // and neither half needed the collector. What it needed was the
+        // collector's *formatter* (`render_dropdown` for the `[value ▼]` row,
+        // and the option rows the pop-over paints), which is a pure function
+        // of the spec and the resolved state, and the two rules the collector
+        // buried in its walk: where the selection and the open flag come from,
+        // and which column the list drops under. Those are now
+        // `kinds::dropdown`'s `resolve`, `popup_of` and `anchor_col`, called
+        // from here and from the collector both, so there is one copy of each.
+        //
+        // What goes away is the round trip. `collected` ran the whole
+        // immediate-mode render to get rows and byte ranges, threw the state it
+        // wrote into a scratch map, and then rebuilt nodes from the cells — so
+        // a press was resolved by matching a byte range in a row the painter
+        // had produced. Here the trigger *is* the node the press lands on, and
+        // the pop-over hangs off it.
+        //
+        // The state is still read from `cx.states` rather than held by the
+        // element: `selected_index` is what the plugin is told about through
+        // `dropdown_select`, so it is model state and belongs to the host. The
+        // *open* flag is view state and should become the element's — that is
+        // 2.1, and it needs the runtime to stop writing it in its own walk
+        // first.
+        WidgetSpec::Dropdown {
+            options,
+            selected_index,
+            label,
+            focused,
+            label_width,
+            open,
+            scroll_offset,
+            key,
+        } => {
+            use crate::widgets::kinds::dropdown as dd;
+            let key = key.as_deref();
+            // A keyed widget takes focus from the host's resolved focus key; an
+            // unkeyed one falls back to the spec's initial-only `focused` hint.
+            let is_focused = match key.is_some_and(|k| !k.is_empty()) {
+                true => cx.is_focused(key),
+                false => *focused,
+            };
+            let st = dd::resolve(options, *selected_index, *open, key, cx.states, is_focused);
+            let rendered = crate::widgets::render_dropdown(
+                options,
+                st.selected,
+                label,
+                is_focused,
+                *label_width,
+                st.open,
+                *scroll_offset,
+                cx.marker_gutter,
+            );
+            let widget_key = key.unwrap_or("").to_string();
+            // A click on the `[value ▼]` button toggles the option list; a
+            // click on the label does not. The hit is the button's range, and
+            // `deliver_widget_hit` does the rest — the kind's `on_pointer`
+            // owns both the open flag and the index, so the plugin never sees
+            // this raw.
+            let trigger = entry_row_hit(
+                &rendered.entry,
+                rendered.button_range,
+                cx.slot,
+                &cx.surface,
+                crate::widgets::HitArea {
+                    row_target: false,
+                    context_click: false,
+                    overlay: false,
+                    widget_key: widget_key.clone(),
+                    widget_kind: "dropdown",
+                    buffer_row: 0,
+                    byte_start: rendered.button_range.0,
+                    byte_end: rendered.button_range.1,
+                    payload: serde_json::json!({}),
+                    event_type: "dropdown_toggle",
+                    owner_key: None,
+                },
+            );
+            if !st.open {
+                return trigger;
+            }
+            let popup = dd::popup_of(
+                options,
+                st.selected,
+                rendered.scroll_offset as u32,
+                &cx.hovered_popup_row,
+                &widget_key,
+                dd::anchor_col(&rendered.entry.text, rendered.button_range.0),
+            );
+            // **The row is named, not just the parent** — the same reason
+            // `rows_with_hits` names it. The layer resolves to this rectangle
+            // either way, but naming it says so to the *dismissal* as well: a
+            // press on the trigger is a press on the thing the list belongs
+            // to, so it closes the list once instead of dismissing it and
+            // letting the trigger's own toggle re-open it in the same press.
+            let anchor = dropdown_anchor_key(cx.slot, &widget_key);
+            row().key(anchor.clone()).h(Sizing::Cells(1)).children([
+                trigger,
+                popup_layer(&popup, cx).anchor(fresh_ui::Anchor::Node(anchor)),
+            ])
+        }
         // The rest, with collectors of their own. See [`collected`].
         WidgetSpec::Text { .. }
         | WidgetSpec::List { .. }
         | WidgetSpec::Tree { .. }
-        | WidgetSpec::Dropdown { .. }
         | WidgetSpec::DualList { .. } => collected(spec, width, cx, site.escape),
         // `covered` gates this; reaching it is a bug in the caller rather than
         // a spec the plugin got wrong, so it is loud in debug and empty in
@@ -2123,6 +2224,31 @@ fn float_route(n: Node<UiMsg>, slot: Slot) -> Node<UiMsg> {
 ///
 /// Keyed per slot and per row because two panels can each have a list open,
 /// and a key that collided would anchor one to the other's trigger.
+/// The anchor a *described* `Dropdown`'s pop-over hangs off.
+///
+/// [`popup_anchor_key`] names a pop-over by the collector row it was emitted
+/// at, which is what distinguishes two of them in one panel on that path. A
+/// described dropdown has no row index — it is a node, built from its spec
+/// alone — so it is named by the thing that actually identifies it: its widget
+/// key. Two dropdowns in one panel therefore anchor apart whenever the plugin
+/// keyed them, which is the same condition under which they can hold separate
+/// instance state at all; an unkeyed pair shares the collector path's row-0
+/// name, and shares its open flag too, so there is nothing further to tell
+/// apart.
+fn dropdown_anchor_key(slot: Slot, widget_key: &str) -> fresh_ui::Key {
+    if widget_key.is_empty() {
+        return popup_anchor_key(slot, 0);
+    }
+    let scope = match slot {
+        Slot::Dock => "dock".to_string(),
+        Slot::Floating => "floating".to_string(),
+        Slot::Settings => "settings".to_string(),
+        Slot::SettingsEntry => "settings_entry".to_string(),
+        Slot::Pane(leaf) => format!("pane:{}", leaf.0 .0),
+    };
+    fresh_ui::Key::Str(format!("widget_dropdown_anchor:{scope}:{widget_key}").into())
+}
+
 fn popup_anchor_key(slot: Slot, row: usize) -> fresh_ui::Key {
     let tag = match slot {
         Slot::Dock => "widget_popup_anchor:dock",
@@ -4429,6 +4555,43 @@ mod tests {
             hit.payload.get("index").and_then(|v| v.as_i64()),
             Some(popup.row_indices[0] as i64),
             "the first *visible* row's absolute index"
+        );
+    }
+
+    /// **The list opens under the trigger wherever the trigger is.**
+    ///
+    /// The collector path named a pop-over's anchor by the *row of the
+    /// collector's own output* it was emitted at, which is only the panel's
+    /// row because the collector rendered the whole panel. A described
+    /// dropdown is a node built from its own spec and knows nothing about the
+    /// rows above it, so it is named by its widget key and the column places
+    /// it. With rows above it that distinction is visible: the box must drop
+    /// under the trigger's row, not under row 0.
+    #[test]
+    fn the_pop_over_follows_its_trigger_down_the_panel() {
+        let spec = col_of(vec![
+            WidgetSpec::Raw {
+                entries: vec![raw("above one")],
+                key: None,
+            },
+            WidgetSpec::Raw {
+                entries: vec![raw("above two")],
+                key: None,
+            },
+            dropdown(&["fast", "slow", "off"], 0, true, 0),
+        ]);
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let top = ui
+            .spec()
+            .layers()
+            .iter()
+            .map(|i| i.rect)
+            .min_by_key(|r| (r.y, r.x))
+            .expect("a pop-over");
+        assert_eq!(
+            top.y, 3,
+            "two rows above, the trigger, then the list: {top:?}"
         );
     }
 
