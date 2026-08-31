@@ -299,6 +299,25 @@ pub fn covered(spec: &WidgetSpec) -> bool {
     }
 }
 
+/// **A tree's `visibleRows` is a window, not a height** — and a list's is a
+/// height.
+///
+/// The two kinds differ, in the runtime, in a way nothing in the vocabulary
+/// says out loud: `kinds/list.rs` pads its output to the advertised row count
+/// ("so the List occupies its full `visible_rows`"), while `kinds/tree.rs`
+/// emits at most that many and stops. A plugin can and does depend on the
+/// difference — the orchestrator pads the gap *below* its dock tree with blank
+/// rows so its hint bar lands on the dock's last two, and its comment says
+/// why: "The host tree renders only its actual content rows (it does not pad
+/// itself out to `visibleRows`)".
+///
+/// Giving both a fixed height made the dock's column taller than the dock by
+/// exactly the padding, which pushed the hint bar off the bottom and hung four
+/// e2e tests waiting for it. So a tree is as tall as its content, capped.
+fn tree_rows(content: u32, visible: u32) -> u16 {
+    content.min(visible).min(u16::MAX as u32) as u16
+}
+
 /// The description for a covered spec.
 ///
 /// `width` is the panel's inner content width, which two variants need before
@@ -1314,7 +1333,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             // overlay scrollbar, stop with it.
             let node = node.w(Sizing::Pct(100));
             match visible_rows {
-                Some(r) => node.h(Sizing::Cells(*r as u16)),
+                Some(r) => node.h(Sizing::Cells(tree_rows(at, *r))),
                 None => node.flex(1),
             }
         }
@@ -1456,7 +1475,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             let list = list.selection(visible.iter().position(|&a| a as i32 == sel_abs));
             let node = fresh_ui::ComponentExt::node(list);
             match visible_rows {
-                Some(r) => node.h(Sizing::Cells(*r as u16)),
+                Some(r) => node.h(Sizing::Cells(tree_rows(n as u32, *r))),
                 None => node.flex(1),
             }
         }
@@ -2250,6 +2269,32 @@ fn row_pieces(
     // end, which no run starts at.
     if caret.is_some_and(|c| c >= end) {
         kids.push(marker());
+    }
+    // **A row-wide hit has to be stated past the row's text.**
+    //
+    // A piece is a byte range, and past the last glyph there are no bytes —
+    // so a row built only from its pieces answers for exactly as many columns
+    // as it has characters. A compact dock row is a short name in a wide
+    // column, and a right-click "past the end of its short text — where most
+    // of a compact row's width is empty and where a user naturally aims"
+    // (`dock_right_click_opens_context_menu_in_compact_mode`) landed on
+    // nothing at all.
+    //
+    // The runtime answered this with a *second* resolver: `hit_test_row_aware`
+    // tries an exact byte hit and falls back to `row_select_hit`, "the
+    // row-body `select` hit of a list/tree row, regardless of column". The
+    // description needs no fallback and no second pass — the row simply
+    // extends, carrying the hit its `row_target` flag already declares.
+    //
+    // The last such hit wins, which is the collector's own precedence: "the
+    // narrow targets are named before the row-wide one, so a byte inside the
+    // glyph or the box belongs to it rather than to `select`".
+    if let Some((_, h)) = hits.iter().rev().find(|(_, h)| h.row_target) {
+        kids.push(hit_node(
+            row().w(Sizing::Flex(1)).h(Sizing::Cells(1)),
+            slot,
+            h.clone(),
+        ));
     }
     row().h(Sizing::Cells(1)).children(kids)
 }
