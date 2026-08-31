@@ -1307,6 +1307,18 @@ impl Editor {
         // stale `true` from the previous keystroke would claim this one.
         self.shell_interior_took_key = false;
         let result = ui.dispatch(input);
+        // **A change is not always a message.** A widget that keeps its own
+        // hover — every `List` and `Tree` — writes `hovered` through an
+        // updater and produces nothing, precisely so the host is not bothered
+        // with it; `dispatch` does not rebuild, so the write is sitting in the
+        // scheduler waiting for the next frame that never got asked for. The
+        // completion popup was the symptom: its rows never lit under the
+        // pointer while the menu bar's did, because the menu bar's hover is a
+        // `UiFact` and a `List`'s is not. `needs_frame` is the library's own
+        // answer to "is the frame stale" — a dirty element, a queued mutation,
+        // a behavior with something to deliver — and it is the right one to
+        // ask here.
+        let tree_stale = ui.needs_frame();
         self.shell_ui = Some(ui);
         // Claimed is reported, not inferred. Producing a message and taking
         // the event are different things: a hover moves a highlight without
@@ -1323,10 +1335,11 @@ impl Editor {
         // labels, the explorer's rows, the status bar's segments, a
         // separator, a tab — restyled a frame nobody asked for.
         //
-        // A message *is* the change: a `UiFact` exists to be reacted to, and
-        // a pointer that crosses no element boundary produces none, which is
-        // what keeps an idle motion from drawing a frame.
-        let changed = !result.msgs.is_empty();
+        // A message is *a* change — a `UiFact` exists to be reacted to — but
+        // not the only one: see `tree_stale` above. A motion that crosses no
+        // element boundary produces neither, which is what still keeps an idle
+        // pointer from drawing a frame.
+        let changed = tree_stale || !result.msgs.is_empty();
         for msg in result.msgs {
             match msg {
                 crate::view::shell::msg::UiMsg::Action(action) => {
