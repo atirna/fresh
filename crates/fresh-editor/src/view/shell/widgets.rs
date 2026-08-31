@@ -220,6 +220,45 @@ fn bar_ink() -> String {
 /// a panel: cells, like every other `Host`, and G's rule says it never
 /// migrates. Everything else crossed — see the arms below for what each one
 /// needed, and `every_variant_but_the_host_leaf_is_covered` for the list.
+/// The element key for a stateful widget, from the spec's own key.
+///
+/// **Identity is declared, not positional.** A `List`, `Tree` or scrolling
+/// `Text` is the only thing in a panel's subtree that owns element state — a
+/// scroll offset, a hover, a reveal — and reconciliation matched them by
+/// position among their siblings and by component *type*. Two consequences,
+/// both live before this: a plugin re-emitting its spec with one extra sibling
+/// above a list shifted every following node and **remounted** it, silently
+/// resetting its scroll; and two different lists at the same position updated
+/// in place, so one inherited the other's offset. Plugins rebuild their spec
+/// trees freely and nothing stopped either.
+///
+/// A widget with no key of its own stays positional, because there is nothing
+/// stable to name it by — that is the plugin's choice to make, and a synthetic
+/// index would only move the same bug behind a name that looks deliberate.
+fn state_key(key: &Option<String>) -> Option<fresh_ui::Key> {
+    key.as_deref()
+        .filter(|k| !k.is_empty())
+        .map(|k| fresh_ui::Key::Str(k.into()))
+}
+
+/// The same, for a node built where only the spec is in hand.
+fn spec_state_key(spec: &WidgetSpec) -> Option<fresh_ui::Key> {
+    match spec {
+        WidgetSpec::Text { key, .. }
+        | WidgetSpec::List { key, .. }
+        | WidgetSpec::Tree { key, .. } => state_key(key),
+        _ => None,
+    }
+}
+
+/// Apply [`state_key`]'s answer, if there is one.
+fn keyed(node: Node<UiMsg>, key: Option<fresh_ui::Key>) -> Node<UiMsg> {
+    match key {
+        Some(k) => node.key(k),
+        None => node,
+    }
+}
+
 pub fn covered(spec: &WidgetSpec) -> bool {
     match spec {
         WidgetSpec::Row { children, .. } | WidgetSpec::Col { children, .. } => {
@@ -1014,7 +1053,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 true => Some(sel as usize),
                 false => None,
             });
-            let node = fresh_ui::ComponentExt::node(list);
+            let node = keyed(fresh_ui::ComponentExt::node(list), state_key(key));
             match visible_rows {
                 Some(r) => node.h(Sizing::Cells(*r as u16)),
                 None => node.flex(1),
@@ -1159,7 +1198,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 true => list.selected(sel as usize),
                 false => list,
             };
-            let node = fresh_ui::ComponentExt::node(list);
+            let node = keyed(fresh_ui::ComponentExt::node(list), state_key(key));
             match visible_rows {
                 Some(r) => node.h(Sizing::Cells(*r as u16)),
                 None => node.flex(1),
@@ -1330,11 +1369,14 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 });
                 at += h;
             }
-            let node = fresh_ui::ComponentExt::node(Scrolled {
-                blocks: std::rc::Rc::new(blocks),
-                selected,
-                reveal: cx.scrollbar_reveal,
-            });
+            let node = keyed(
+                fresh_ui::ComponentExt::node(Scrolled {
+                    blocks: std::rc::Rc::new(blocks),
+                    selected,
+                    reveal: cx.scrollbar_reveal,
+                }),
+                state_key(key),
+            );
             // **As wide as the panel, not as wide as its rows.** The rows
             // arrive pre-rendered at the runtime's wrap width, so a window
             // sized to its content stops where the text does — and the two
@@ -1482,7 +1524,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             // A selection the window does not contain is *no* selection here,
             // not the element's own — see the `List` arm above.
             let list = list.selection(visible.iter().position(|&a| a as i32 == sel_abs));
-            let node = fresh_ui::ComponentExt::node(list);
+            let node = keyed(fresh_ui::ComponentExt::node(list), state_key(key));
             match visible_rows {
                 Some(r) => node.h(Sizing::Cells(tree_rows(n as u32, *r))),
                 None => node.flex(1),
@@ -1589,7 +1631,8 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             // list reveals when it moves. That is the whole of the auto-clamp
             // the runtime did by hand.
             let list = list.selection(sel);
-            let body = fresh_ui::ComponentExt::node(list).h(Sizing::Cells(*rows as u16));
+            let body = keyed(fresh_ui::ComponentExt::node(list), spec_state_key(spec))
+                .h(Sizing::Cells(*rows as u16));
             match head {
                 0 => body,
                 _ => col().children([entry_row(&out.entries[0], &cx.surface), body]),
@@ -3462,6 +3505,70 @@ mod tests {
             key: Some("l".into()),
             focusable: true,
         }
+    }
+
+    /// **A list's scroll follows its key, not its position.**
+    ///
+    /// Reconciliation matched these by position among their siblings and by
+    /// component type, so a plugin that re-emitted its spec with one extra
+    /// sibling above a list remounted it — dropping the scroll offset the
+    /// element existed to hold — and two lists that swapped places swapped
+    /// offsets with each other. Both are things plugins do freely.
+    #[test]
+    fn a_lists_scroll_survives_a_sibling_appearing_above_it() {
+        let scrolled = |ui: &Ui<UiMsg>| {
+            ui.spec()
+                .in_flow()
+                .iter()
+                .filter_map(|i| match &i.draw {
+                    fresh_ui::Draw::Lines(l) => l.first().map(|r| r.to_string()),
+                    _ => None,
+                })
+                .find(|t| t.starts_with("row"))
+                .expect("some row is on screen")
+        };
+        // Alone in a column, then with a sibling inserted above it. The list
+        // is the same list both times, and says so with its key.
+        let alone = WidgetSpec::Col {
+            children: vec![a_list(50, 0, 5)],
+            key: None,
+        };
+        let with_sibling = WidgetSpec::Col {
+            children: vec![
+                WidgetSpec::Raw {
+                    entries: vec![raw("a new heading")],
+                    key: None,
+                },
+                a_list(50, 0, 5),
+            ],
+            key: None,
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&alone, WIDTH, &cx()), Size::new(WIDTH, 24));
+        assert_eq!(scrolled(&ui), "row0", "starts at the top");
+
+        // Scroll it, so there is state worth losing.
+        let at = ui.rect_of(
+            ui.find_by_key(&fresh_ui::Key::Str("l".into()))
+                .expect("the list is keyed"),
+        );
+        ui.dispatch(fresh_ui::Input::Wheel {
+            pos: fresh_ui::Point::new(at.x + 1, at.y + 1),
+            delta: 3,
+            axis: fresh_ui::Axis::Vertical,
+            mods: fresh_ui::Mods::NONE,
+        });
+        ui.frame(node(&alone, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let after_wheel = scrolled(&ui);
+        assert_ne!(after_wheel, "row0", "the wheel moved the window");
+
+        // Now the sibling appears. Same list, one position further down.
+        ui.frame(node(&with_sibling, WIDTH, &cx()), Size::new(WIDTH, 24));
+        assert_eq!(
+            scrolled(&ui),
+            after_wheel,
+            "the list kept its window when a sibling appeared above it"
+        );
     }
 
     /// **The bar comes free, and that is the whole reason `List` crossed.**
