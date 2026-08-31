@@ -6924,13 +6924,32 @@ impl Editor {
         // it carved the explorer but never the dock — so a replay with a dock
         // open computed visual-line motion against a body twenty-odd columns
         // too wide.
+        //
+        // **A geometry pass, not a frame.** `layout_only` builds the
+        // description and lays it out and stops; a frame goes on to do things
+        // — move focus to an autofocused element and tell the application it
+        // moved, drain a queued reveal into a viewport's scroll offset, hand a
+        // behavior what arrived for it, repaint a display list nobody will
+        // draw. Replay asks this question once per replayed action, so a frame
+        // here writes the *length of the macro* into editor state that has
+        // nothing to do with where the body is. What replay needs is one
+        // rectangle.
+        //
+        // The description still has to be rebuilt and reconciled, and the
+        // frame the shell describes is still the only thing that knows the
+        // answer: it changes between replayed actions (a suggestion list takes
+        // the status row, the search-options row appears, the dock opens), so
+        // there is nothing to cache it against short of the whole `Frame` —
+        // which is deliberately not comparable, and a hand-picked subset of it
+        // is the same "replica of a layout" this call site already got wrong
+        // once.
         let split = self.compute_dock_split(size);
         let shell = self.shell_frame(split).resolve_dock(size.width);
         let mut ui = self
             .shell_ui
             .take()
             .expect("the shell tree is taken and returned within one call");
-        ui.frame(
+        ui.layout_only(
             crate::view::shell::frame::frame_tree(shell),
             fresh_ui::Size::new(size.width, size.height),
         );
