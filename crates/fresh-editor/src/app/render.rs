@@ -357,12 +357,28 @@ impl Editor {
         let status_bar_area = region(HostRegion::StatusBar);
         let editor_content_area = region(HostRegion::Body);
         // Where the sidebar wants the hardware caret (its selected row) when it
-        // owns the keyboard. The panel is native now, so this is a *layout*
-        // query rather than something a painter hands back: the caret sits on
-        // the left edge of the row the description marked. Committed at the
-        // very end of this draw, with the editor's caret, so overlays painted
-        // after the sidebar can suppress it instead of having it blink through
-        // them.
+        // owns the keyboard.
+        //
+        // **This is arithmetic, not a layout query**, whatever the comment here
+        // used to say. `area` is the explorer region's rectangle and the two
+        // `+ 1`s are the border the panel's own box draws, hard-coded here and
+        // stated a second time in the description — so a row of padding added
+        // inside that box moves the caret off the row it is meant to mark, and
+        // nothing fails. The description does place a marker: `file_explorer`'s
+        // row stacks a `▌` cell over the selected row. That node carries no
+        // key, so `shell::cell_of` cannot be asked where it landed, which is
+        // why this reaches for the region origin instead.
+        //
+        // The right shape is in this file already, for the pane caret:
+        // `widgets::caret_key(Slot::Pane(id))` keys the marker,
+        // `Self::shell_cell` reads back the cell layout gave it, and no border
+        // offset appears anywhere (see `Self::described_pane_caret`). Keying
+        // the explorer's marker and reading it back the same way is the fix.
+        // This comment is not the fix; it is the admission that one is owed.
+        //
+        // Committed at the very end of this draw, with the editor's caret, so
+        // overlays painted after the sidebar can suppress it instead of having
+        // it blink through them.
         let explorer_hardware_cursor = shell.explorer.as_ref().and_then(|e| {
             let area = region(HostRegion::Explorer);
             Some((area.x + 1, area.y + 1 + e.caret_row? as u16))
@@ -1276,8 +1292,31 @@ impl Editor {
             self.shell_ui = Some(ui);
         }
 
-        // Chrome theme-key provenance (status bar, menu, tabs, file explorer,
-        // scrollbars) is now recorded during each region's own paint.
+        // Chrome theme-key provenance, and the hole in it. This used to say
+        // the whole list — status bar, menu, tabs, file explorer, scrollbars —
+        // "is now recorded during each region's own paint", and neither half
+        // of that is true.
+        //
+        // Two of them still have a paint to record during: the tab strip
+        // threads a `CellThemeRecorder` through `render_tabs`, and the pane
+        // scrollbars are filed by `record_scrollbar_theme_runs` in
+        // `BodyPainter::finish`, from the geometry the grid produced. Two more
+        // are *described* and so have no painter left at all — their runs come
+        // from a read-back written by hand for each: `MenuRenderer::
+        // compute_layout` collects them on the same walk that builds the menu's
+        // description, and `Self::publish_status_bar` asks the retained tree
+        // through `status_bar::provenance_runs`. Both work; neither is a paint.
+        //
+        // The file explorer is in the list and records nothing. Nor do the
+        // settings dialog, the popups or the dock. Every writer of
+        // `cell_theme_map` is either a painter or a bespoke per-surface
+        // read-back, and a surface that has migrated has neither until someone
+        // writes the second one — so Ctrl+Right-click over the sidebar reports
+        // blank. That is defect **F.6** in
+        // `docs/internal/fresh-editor-retained-mode-plan.md`, still open; its
+        // fix is one recorder inside the fold, which already holds each display
+        // -list item's rect, clip and resolved theme keys, rather than a fifth
+        // hand-written walk.
 
         // Render tab drag drop zone overlay if dragging a tab
         let drag_state_clone = self.active_window().mouse_state.dragging_tab.clone();

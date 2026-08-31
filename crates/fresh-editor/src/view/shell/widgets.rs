@@ -23,11 +23,27 @@
 //! wrongly without a red test, and the oracle goes when the last variant does.
 //!
 //! **Coverage is explicit** ([`covered`]) because a panel is either described
-//! or painted, never half of each: a spec using a variant this module has not
-//! reached takes the old path whole. That is the same seam as a `Host` leaf.
+//! or painted, never half of each: a spec using a variant this module has no
+//! arm for takes the old path whole. That is the same seam as a `Host` leaf.
 //! It now answers `true` for everything but `WindowEmbed`, which is a `Host`
-//! leaf by rule and never crosses — so the gate is what remains of a boundary
-//! that has closed rather than a list of things still to do.
+//! leaf by rule and never crosses.
+//!
+//! **Read `covered` as what it says: the adapter has an arm for this variant.**
+//! It does not say the arm is native, and this doc used to imply it did — that
+//! the gate was "what remains of a boundary that has closed". The boundary has
+//! not closed. Most variants are written out below as nodes; five of them —
+//! `Text`, `List`, `Tree`, `Dropdown` and `DualList` — reach [`collected`],
+//! which calls `crate::widgets::render::render_collected`, the immediate-mode
+//! runtime, and wraps what comes back: its rows become nodes, each `HitArea`
+//! becomes a gesture on the sub-range it names, each overlay row becomes a
+//! layer. That is a real gain, and the reason to do it in one step — the
+//! byte-range scan and the `LayoutBox` arena go, and a press is resolved
+//! against a rectangle layout produced. But the runtime is still the thing that
+//! decides what a list row, a tree's indent guides and a dropdown's trigger
+//! look like, so seventeen thousand lines of it are still on the render path
+//! for those five. `collected`'s own doc puts it exactly: "It is a stage, not
+//! the end." The gate has closed over `WidgetSpec`'s variants; it has not
+//! closed over the runtime.
 
 use fresh_core::api::{OverlayColorSpec, OverlayOptions, WidgetSpec};
 use fresh_core::text_property::TextPropertyEntry;
