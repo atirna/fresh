@@ -385,6 +385,9 @@ pub struct FocusProps<M> {
     pub skip: bool,
     /// Raw key listeners, offered before intents are resolved.
     pub on_key: Vec<Handler<M>>,
+    /// Key listeners offered on the way *down*, root to target, before the
+    /// focused element sees the key. See [`Node::on_key_capture`].
+    pub on_key_capture: Vec<Handler<M>>,
     /// Key chords this subtree reads differently from the global map.
     pub shortcuts: Vec<crate::focus::Shortcut>,
     /// How *this* part of the interface carries out an intent.
@@ -405,6 +408,7 @@ impl<M> Default for FocusProps<M> {
             ordinal: None,
             skip: false,
             on_key: Vec::new(),
+            on_key_capture: Vec::new(),
             shortcuts: Vec::new(),
             actions: Vec::new(),
             on_focus_change: None,
@@ -932,6 +936,7 @@ impl<M> Clone for FocusProps<M> {
             ordinal: self.ordinal,
             skip: self.skip,
             on_key: self.on_key.clone(),
+            on_key_capture: self.on_key_capture.clone(),
             shortcuts: self.shortcuts.clone(),
             actions: self.actions.clone(),
             on_focus_change: self.on_focus_change.clone(),
@@ -1641,6 +1646,25 @@ impl<M> Node<M> {
     /// As `action`, for a handler that may decline to produce a message.
     pub fn action_handler(mut self, intent: crate::focus::Intent, h: Handler<M>) -> Self {
         self.focus_props().actions.push((intent, h));
+        self
+    }
+
+    /// A key listener offered on the way *down*, root to target, before the
+    /// focused element sees the key.
+    ///
+    /// **The pointer has had this since the hit path was written; keys did
+    /// not, and the asymmetry is not principled.** A surface-level policy — a
+    /// plugin's mode binding, a dialog's own chord — has to be able to pre-empt
+    /// a focused control without swallowing every key that control would have
+    /// handled, and a bubble listener can only do the second. Without it a
+    /// surface that wants to reserve one key has to claim them all, which is
+    /// exactly why the editor's plugin panels and settings dialog swallow
+    /// everything today.
+    ///
+    /// Same `Ctl` and the same stop semantics as the bubble leg: calling
+    /// `e.stop()` here ends propagation before the focused element runs.
+    pub fn on_key_capture(mut self, f: impl Fn(&Event) -> Option<M> + 'static) -> Self {
+        self.focus_props().on_key_capture.push(Rc::new(f));
         self
     }
 

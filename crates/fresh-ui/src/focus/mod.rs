@@ -29,6 +29,7 @@ pub use tree::FocusId;
 pub struct Focusable<M: 'static> {
     pub(crate) on_change: Option<crate::desc::Handler<M>>,
     pub(crate) on_key: Vec<crate::desc::Handler<M>>,
+    pub(crate) on_key_capture: Vec<crate::desc::Handler<M>>,
     pub(crate) shortcuts: Vec<Shortcut>,
     pub(crate) actions: Vec<(Intent, crate::desc::Handler<M>)>,
     pub(crate) ordinal: Option<i32>,
@@ -51,6 +52,7 @@ impl<M: 'static> Focusable<M> {
         Focusable {
             on_change: None,
             on_key: Vec::new(),
+            on_key_capture: Vec::new(),
             shortcuts: Vec::new(),
             actions: Vec::new(),
             ordinal: None,
@@ -93,6 +95,12 @@ impl<M: 'static> Focusable<M> {
     }
 
     /// A raw key listener, offered before intents are resolved.
+    /// See [`crate::Node::on_key_capture`].
+    pub fn on_key_capture(mut self, h: crate::desc::Handler<M>) -> Self {
+        self.on_key_capture.push(h);
+        self
+    }
+
     pub fn on_key(mut self, h: crate::desc::Handler<M>) -> Self {
         self.on_key.push(h);
         self
@@ -137,6 +145,7 @@ use crate::schedule::{DirtyCause, Ui};
 /// are the same thing to everything downstream.
 pub(crate) struct FocusConfig<M: 'static> {
     pub on_key: Vec<crate::desc::Handler<M>>,
+    pub on_key_capture: Vec<crate::desc::Handler<M>>,
     pub shortcuts: Vec<Shortcut>,
     pub actions: Vec<(Intent, crate::desc::Handler<M>)>,
     pub on_change: Option<crate::desc::Handler<M>>,
@@ -148,6 +157,7 @@ impl<M: 'static> Ui<M> {
         if let Desc::Focusable(f) = &resolve(&el.desc).desc {
             return Some(FocusConfig {
                 on_key: f.on_key.clone(),
+                on_key_capture: f.on_key_capture.clone(),
                 shortcuts: f.shortcuts.clone(),
                 actions: f.actions.clone(),
                 on_change: f.on_focus_change.clone(),
@@ -158,6 +168,7 @@ impl<M: 'static> Ui<M> {
                 .downcast_ref::<Focusable<M>>()
                 .map(|f| FocusConfig {
                     on_key: f.on_key.clone(),
+                    on_key_capture: f.on_key_capture.clone(),
                     shortcuts: f.shortcuts.clone(),
                     actions: f.actions.clone(),
                     on_change: f.on_change.clone(),
@@ -708,29 +719,49 @@ impl<M: 'static> Ui<M> {
             return false;
         };
         let ctl = Rc::new(Ctl::default());
-        for &n in chain.iter().rev() {
-            let handlers = self.focus_config(n).map(|c| c.on_key).unwrap_or_default();
-            if handlers.is_empty() {
-                continue;
-            }
-            let mut ev = self.synth_event(n, GestureKind::Key, Some(k), ctl.clone());
-            ev.target = target;
-            ev.phase = if n == target {
-                Phase::Target
-            } else {
-                Phase::Bubble
+        // **Down first, then up** — the same two legs the pointer has had since
+        // the hit path was written. A surface that must pre-empt a focused
+        // control on one key (a plugin's mode binding, a dialog's own chord)
+        // gets it on the way down without having to claim every key on the way
+        // up; a surface that only wants what the control declined keeps the
+        // bubble leg it always had.
+        for capture in [true, false] {
+            let order: Vec<ElementId> = match capture {
+                true => chain.to_vec(),
+                false => chain.iter().rev().copied().collect(),
             };
-            for h in handlers {
-                if let Some(m) = h(&ev) {
-                    out.push(m);
+            for n in order {
+                let handlers = self
+                    .focus_config(n)
+                    .map(|c| match capture {
+                        true => c.on_key_capture,
+                        false => c.on_key,
+                    })
+                    .unwrap_or_default();
+                if handlers.is_empty() {
+                    continue;
+                }
+                let mut ev = self.synth_event(n, GestureKind::Key, Some(k), ctl.clone());
+                ev.target = target;
+                ev.phase = if n == target {
+                    Phase::Target
+                } else if capture {
+                    Phase::Capture
+                } else {
+                    Phase::Bubble
+                };
+                for h in handlers {
+                    if let Some(m) = h(&ev) {
+                        out.push(m);
+                    }
+                    if ctl.flow.get() == Flow::Stop {
+                        break;
+                    }
                 }
                 if ctl.flow.get() == Flow::Stop {
-                    break;
+                    self.apply_focus_controls(&ctl, out);
+                    return true;
                 }
-            }
-            if ctl.flow.get() == Flow::Stop {
-                self.apply_focus_controls(&ctl, out);
-                return true;
             }
         }
         self.apply_focus_controls(&ctl, out);

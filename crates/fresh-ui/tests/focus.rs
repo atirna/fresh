@@ -604,3 +604,72 @@ fn a_scope_naming_nothing_falls_back_to_the_layer() {
         .collect();
     assert_eq!(reachable, vec!["sink".into()]);
 }
+
+// -- the key capture leg ------------------------------------------------------
+
+/// A capture listener sees the key before the focused element, and can decline
+/// it without swallowing the rest.
+///
+/// This is what lets a surface reserve one key. Before it existed, the only
+/// way to pre-empt a focused control was a bubble listener that stopped
+/// everything — which is why a plugin panel that wants `Enter` ended up
+/// claiming every key its widgets would have handled.
+#[test]
+fn a_capture_listener_runs_before_the_focused_element() {
+    let log: Log = Rc::new(RefCell::new(Vec::new()));
+    let (a, b) = (log.clone(), log.clone());
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(
+        focusable(
+            col().child(focusable(text("field")).key("field").on_key(move |_| {
+                b.borrow_mut().push("field".into());
+                None
+            })),
+        )
+        .skip_traversal()
+        .on_key_capture(move |_| {
+            a.borrow_mut().push("root capture".into());
+            None
+        }),
+        FRAME,
+    );
+    ui.dispatch(Input::Key(KeyPress::new(KeyCode::Tab)));
+    log.borrow_mut().clear();
+    ui.dispatch(Input::Key(KeyPress::new(KeyCode::Enter)));
+    assert_eq!(
+        *log.borrow(),
+        vec!["root capture".to_string(), "field".to_string()],
+        "down leg first, then the focused element"
+    );
+}
+
+/// Stopping on the capture leg keeps the key from the focused element.
+#[test]
+fn a_capture_listener_that_stops_pre_empts_the_control() {
+    let log: Log = Rc::new(RefCell::new(Vec::new()));
+    let (a, b) = (log.clone(), log.clone());
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(
+        focusable(
+            col().child(focusable(text("field")).key("field").on_key(move |_| {
+                b.borrow_mut().push("field".into());
+                None
+            })),
+        )
+        .skip_traversal()
+        .on_key_capture(move |e: &Event| {
+            a.borrow_mut().push("root capture".into());
+            e.stop();
+            None
+        }),
+        FRAME,
+    );
+    ui.dispatch(Input::Key(KeyPress::new(KeyCode::Tab)));
+    log.borrow_mut().clear();
+    ui.dispatch(Input::Key(KeyPress::new(KeyCode::Enter)));
+    assert_eq!(
+        *log.borrow(),
+        vec!["root capture".to_string()],
+        "the focused element never saw it"
+    );
+}
