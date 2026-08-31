@@ -132,6 +132,11 @@ pub struct Frame {
     /// bool.)
     pub status_bar_items: Option<super::status_bar::StatusBar>,
     pub prompt_line: bool,
+    /// Whether a prompt is up, and so whether the keyboard's owner is the
+    /// prompt. Separate from `prompt_line` — the overlay form of the prompt
+    /// draws no row and still owns the keyboard. See
+    /// [`super::prompt::keys_layer`].
+    pub prompt_keys: bool,
     /// Column width, already resolved against the frame width.
     pub dock: Option<u16>,
     /// The dock's content as a description, when the adapter covers every
@@ -262,6 +267,7 @@ impl Default for Frame {
             search_options: None,
             status_bar_items: None,
             prompt_line: false,
+            prompt_keys: false,
             dock: None,
             dock_interior: None,
             dock_grip_hovered: false,
@@ -475,6 +481,16 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // menus — a context menu opened from a popup row still paints on top, the
     // same declaration-order rule everything else here follows.
     let chrome = chrome.children(super::popup::placed_layers(&f.popups));
+    // **The prompt's keyboard, over the popups and under the menus.** This is
+    // `layer_rank`'s `MENU > PROMPT > POPUP` said as declaration order instead
+    // of as three integers: a `Modality::Focus` layer confines the keyboard to
+    // itself, and `topmost_modal` picks the one declared last, so the ordering
+    // *is* the precedence. It paints nothing — the prompt's row, card and
+    // suggestion list are described above and elsewhere.
+    let chrome = match f.prompt_keys {
+        true => chrome.child(super::prompt::keys_layer()),
+        false => chrome,
+    };
     let chrome = match super::menu::dropdown_chain(&f.dropdowns, &f.menu_keys) {
         Some(chain) => chrome.child(chain),
         None => chrome,

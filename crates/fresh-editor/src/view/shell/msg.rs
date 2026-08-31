@@ -476,6 +476,17 @@ pub enum UiFact {
     /// and the tree's own `KeyPress` is a smaller vocabulary than the one the
     /// interiors read.
     ModalKey(super::modal::KeySlot),
+    /// A key belongs to the prompt, whose interior owns what it means — and
+    /// which may hand it back.
+    ///
+    /// **The declining half of `ModalKey`.** A modal swallows what its
+    /// interior ignores, so the tree can claim during dispatch and be right.
+    /// The prompt cannot: an unhandled prompt key is still the editor's, and
+    /// whether `dispatch_prompt_key` took it is only known once it has run —
+    /// here, in the applier. So this fact's applier completes the claim
+    /// (`Editor::shell_interior_took_key`) and the prompt's layer is
+    /// `Modality::Focus`, which confines the keyboard without swallowing it.
+    PromptKey,
     /// A press on one of the keybinding editor's dialogs.
     ///
     /// **The dialogs answer for themselves, the table does not — yet.** Five

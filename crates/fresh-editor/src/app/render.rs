@@ -4180,6 +4180,11 @@ impl Editor {
             search_options,
             status_bar_items,
             prompt_line: prompt_row_visible,
+            // The keyboard's owner, which is not the same question as the
+            // row's: the overlay form of the prompt draws no prompt row and
+            // still owns every key. `chrome::Prompt::layers` asked
+            // `is_prompting()` for exactly this and so does the layer.
+            prompt_keys: self.is_prompting(),
             dock: dock_area.map(|d| d.width),
             explorer,
             menu: self.open_context_menu_for_shell(),

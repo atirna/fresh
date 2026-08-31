@@ -1187,6 +1187,9 @@ impl Editor {
                 .map(|p| (p.x.max(0) as u16, p.y.max(0) as u16))
                 .unwrap_or_default(),
         };
+        // Cleared before the interiors run, never by whoever reads it: a
+        // stale `true` from the previous keystroke would claim this one.
+        self.shell_interior_took_key = false;
         let result = ui.dispatch(input);
         self.shell_ui = Some(ui);
         // Claimed is reported, not inferred. Producing a message and taking
@@ -1220,6 +1223,12 @@ impl Editor {
                 crate::view::shell::msg::UiMsg::Ui(fact) => self.apply_ui_fact(fact, facts),
             }
         }
+        // **The claim's second half.** A `Modality::Focus` surface confines
+        // the keyboard without swallowing it, so whether the key was taken is
+        // its interior's answer — and the interior ran in an applier above,
+        // after `dispatch` had already reported what the *tree* claimed. The
+        // authoritative party answers last.
+        let claimed = claimed || self.shell_interior_took_key;
         Dispatched { claimed, changed }
     }
 
@@ -2030,6 +2039,26 @@ impl Editor {
                     KeySlot::WorkspaceTrust => {
                         let _ = self.handle_workspace_trust_key(&ev);
                     }
+                }
+            }
+            // **The prompt: the same seam, and the claim it completes.**
+            //
+            // `ModalKey` above can be a plain effect because a modal swallows
+            // what its interior ignores — the tree already claimed the key
+            // when it routed it there. The prompt's layer is
+            // `Modality::Focus` instead: it confines the keyboard so nothing
+            // else takes a keystroke ahead of it, and hands back what
+            // `dispatch_prompt_key` declines, which is how the file browser's
+            // `Alt+H` and quick-open's `Ctrl+P` still reach their bindings.
+            // `Some` — including `Some(Ignored)`, which is how the
+            // query-replace confirm prompt consumes every key — is the
+            // prompt taking it.
+            UiFact::PromptKey => {
+                let Some(ev) = self.shell_key_event else {
+                    return;
+                };
+                if self.dispatch_prompt_key(&ev).is_some() {
+                    self.shell_interior_took_key = true;
                 }
             }
             UiFact::ModalPointer(slot) => {
