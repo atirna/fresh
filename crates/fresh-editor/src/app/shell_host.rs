@@ -1541,6 +1541,34 @@ impl Editor {
             // it is next built, and the row renderers take the highlight from
             // there — where `update_widget_hover` had to ask the plugin to
             // re-render before the painter could show it.
+            // **The registry's focus key becomes a mirror of the tree's.**
+            //
+            // It was the authority: the runtime resolved one focused key
+            // across a panel's whole spec, the description read it back, and
+            // the tree's own ring was declined. Now the ring is the tree's and
+            // this writes what it decided — so the plugin's `focus` event, the
+            // kinds' key handlers and the web projection all keep reading the
+            // field they already read, and it has one writer.
+            //
+            // The plugin is told, exactly as `deliver_widget_hit`'s
+            // click-to-focus told it, because a plugin that mirrors focus
+            // cannot tell a click from a Tab and should not have to.
+            UiFact::WidgetFocus { slot, widget } => {
+                use crate::view::shell::widgets::Slot;
+                let panel = match slot {
+                    Slot::Dock => crate::app::PanelSlot::Dock,
+                    Slot::Floating => crate::app::PanelSlot::Floating,
+                    _ => return,
+                };
+                let Some(key) = self.panel(panel).map(|p| p.panel_key.clone()) else {
+                    return;
+                };
+                if self.widget_registry.focus_key(&key) == Some(widget.as_str()) {
+                    return;
+                }
+                self.widget_registry.set_focus_key(&key, widget);
+                self.rerender_widget_panel(&key);
+            }
             UiFact::WidgetHover {
                 slot,
                 widget,

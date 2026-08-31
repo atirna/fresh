@@ -653,6 +653,29 @@ pub enum UiFact {
         item: String,
         entered: bool,
     },
+    /// **Focus moved onto a plugin widget, and the runtime is being told.**
+    ///
+    /// A panel's focused widget is one string in the widget registry, resolved
+    /// by the runtime across the whole spec and read back by the description as
+    /// `widgets::Ctx::focus_key`. That made it the *authority*: Tab was
+    /// interpreted host-side, the tree's own ring was declined
+    /// (`focusable(false)`), and which control was live could only be answered
+    /// by the party that was not laying it out.
+    ///
+    /// With the widgets on the tree's ring, the tree answers it — a press asks
+    /// for focus, traversal moves it — and this fact demotes the registry's
+    /// string to a *mirror*: written only from here, read by everything that
+    /// already reads it (the plugin's `focus` event, the kinds' key handlers,
+    /// the web projection). One authority, which is the same move Phase 2.1
+    /// made for the scroll folds.
+    ///
+    /// Only a *gain* is reported. Focus is never nowhere while a panel is up —
+    /// it moves from one control to the next — so a loss paired with a gain
+    /// would race, and the gain is the one that names the new holder.
+    WidgetFocus {
+        slot: super::widgets::Slot,
+        widget: String,
+    },
     /// A right press on a widget that raises a context menu for itself.
     ///
     /// **The last thing a described panel asked the probe.** Deciding *which*

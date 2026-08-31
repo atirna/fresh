@@ -424,6 +424,63 @@ fn row_surface(st: fresh_ui::widgets::RowState, plain: &Ink) -> Ink {
 }
 
 fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMsg> {
+    on_the_ring(spec, cx, node_body(spec, width, cx, site))
+}
+
+/// **Put a plugin widget on the tree's focus ring, if it is one.**
+///
+/// Eight kinds are focusable — button, toggle, number, text, dropdown, list,
+/// tree and dual list — and two of them conditionally: a disabled or opted-out
+/// button is not, and a list is only when its spec says so. Those rules are
+/// *not* restated here. `box_meta` is where each kind already answers "am I
+/// focusable, and what is my key", and it is the same call the runtime's own
+/// ring makes, so asking it is what keeps there being one answer. Writing the
+/// eight arms out again would be the ninth copy of a rule, which is the shape
+/// this migration exists to remove.
+///
+/// The wrapper reports only a *gain*, and reports it as the widget's key. That
+/// demotes the registry's focused-key string from an authority — resolved
+/// host-side across a whole spec, read back by this description — to a mirror
+/// of what the tree decided. Same move Phase 2.1 made for the scroll folds.
+///
+/// **It goes on every interactive kind at once, and that is deliberate.** A
+/// ring holding only buttons would let Tab cycle buttons and step over the
+/// fields between them, which is worse than a ring the tree does not own: the
+/// unit of this change is a panel, not a widget kind.
+fn on_the_ring(spec: &WidgetSpec, cx: &Ctx<'_>, n: Node<UiMsg>) -> Node<UiMsg> {
+    let meta = crate::widgets::kinds::behavior(spec).box_meta(spec);
+    let Some(k) = meta.key.filter(|k| !k.is_empty() && meta.focusable) else {
+        return n;
+    };
+    let (slot, widget) = (cx.slot, k.clone());
+    // **The wrapper adopts the child's sizing, because it is not transparent.**
+    //
+    // Focus properties only attach to a `Focusable` node, so putting a widget
+    // on the ring means a node *around* it rather than a flag on it — and a
+    // wrapper left at its default `Auto` is a second opinion about the child's
+    // extent. A text area asked for six rows of a thirty-line document and the
+    // wrapper reported all thirty, because `Auto` measured the content the
+    // viewport exists to window.
+    let (w, h) = (n.w, n.h);
+    fresh_ui::focusable(n)
+        .w(w)
+        .h(h)
+        .key(fresh_ui::Key::Str(format!("widget_focus:{k}").into()))
+        .on_focus_change(move |e: &fresh_ui::Event| {
+            match e.kind == fresh_ui::GestureKind::FocusGained {
+                // A loss is not reported: focus is never nowhere while a panel
+                // is up, so a loss paired with the matching gain would race,
+                // and the gain is the one that names the new holder.
+                false => None,
+                true => Some(UiMsg::Ui(super::msg::UiFact::WidgetFocus {
+                    slot,
+                    widget: widget.clone(),
+                })),
+            }
+        })
+}
+
+fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMsg> {
     let axis = site.axis;
     match spec {
         WidgetSpec::Row { children, wrap, .. } => {
@@ -5509,6 +5566,62 @@ mod tests {
             markdown: false,
             key: Some("doc".into()),
         }
+    }
+
+    /// **The interactive widgets are on the tree's ring, and the ring is asked
+    /// rather than restated.**
+    ///
+    /// Eight kinds are focusable and two of them conditionally, and those rules
+    /// live in each kind's `box_meta` — the same answer the runtime's own ring
+    /// reads. The adapter asks it, so there is one copy; this pins that a
+    /// keyed, focusable widget acquires focus and a decorative one does not,
+    /// which is what would break if the rules were ever written out a second
+    /// time and drifted.
+    #[test]
+    fn a_keyed_interactive_widget_is_on_the_focus_ring() {
+        let field = WidgetSpec::Text {
+            value: "hi".into(),
+            cursor_byte: -1,
+            focused: false,
+            label: String::new(),
+            placeholder: None,
+            rows: 1,
+            field_width: 8,
+            max_visible_chars: 0,
+            full_width: false,
+            completions: Vec::new(),
+            completions_visible_rows: 0,
+            block_caret: false,
+            sel_start: -1,
+            sel_end: -1,
+            label_width: 0,
+            read_only: false,
+            markdown: false,
+            key: Some("f".into()),
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&field, WIDTH, &cx()), Size::new(WIDTH, 8));
+        assert!(
+            ui.find_by_key(&fresh_ui::Key::Str("widget_focus:f".into()))
+                .is_some(),
+            "a keyed text field declares itself focusable"
+        );
+
+        // A divider has no key and no business holding focus. `box_meta` says
+        // so; nothing here repeats the reason.
+        let rule = WidgetSpec::Divider {
+            ch: String::new(),
+            style: None,
+            key: None,
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&rule, WIDTH, &cx()), Size::new(WIDTH, 8));
+        assert!(
+            ui.spec().in_flow().iter().next().is_some_and(|_| ui
+                .find_by_key(&fresh_ui::Key::Str("widget_focus:".into()))
+                .is_none()),
+            "a decorative widget stays off the ring"
+        );
     }
 
     /// **A multi-line field takes the rows it asked for and no more**, however
