@@ -2036,11 +2036,17 @@ impl Editor {
                     self.refocus_floating_panel(crate::app::PanelSlot::Dock);
                 }
             }
-            UiFact::DockContext { x, y } => {
+            // **The cell is no longer read, and the menu no longer comes from
+            // here.** This used to refocus and then probe the runtime's boxes
+            // at `(x, y)` to raise the plugin's context menu. The widget's own
+            // node carries the `HitArea` now, so `UiFact::WidgetContext` has
+            // already raised it by the time this runs — what is left of the
+            // right press is the focus it takes, which is the half that was
+            // never about geometry.
+            UiFact::DockContext { .. } => {
                 if self.dock.as_ref().is_some_and(|f| !f.focused) {
                     self.refocus_floating_panel(crate::app::PanelSlot::Dock);
                 }
-                self.handle_floating_widget_context_click(crate::app::PanelSlot::Dock, x, y);
             }
             UiFact::DockScroll { delta, x, y } => {
                 self.handle_floating_widget_panel_wheel(crate::app::PanelSlot::Dock, x, y, delta);
