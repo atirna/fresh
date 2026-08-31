@@ -1,7 +1,18 @@
 # Migrating the Fresh editor UI onto `fresh-ui`
 
-> _AI-generated. **This document opens with what is left.** Sections I–IV are
-> the live plan: where the integration actually stands, everything still to do
+> **SUPERSEDED as a plan.** The live plan is
+> [`fresh-editor-retained-mode-plan.md`](fresh-editor-retained-mode-plan.md),
+> written after an independent review found that the first wave adopted the
+> library's structural half and almost none of its retained half — and that the
+> plugin-panel adapter builds its descriptions by calling the immediate-mode
+> renderer it was meant to replace. **Sections I–IV below are historical**: they
+> describe a plan that was followed, not one to follow. What remains valuable
+> here is the appendix — the survey of the pre-migration codebase, the target
+> design and the keep/migrate boundary — and the per-item reasoning in II, which
+> records why each surface landed the way it did. Where this document and the
+> new plan disagree, the new plan wins.
+>
+> _AI-generated. Sections I–IV were, at the time of writing, the live plan: where the integration actually stands, everything still to do
 > and how each piece lands in the library's idiom, the rules that keep it
 > there, and what is already done. Everything from `## 0. Situation` onward is
 > the **appendix** — the original current-state survey, target design and wave
