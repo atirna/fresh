@@ -7,10 +7,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use fresh_ui::{
-    col, focusable, gesture, host_leaf, layer, layout_reader, text, viewport, Anchor, BuildCx,
-    Component, ComponentExt, Constraints, Draw, Event, Focusable, Geom, GeomHandle, GestureKind,
-    Hit, HostLeaf, InitCx, Input, Intent, Key, KeyCode, KeyPress, LayoutCx, LayoutInfo, Modality,
-    Mods, MouseButton, Node, Point, PointerMode, Rect, RenderObject, Shortcut, Size, Sizing, Ui,
+    col, focusable, gesture, host_leaf, layer, layout_reader, text, viewport, Align, Anchor,
+    BuildCx, Component, ComponentExt, Constraints, Draw, Event, Focusable, Geom, GeomHandle,
+    GestureKind, Hit, HostLeaf, InitCx, Input, Intent, Key, KeyCode, KeyPress, LayoutCx,
+    LayoutInfo, Modality, Mods, MouseButton, Node, Place, Point, PointerMode, Rect, RenderObject,
+    Shortcut, Size, Sizing, Ui,
 };
 
 const FRAME: Size = Size { w: 20, h: 10 };
@@ -1164,4 +1165,77 @@ fn a_scrollbar_thumb_fills_a_track_it_cannot_move_along() {
             "content {content} fits in 28 cells"
         );
     }
+}
+
+/// **What a reader builds this frame is what paints this frame.**
+///
+/// A `layout_reader`'s builder is a new closure over new state every
+/// description, and the framework invalidates it so the builder re-runs. But
+/// re-running the builder is only half of it: the subtree it produces has to
+/// reach the display list of *this* frame. It did not — the builder ran with
+/// the new state and the spec still carried the previous frame's text, so
+/// every surface built inside a reader painted one frame behind the state it
+/// was built from, and only caught up when some later, unrelated event
+/// happened to draw again.
+///
+/// In the editor that is the settings dialog: clicking a category moved the
+/// selection and rebuilt the description, and the screen kept showing the
+/// previous category until the pointer moved.
+#[test]
+fn a_layout_readers_rebuilt_subtree_paints_in_the_same_frame() {
+    fn painted(ui: &Ui<()>) -> Vec<String> {
+        ui.spec()
+            .items
+            .iter()
+            .filter_map(|i| match &i.draw {
+                Draw::Lines(l) => Some(l.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+    let tree = |label: &'static str| layout_reader(move |_| text(label));
+
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(tree("first"), FRAME);
+    assert_eq!(painted(&ui), vec!["first".to_string()]);
+
+    ui.frame(tree("second"), FRAME);
+    assert_eq!(
+        painted(&ui),
+        vec!["second".to_string()],
+        "the reader rebuilt with the new description, so the new subtree is \
+         what this frame paints — not what the last one did"
+    );
+
+    // The same, one layer in. A layer is laid out in its own pass, and that
+    // is where the editor's dialogs live.
+    // The subtree keeps the *same geometry* both times — the editor's dialog
+    // is a fixed-size box whose contents change — so nothing about the
+    // arrangement moves and only the text differs.
+    let layered = |label: &'static str| {
+        col().key(Key::Str("chrome".into())).child(
+            layer()
+                .within(Key::Str("chrome".into()))
+                .anchor(Anchor::Screen(Align::Center))
+                .place(Place::Over)
+                .child(layout_reader(move |_| {
+                    col()
+                        .w(Sizing::Cells(12))
+                        .h(Sizing::Cells(1))
+                        .key(Key::Str("box".into()))
+                        .child(text(label))
+                })),
+        )
+    };
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(layered("one"), FRAME);
+    assert_eq!(painted(&ui), vec!["one".to_string()]);
+
+    ui.frame(layered("two"), FRAME);
+    assert_eq!(
+        painted(&ui),
+        vec!["two".to_string()],
+        "a reader inside a layer paints this frame's build too"
+    );
 }
