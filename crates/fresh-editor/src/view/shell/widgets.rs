@@ -926,7 +926,13 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                     slot,
                     hit: crate::widgets::HitArea {
                         row_target: true,
-                        context_click: false,
+                        // **What the runtime's own row says** (`kinds/list.rs`
+                        // sets it too). It cost nothing while the probe
+                        // supplied the hit for a right press; now that the
+                        // tree is the only answer and the probe stands down
+                        // for a described panel, a row that does not declare
+                        // the capability raises no context menu at all.
+                        context_click: true,
                         overlay: false,
                         widget_key: hit_keys.get(i).cloned().unwrap_or_default(),
                         widget_kind: "list",

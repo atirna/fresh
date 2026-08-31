@@ -105,17 +105,22 @@ fn column(interior: Option<super::panel::Interior>) -> Node<UiMsg> {
                     surface: super::widgets::panel_surface(),
                 },
             )
-            // **Laid one column wider than it wraps.** The runtime's
-            // `floating_panel_inner_width` takes two — the divider and a
-            // column of slack — and that is the width the spec's rows are
-            // rendered at, so it is the width passed above and the width
-            // `probe_floating_widget`'s boxes agree with. But the painter
-            // *filled* that slack column: a row's band ran to the panel's
-            // inner edge, not to the end of its content, and the dock's
-            // overlay scrollbar was drawn into it. Both are statements about
-            // where the panel ends rather than where its text does, so the
-            // description is that wide and its content is not.
-            .w(Sizing::Cells(inner_w.saturating_add(1)))
+            // **The wrap width, and nothing wider.** The painter filled the
+            // slack column between the content and the divider — a row's band
+            // ran to the panel's inner edge, and the overlay scrollbar was
+            // drawn into it — so laying the description one wider looked like
+            // the way to get both back. It is not: the header rule is a
+            // `divider()` the *runtime* renders as text at the wrap width,
+            // while a `flexSpacer` in the description pins to the laid width,
+            // so the title bar's `×` came to rest one column right of the rule
+            // it is supposed to line up with
+            // (`dock_title_bar_close_button_hides_the_dock`).
+            //
+            // One width, and the slack column stays the runtime's. Reaching it
+            // needs the band and the bar to be stated *past* the content
+            // rather than the content to be stretched under them — which is
+            // C.1's remaining half, not a number here.
+            .w(Sizing::Cells(inner_w))
         }),
     };
     gesture(body)
