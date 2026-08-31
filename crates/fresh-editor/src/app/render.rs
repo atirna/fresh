@@ -7218,11 +7218,29 @@ impl Editor {
             true => {
                 let block = Block::default()
                     .borders(Borders::RIGHT)
-                    .border_style(ratatui::style::Style::default().fg(dock_border_fg))
-                    .style(ratatui::style::Style::default().bg(theme.suggestion_bg));
+                    .border_style(ratatui::style::Style::default().fg(dock_border_fg));
+                // **A described dock's ground is already on the screen.** Its
+                // content is the tree's now (C.5b) and the tree's *background*
+                // band folds before this painter runs — so clearing here, or
+                // filling with the panel ground, wipes exactly what was just
+                // drawn, and the `described` early-out below means nothing
+                // paints it again. That is a blank dock: the column opens, the
+                // display list carries every row of it, and the screen shows
+                // nothing.
+                //
+                // The right border is still this painter's, because it is the
+                // draggable divider's *appearance* and the tree carries only
+                // its hit target. Drawn without a fill, over content that is
+                // already correct.
+                let block = match described {
+                    true => block,
+                    false => block.style(ratatui::style::Style::default().bg(theme.suggestion_bg)),
+                };
                 let inner = block.inner(overlay_rect);
                 if draw {
-                    frame.render_widget(Clear, overlay_rect);
+                    if !described {
+                        frame.render_widget(Clear, overlay_rect);
+                    }
                     frame.render_widget(block, overlay_rect);
                 }
                 inner
