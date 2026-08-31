@@ -1291,3 +1291,89 @@ fn a_press_inside_the_thumb_grabs_it_rather_than_jumping() {
         "a press on the track below the thumb still jumps toward it"
     );
 }
+
+/// **Confining focus and swallowing keys are two questions**, and
+/// `Modality::Focus` is the one variant that answers them differently.
+///
+/// A text prompt is the shape it exists for. While the prompt is up it is
+/// unambiguously where the keyboard is — the surface behind it must not get
+/// the key first, which is what confinement says — and yet a key the prompt
+/// itself does not act on is still the *editor's*: that is how a minibuffer's
+/// `Ctrl+P` reaches the command palette. `Modality::Keyboard` cannot say it,
+/// because swallowing is exactly what makes an open menu a dead end.
+///
+/// Without the split, a host with its own pipeline behind the tree had two
+/// bad options for such a surface: claim the keyboard and lose every binding
+/// it declines, or claim nothing and let whatever else is focusable take the
+/// key out from under it.
+#[test]
+fn a_focus_modal_layer_confines_traversal_without_swallowing() {
+    let seen = Rc::new(Cell::new(0));
+    let s = seen.clone();
+    let mk = move || -> Node<()> {
+        let s = s.clone();
+        col()
+            // Something else focusable and *asking for focus*, standing in
+            // for another surface that would otherwise take the keyboard.
+            .child(focusable(text("behind")).autofocus())
+            .child(
+                layer()
+                    .modality(Modality::Focus)
+                    .anchor(Anchor::Point(0, 2))
+                    .child(focusable(text("prompt")).autofocus().on_key({
+                        let s = s.clone();
+                        move |_: &Event| {
+                            s.set(s.get() + 1);
+                            None
+                        }
+                    })),
+            )
+    };
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(mk(), FRAME);
+
+    // Confinement: the layer's own chain is offered the key, not the
+    // focusable behind it that also asked for focus.
+    let d = ui.dispatch(Input::Key(KeyPress {
+        code: KeyCode::Char('x'),
+        mods: Mods::NONE,
+    }));
+    assert_eq!(seen.get(), 1, "the confined layer's chain saw the key first");
+
+    // And no swallow: the handler declined to stop, so the key is still the
+    // host's to resolve.
+    assert!(
+        !d.claimed,
+        "a Focus layer hands back what its chain did not act on"
+    );
+    assert!(
+        !ui.keyboard_owned(),
+        "and says so for the keys the tree cannot route at all"
+    );
+}
+
+/// The partner: a `Focus` layer still claims what its chain *does* act on.
+/// Declining is a node not stopping the flow, not the layer being absent.
+#[test]
+fn a_focus_modal_layer_still_claims_what_it_answers() {
+    let mk = || -> Node<()> {
+        col().child(
+            layer()
+                .modality(Modality::Focus)
+                .child(focusable(text("prompt")).autofocus().on_key(|e: &Event| {
+                    e.stop();
+                    None
+                })),
+        )
+    };
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(mk(), FRAME);
+    assert!(
+        ui.dispatch(Input::Key(KeyPress {
+            code: KeyCode::Char('x'),
+            mods: Mods::NONE,
+        }))
+        .claimed,
+        "the node stopped the flow, so the key is spent"
+    );
+}

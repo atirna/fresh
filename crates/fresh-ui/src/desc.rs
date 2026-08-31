@@ -491,14 +491,36 @@ impl Fit {
 /// How much of the input a layer takes away from what is behind it.
 ///
 /// The variants are ordered by how much they take. Every one above `None`
-/// confines focus traversal to the layer and **owns the keyboard**: a key its
-/// focus chain does not act on stops at the layer rather than reaching what is
-/// behind it, which is what "modal" means to a keyboard.
+/// **confines focus traversal** to the layer, so the layer's own focus chain
+/// is offered the keyboard first; every one above `Focus` also **swallows**,
+/// so a key that chain does not act on stops at the layer rather than
+/// reaching what is behind it.
+///
+/// Those are two questions, not one, and the split is what `Focus` exists to
+/// say — see its own note.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Modality {
     /// Content underneath keeps pointer and keyboard.
     #[default]
     None,
+    /// **Confinement without a swallow.** Focus traversal is confined here
+    /// and this layer's chain is offered every key first, but a key nothing
+    /// inside acted on carries on to whatever is behind the tree.
+    ///
+    /// A text prompt is the shape. While it is up it is unambiguously where
+    /// the keyboard is — no other surface may claim a keystroke ahead of it,
+    /// which is precisely what confinement says — and yet the keys it does
+    /// not act on are still the *editor's*: that is how a minibuffer's
+    /// `Ctrl+P` reaches the command palette and a file browser's `Alt+H`
+    /// reaches its hidden-files toggle. `Keyboard` cannot say it: swallowing
+    /// is what makes an open menu a dead end for a stray key, and a prompt is
+    /// the opposite of a dead end.
+    ///
+    /// Only meaningful for a surface whose interior lives outside the tree —
+    /// a `Host` leaf, or a host-side dispatcher the layer's `on_key` hands
+    /// the key to. A surface described all the way down has no keys left over
+    /// to fall through: what its nodes decline was never its own.
+    Focus,
     /// **The keyboard only.** Traversal cannot leave and an unhandled key
     /// stops here, while the pointer passes through untouched.
     ///
@@ -526,9 +548,24 @@ impl Modality {
     }
 
     /// Whether this layer owns the keyboard: focus traversal is confined to
-    /// it, and a key its focus chain does not act on stops here.
+    /// it, so its own focus chain is offered every key before anything else.
+    ///
+    /// Says nothing about what happens to a key the chain declines — that is
+    /// [`Modality::swallows_keys`], and the two differ for exactly one
+    /// variant.
     pub fn owns_keyboard(self) -> bool {
         !matches!(self, Modality::None)
+    }
+
+    /// Whether a key this layer's focus chain did not act on stops here.
+    ///
+    /// The second half of owning the keyboard, and a separate question for
+    /// the same reason [`Modality::blocks_pointer`] is: a host with its own
+    /// input pipeline behind this tree needs to know whether the key is still
+    /// its to resolve. `Focus` is the variant that confines without
+    /// swallowing, so this is the only place the two answers part.
+    pub fn swallows_keys(self) -> bool {
+        matches!(self, Modality::Keyboard | Modality::Inert | Modality::Exclusive)
     }
 }
 
