@@ -72,8 +72,17 @@ pub fn fit(info: LayoutInfo) -> Option<(u16, u16)> {
 /// layer is `PointerMode::Ignore` instead: a rectangle and nothing else.
 pub fn layer(c: Option<&Chrome>) -> Node<UiMsg> {
     let c = c.cloned();
+    // **Centred on the frame, not on the chrome beside the dock.** The
+    // painter was explicit about it — "`area` is the whole frame — these are
+    // full-screen modals, so the dim pass covers the dock column too and each
+    // dialog centres in the full window" — and it is the better reading
+    // anyway: a dialog squeezed into whatever is left of the width next to a
+    // wide dock is a dialog the dock has taken half of. `within` here confused
+    // this modal with the *floating plugin panel*, which really does lay into
+    // `chrome_area`. Layers fold in the overlay band, after every legacy
+    // painter, so covering the dock column is safe now in a way it was not
+    // when this was painted by hand.
     let l = fresh_ui::layer()
-        .within(super::frame::chrome_key())
         .anchor(Anchor::Screen(Align::Center))
         .place(Place::Over);
     let l = match c.is_some() {
@@ -1988,15 +1997,26 @@ mod tests {
         assert_eq!(r.x, (200 - MAX_WIDTH as i32) / 2);
     }
 
-    /// **Beside the dock.** The painter added `area.x` back by hand because
-    /// centring on the frame put the modal's left edge under the dock, which
-    /// over-drew its title bar and clipped its rounded corner.
+    /// **Over the dock, not beside it.** The painter's own words: "`area` is
+    /// the whole frame — these are full-screen modals, so the dim pass covers
+    /// the dock column too and each dialog centres in the full window."
+    ///
+    /// It said that *and* nudged the box right by `area.x`, because it drew
+    /// the dock after the modal and a left edge under the dock came out
+    /// over-drawn — its title bar back on top, its rounded corner clipped. The
+    /// tree has no such ordering problem: a layer folds in the overlay band,
+    /// after every legacy painter, so the box keeps the whole frame's centre
+    /// and the dock dims behind it.
     #[test]
-    fn the_box_centres_beside_the_dock() {
+    fn the_box_centres_on_the_frame_over_a_dock() {
         let ui = laid_out(200, 60, Some(40));
         let r = boxed(&ui);
-        assert!(r.x >= 40, "clear of the dock, at {}", r.x);
-        assert_eq!(r.x, 40 + (160 - (160 * 90 / 100)) / 2);
+        assert_eq!(
+            r.x,
+            (200 - MAX_WIDTH as i32) / 2,
+            "the dock does not move the box"
+        );
+        assert!(r.x < 40, "and its left edge is inside the dock column");
     }
 
     /// An area below the guard has no dialog in it — the painter writes that

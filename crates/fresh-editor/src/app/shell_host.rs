@@ -552,15 +552,24 @@ pub mod shell_theme {
         /// reached for `Modifier::DIM` directly, which no theme can override
         /// and no name could carry until this grammar existed.
         pub const DIM: Attrs = Attrs(1 << 4);
+        /// **A block caret is an attribute, not a colour.** A form control on
+        /// a modal overlay has no hardware cursor to place, so the runtime
+        /// draws its caret as one reverse-video cell — an `OverlayOptions`
+        /// with `reversed: true`. The grammar had no word for it, so every
+        /// such caret was dropped on the way into a run: the Settings text
+        /// fields, a `TextList`'s add slot and the JSON editor all showed a
+        /// bracketed box with nothing in it while the user was typing.
+        pub const REVERSED: Attrs = Attrs(1 << 5);
 
         /// The written spelling of each, and the only place the two forms are
         /// paired: [`Attrs::named`] and [`fmt::Display`] both read this.
-        const SPELLINGS: [(Attrs, &'static str, Modifier); 5] = [
+        const SPELLINGS: [(Attrs, &'static str, Modifier); 6] = [
             (Attrs::BOLD, "bold", Modifier::BOLD),
             (Attrs::UNDERLINE, "underline", Modifier::UNDERLINED),
             (Attrs::ITALIC, "italic", Modifier::ITALIC),
             (Attrs::STRIKETHROUGH, "strikethrough", Modifier::CROSSED_OUT),
             (Attrs::DIM, "dim", Modifier::DIM),
+            (Attrs::REVERSED, "reversed", Modifier::REVERSED),
         ];
 
         /// One attribute by its written name.
@@ -826,6 +835,27 @@ mod shell_theme_tests {
             .expect("a theme of nothing but defaults")
     }
 
+    /// **A block caret is an attribute the grammar has to carry.** A form
+    /// control on a modal overlay draws its caret as one reverse-video cell —
+    /// there is no hardware cursor to place there — and a word the grammar
+    /// does not know is dropped on the way in, so the caret simply did not
+    /// appear. Reading is forgiving on purpose; that is exactly why the word
+    /// has to exist.
+    #[test]
+    fn a_reversed_cell_survives_the_written_form_and_reaches_the_style() {
+        let ink = Ink::keys("editor.fg", "editor.bg").plus(Attrs::REVERSED);
+        let written = ink.to_string();
+        assert!(written.ends_with("+reversed"), "{written:?}");
+        assert_eq!(Ink::parse(&written), Some(ink));
+        let style = resolve(&written, &theme());
+        assert!(
+            style
+                .add_modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+            "the caret's cell reverses: {style:?}"
+        );
+    }
+
     /// **What is written is what is read.** The name is a serialisation, so
     /// the only thing that makes it safe to keep passing strings through
     /// `fresh-ui` is that the round trip is lossless — including for the parts
@@ -843,6 +873,7 @@ mod shell_theme_tests {
                 .plus(Attrs::UNDERLINE),
             Ink::new(Paint::Lit(Color::Yellow), Paint::Lit(Color::Black))
                 .plus(Attrs::ITALIC | Attrs::STRIKETHROUGH),
+            Ink::keys("editor.fg", "editor.bg").plus(Attrs::REVERSED),
         ] {
             let written = ink.to_string();
             assert_eq!(

@@ -2023,6 +2023,9 @@ fn ink_of(o: &OverlayOptions, under: &Ink) -> Ink {
         (o.italic, Attrs::ITALIC),
         (o.underline, Attrs::UNDERLINE),
         (o.strikethrough, Attrs::STRIKETHROUGH),
+        // The block caret. Dropping it left a focused field's bracketed cell
+        // empty while it was being typed into — see `Attrs::REVERSED`.
+        (o.reversed, Attrs::REVERSED),
     ] {
         if on {
             attrs = attrs | a;
