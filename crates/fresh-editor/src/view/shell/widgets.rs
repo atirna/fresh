@@ -1052,6 +1052,7 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                         // the list's selection.
                         owner_key: Some(list_key.clone()),
                     },
+                    byte: None,
                     at: None,
                     clicks: e.clicks,
                 }))
@@ -1244,6 +1245,7 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                         event_type: "select",
                         owner_key: Some(list_key.clone()),
                     },
+                    byte: None,
                     at: None,
                     clicks: e.clicks,
                 }))
@@ -2833,6 +2835,10 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
                 Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
                     slot,
                     hit: hit.clone(),
+                    // The library's answer, not a column of our own: only the
+                    // shaping that drew the row knows where each character
+                    // landed in it. See `UiFact::WidgetHit::byte`.
+                    byte: e.text_byte,
                     at: Some(e.local.x.max(0) as u16),
                     clicks: e.clicks,
                 }))
