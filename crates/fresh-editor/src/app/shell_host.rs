@@ -1396,6 +1396,19 @@ impl Editor {
                 at,
                 clicks,
             } => {
+                // **The byte the press landed on, which the fact has carried
+                // all along.** `at` is the column inside the hit's own piece
+                // and `byte_start` is where that piece begins in the entry's
+                // rendered row, so their sum is the entry byte
+                // `reposition_widget_text_cursor_from_click` subtracts
+                // `byte_start` back off. Every arm below used to pass `None`,
+                // which made `fx.place_caret` unreachable for a described
+                // panel: clicking into a Search & Replace field focused it and
+                // left the caret wherever it was. The painter this replaces
+                // resolved the same byte by comparing the screen column
+                // against geometry it had stamped; the piece the gesture sits
+                // on *is* that geometry.
+                let clicked_byte = at.map(|c| hit.byte_start.saturating_add(c as usize));
                 let slot = match slot {
                     crate::view::shell::widgets::Slot::Dock => crate::app::PanelSlot::Dock,
                     crate::view::shell::widgets::Slot::Floating => crate::app::PanelSlot::Floating,
@@ -1425,13 +1438,13 @@ impl Editor {
                         // `PaneContentPress`, which focuses the pane itself.
                         self.focus_pane(pane);
                         if let Some(panel_key) = self.pane_panel_key(pane) {
-                            self.deliver_widget_hit(&panel_key, &hit, None);
+                            self.deliver_widget_hit(&panel_key, &hit, clicked_byte);
                         }
                         return;
                     }
                 };
                 if let Some(panel_key) = self.panel(slot).map(|p| p.panel_key.clone()) {
-                    self.deliver_widget_hit(&panel_key, &hit, None);
+                    self.deliver_widget_hit(&panel_key, &hit, clicked_byte);
                 }
             }
             UiFact::SettingsItem(idx) => {
