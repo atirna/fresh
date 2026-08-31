@@ -714,7 +714,15 @@ already has:
 
 - a "context-aware action dispatcher" resolving keys to intents — that is the
   `focus/` module's Shortcuts → Intents → Actions chain, shipped. A.1 is
-  adoption, not construction.
+  adoption, not construction. **With one correction, found by doing it**: the
+  chain was there, but `Modality` was a single knob for two questions —
+  confining focus and swallowing the keys the confined chain declines — and
+  the four surfaces left on the walk needed the first without the second. That
+  is one variant and one predicate (`Modality::Focus`, `swallows_keys`), not a
+  dispatcher; the ratio still holds. It is worth recording because the *shape*
+  of the gap was the one this section describes in the other direction: a
+  capability the library nearly had, missing a distinction the editor had been
+  making with integers.
 - an explicit pointer-capture API — shipped, and E.3 is adoption.
 - a "paint-phase theme context" so a colour change does not relayout —
   `ThemeKey` is resolved at fold time, so it already cannot.
