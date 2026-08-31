@@ -202,6 +202,11 @@ pub struct SettingsState {
     pub hover_position: Option<(u16, u16)>,
     /// Current hover hit result (computed from hover_position and cached layout)
     pub hover_hit: Option<SettingsHit>,
+    /// The open dropdown pop-over's hovered option, as a decimal index, or
+    /// empty. The dialog renders its own controls with no panel behind them,
+    /// so its pop-over's hover has nowhere else to live; see
+    /// `UiFact::WidgetPopupHover`.
+    pub hovered_popup_row: String,
     /// Stack of entry dialogs (for nested editing of Maps/ObjectArrays)
     /// The top of the stack (last element) is the currently active dialog.
     pub entry_dialog_stack: Vec<EntryDialogState>,
@@ -418,6 +423,7 @@ impl SettingsState {
             available_status_bar_tokens,
             hover_position: None,
             hover_hit: None,
+            hovered_popup_row: String::new(),
             entry_dialog_stack: Vec::new(),
             target_layer,
             layer_sources,

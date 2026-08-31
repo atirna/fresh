@@ -94,6 +94,11 @@ pub struct Ctx<'a> {
     /// The `List`/`Tree` row the pointer is over. Every row of one list
     /// shares the list's own key, so the row identity travels separately.
     pub hovered_item_key: String,
+    /// The open dropdown pop-over's hovered option, as a decimal index, or
+    /// empty. A pop-over's rows are not panel rows, so the runtime's own hover
+    /// probe never sees them; the tree reports this one and hands it back here
+    /// for the sub-render that draws the rows.
+    pub hovered_popup_row: String,
     /// Row budget for auto-sized `List`/`Tree` widgets, when the host knows
     /// the surface's inner height.
     pub avail_height: Option<u32>,
@@ -133,6 +138,7 @@ impl Ctx<'static> {
             hovered_key: None,
             marker_gutter: false,
             hovered_item_key: String::new(),
+            hovered_popup_row: String::new(),
             avail_height: None,
             surface: panel_surface(),
         }
@@ -393,6 +399,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 focus_key: cx.focus_key.clone(),
                 hovered_key: cx.hovered_key.clone(),
                 hovered_item_key: cx.hovered_item_key.clone(),
+                hovered_popup_row: cx.hovered_popup_row.clone(),
                 ..*cx
             };
             let r = row().children(
@@ -959,6 +966,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                         focus_key: &cx.focus_key,
                         hover_key: cx.hovered_key.as_deref().unwrap_or(""),
                         hover_item_key: &cx.hovered_item_key,
+                        hover_popup_row: "",
                         markdown: None,
                         marker_gutter: cx.marker_gutter,
                         avail_height: cx.avail_height,
@@ -1418,6 +1426,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                     focus_key: &cx.focus_key,
                     hover_key: cx.hovered_key.as_deref().unwrap_or(""),
                     hover_item_key: &cx.hovered_item_key,
+                    hover_popup_row: "",
                     markdown: None,
                     marker_gutter: cx.marker_gutter,
                     avail_height: cx.avail_height,
@@ -1600,6 +1609,7 @@ fn collected(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, escape: u16) -> Node<U
             focus_key: &cx.focus_key,
             hover_key: cx.hovered_key.as_deref().unwrap_or(""),
             hover_item_key: &cx.hovered_item_key,
+            hover_popup_row: &cx.hovered_popup_row,
             markdown: None,
             marker_gutter: cx.marker_gutter,
             avail_height: cx.avail_height,
@@ -1775,6 +1785,21 @@ fn float_route(n: Node<UiMsg>, slot: Slot) -> Node<UiMsg> {
 /// `Dropdown` crosses through the adapter rather than waiting for a
 /// substitution, unlike the kinds whose scrollbar the painter draws.
 fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
+    // **A float sits on its own ground, not on its trigger's.** `cx.surface`
+    // is whatever the widget that opened this is standing on — and in the
+    // settings dialog that is the selected card's *band*, so every option in
+    // the list came out painted in the selection colour and the one actually
+    // selected was indistinguishable from the rest. The box names its ground
+    // one line below; the rows are built from the same.
+    let ground = Ink::new(Paint::key(BASE_FG), Paint::key("ui.popup_bg"));
+    fn hover_row(slot: Slot, index: Option<usize>) -> fresh_ui::Handler<UiMsg> {
+        std::rc::Rc::new(move |_: &fresh_ui::Event| {
+            Some(UiMsg::Ui(super::msg::UiFact::WidgetPopupHover {
+                slot,
+                index,
+            }))
+        })
+    }
     let rows: Vec<Node<UiMsg>> = p
         .entries
         .iter()
@@ -1784,7 +1809,7 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
                 e,
                 (0, e.text.len()),
                 cx.slot,
-                &cx.surface,
+                &ground,
                 crate::widgets::HitArea {
                     row_target: true,
                     context_click: false,
@@ -1799,7 +1824,18 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
                     owner_key: None,
                 },
             ),
-            None => entry_row(e, &cx.surface),
+            None => entry_row(e, &ground),
+        })
+        // The row's own hover, which nothing else can report: the runtime's
+        // probe walks the panel's entries and a pop-over floats beside them.
+        // See `UiFact::WidgetPopupHover`. A `gesture` of its own rather than
+        // listeners on the piece the hit produced, because a row split into
+        // several hit pieces is a plain `row` and only a gesture node listens.
+        .enumerate()
+        .map(|(i, n)| {
+            fresh_ui::gesture(n)
+                .on_enter(hover_row(cx.slot, p.row_indices.get(i).copied()))
+                .on_leave(hover_row(cx.slot, None))
         })
         .collect();
     // A press anywhere in the box that is not on an option — its border — is
@@ -1856,6 +1892,30 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
     )
 }
 
+/// The ground an entry asks to keep past the end of its text, if it asks.
+///
+/// **`extend_to_line_end` is a word the ink grammar does not have.** The
+/// painter drew every widget row as a `Paragraph` over the whole row rect with
+/// the entry's fill style, so an overlay carrying this flag coloured the
+/// trailing cells too. A description's runs stop at the glyphs — there is no
+/// rect behind them — so a hover band ended at the toggle's chip, a selected
+/// dropdown option was highlighted over its word and not its padding, and a
+/// selected folder header in the dock's card tree lit only its name.
+///
+/// Only a background can extend: a fill paints spaces, and a foreground on a
+/// space is nothing. So this reports the ink of the last overlay that asks and
+/// carries one, and the row wears it — under its own runs, which paint over it
+/// exactly where they have glyphs.
+fn extended_ground(entry: &TextPropertyEntry, base: &Ink) -> Option<Ink> {
+    entry
+        .inline_overlays
+        .iter()
+        .filter(|o| o.style.extend_to_line_end && o.style.bg.is_some())
+        .next_back()
+        .map(|o| ink_of(&o.style, base))
+}
+
+/// One styled row, from a `TextPropertyEntry`.
 /// One styled row, from a `TextPropertyEntry`.
 ///
 /// **The load-bearing helper**: most variants of the runtime end in an entry,
@@ -1865,7 +1925,18 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
 /// *names* kept instead of resolved colours, because the fold resolves them
 /// and that is what makes the row inspectable and the web able to paint it.
 pub fn entry_row(entry: &TextPropertyEntry, surface: &Ink) -> Node<UiMsg> {
-    text_runs(entry_runs(entry, &[], surface).into_iter().map(|(_, r)| r)).h(Sizing::Cells(1))
+    let n =
+        text_runs(entry_runs(entry, &[], surface).into_iter().map(|(_, r)| r)).h(Sizing::Cells(1));
+    match extended_ground(entry, surface) {
+        // Flexed as well as themed: a fill only reaches the end of the line if
+        // the node does, and "to the end of the line" is the whole claim.
+        Some(ink) => row()
+            .h(Sizing::Cells(1))
+            .w(Sizing::Flex(1))
+            .theme(ink.to_string())
+            .child(n),
+        None => n,
+    }
 }
 
 /// One styled row whose `range` of bytes answers a press with `hit`.
@@ -2119,6 +2190,7 @@ mod tests {
             hovered_key: None,
             marker_gutter: false,
             hovered_item_key: String::new(),
+            hovered_popup_row: String::new(),
             avail_height: None,
             surface: panel_surface(),
         }
@@ -3609,7 +3681,10 @@ mod tests {
             .map(|e| {
                 let mut n = e.clone();
                 n.normalize_widths();
-                n.text.trim_end_matches('\n').trim_end().to_string()
+                // Not `trim_end`: the pop-over pads every row to the widest
+                // option, and that padding is where the selected row's
+                // highlight reaches the box's edge.
+                n.text.trim_end_matches('\n').to_string()
             })
             .collect();
         let got = layer_rows(&ui);

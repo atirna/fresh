@@ -661,6 +661,7 @@ fn gutter(c: &Card, band: &str) -> Node<UiMsg> {
 fn control(c: &Card, band: &str) -> Node<UiMsg> {
     let spec = c.spec.clone();
     let focus_key = c.focus_key.clone();
+    let hovered_popup_row = c.hovered_popup_row.clone();
     use crate::app::shell_host::shell_theme::Ink;
     let banded = Ink::keys("ui.popup_text_fg", band.to_string());
     let ground = Ink::keys("ui.popup_text_fg", "ui.popup_bg".to_string());
@@ -673,6 +674,7 @@ fn control(c: &Card, band: &str) -> Node<UiMsg> {
             hovered_key: None,
             marker_gutter: false,
             hovered_item_key: String::new(),
+            hovered_popup_row: hovered_popup_row.clone(),
             avail_height: None,
             surface: surface.clone(),
         };
@@ -1018,6 +1020,10 @@ pub struct Card {
     /// key while it is being edited, empty otherwise. It is what makes a text
     /// field paint its caret.
     pub focus_key: String,
+    /// The open dropdown pop-over's hovered option, as a decimal index, or
+    /// empty. The pop-over's rows report their own hover, because a settings
+    /// control has no panel behind it for the runtime's probe to walk.
+    pub hovered_popup_row: String,
     pub description: Option<String>,
     /// `user`, `project` or `session` — the layer the value came from, shown
     /// after the description. `None` for a schema default.
@@ -1787,6 +1793,7 @@ mod tests {
                         key: None,
                     },
                     focus_key: String::new(),
+                    hovered_popup_row: String::new(),
                     description: None,
                     layer: None,
                     selected: index == 0,

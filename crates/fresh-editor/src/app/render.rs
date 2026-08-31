@@ -2468,6 +2468,7 @@ impl Editor {
                             true => item.path.clone(),
                             false => String::new(),
                         },
+                        hovered_popup_row: s.hovered_popup_row.clone(),
                         description: item.description.clone().filter(|d| !d.is_empty()),
                         layer: match item.layer_source {
                             crate::config_io::ConfigLayer::System => None,
@@ -8190,6 +8191,7 @@ impl Editor {
                 .unwrap_or_default(),
             hovered_key: Some(panel.hovered_widget_key.clone()).filter(|k| !k.is_empty()),
             hovered_item_key: panel.hovered_item_key.clone(),
+            hovered_popup_row: panel.hovered_popup_row.clone(),
             marker_gutter: panel.focus_marker,
             avail_height: self.floating_panel_inner_height(slot),
         })

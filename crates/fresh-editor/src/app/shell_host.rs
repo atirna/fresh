@@ -1277,6 +1277,39 @@ impl Editor {
             UiFact::SettingsItem(idx) => {
                 self.dispatch_settings_hit(crate::view::settings::SettingsHit::Item(idx), false);
             }
+            // The pop-over's rows report their own hover, because nothing else
+            // can: `update_widget_hover` probes the runtime's panel entries
+            // and a pop-over is not among them. Stored on the panel beside the
+            // hovered widget, which is where every other row-level hover
+            // lives, and read back by the dropdown's renderer.
+            UiFact::WidgetPopupHover { slot, index } => {
+                use crate::view::shell::widgets::Slot;
+                let now = index.map(|i| i.to_string()).unwrap_or_default();
+                match slot {
+                    // The settings dialog renders its controls itself, with no
+                    // panel behind them, so its pop-over's hover lives on the
+                    // settings state beside the rest of its hover.
+                    Slot::Settings | Slot::SettingsEntry => {
+                        if let Some(s) = self.settings_state.as_mut() {
+                            s.hovered_popup_row = now;
+                        }
+                    }
+                    Slot::Dock | Slot::Floating => {
+                        let panel = match slot {
+                            Slot::Dock => crate::app::PanelSlot::Dock,
+                            _ => crate::app::PanelSlot::Floating,
+                        };
+                        let panel_key = match self.panel(panel) {
+                            Some(p) if p.hovered_popup_row != now => p.panel_key.clone(),
+                            _ => return,
+                        };
+                        if let Some(p) = self.panel_mut(panel) {
+                            p.hovered_popup_row = now;
+                        }
+                        self.rerender_widget_panel(&panel_key);
+                    }
+                }
+            }
             UiFact::SettingsItemHover(idx) => {
                 if let Some(s) = self.settings_state.as_mut() {
                     s.hover_hit = idx.map(crate::view::settings::SettingsHit::Item);

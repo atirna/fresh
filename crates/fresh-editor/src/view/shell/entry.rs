@@ -362,6 +362,7 @@ fn control(it: &Item, band: &str) -> Node<UiMsg> {
             hovered_key: None,
             marker_gutter: false,
             hovered_item_key: String::new(),
+            hovered_popup_row: String::new(),
             avail_height: None,
             surface: surface.clone(),
         };

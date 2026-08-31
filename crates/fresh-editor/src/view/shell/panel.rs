@@ -97,6 +97,9 @@ pub struct Interior {
     pub focus_key: String,
     pub hovered_key: Option<String>,
     pub hovered_item_key: String,
+    /// The open dropdown pop-over's hovered option, as a decimal index, or
+    /// empty. See [`super::widgets::Ctx::hovered_popup_row`].
+    pub hovered_popup_row: String,
     pub marker_gutter: bool,
     pub avail_height: Option<u32>,
 }
@@ -335,6 +338,7 @@ fn body(p: &Panel) -> Node<UiMsg> {
                     hovered_key: i.hovered_key.clone(),
                     marker_gutter: i.marker_gutter,
                     hovered_item_key: i.hovered_item_key.clone(),
+                    hovered_popup_row: i.hovered_popup_row.clone(),
                     avail_height: i.avail_height,
                     surface: super::widgets::panel_surface(),
                 },
@@ -640,6 +644,7 @@ mod tests {
             focus_key: String::new(),
             hovered_key: None,
             hovered_item_key: String::new(),
+            hovered_popup_row: String::new(),
             marker_gutter: false,
             avail_height: None,
         });
@@ -697,6 +702,7 @@ mod tests {
             focus_key: String::new(),
             hovered_key: None,
             hovered_item_key: String::new(),
+            hovered_popup_row: String::new(),
             marker_gutter: false,
             avail_height: None,
         });
@@ -745,6 +751,7 @@ mod tests {
             focus_key: String::new(),
             hovered_key: None,
             hovered_item_key: String::new(),
+            hovered_popup_row: String::new(),
             marker_gutter: false,
             avail_height: None,
         });
