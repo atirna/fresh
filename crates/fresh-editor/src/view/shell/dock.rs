@@ -105,7 +105,17 @@ fn column(interior: Option<super::panel::Interior>) -> Node<UiMsg> {
                     surface: super::widgets::panel_surface(),
                 },
             )
-            .w(Sizing::Cells(inner_w))
+            // **Laid one column wider than it wraps.** The runtime's
+            // `floating_panel_inner_width` takes two — the divider and a
+            // column of slack — and that is the width the spec's rows are
+            // rendered at, so it is the width passed above and the width
+            // `probe_floating_widget`'s boxes agree with. But the painter
+            // *filled* that slack column: a row's band ran to the panel's
+            // inner edge, not to the end of its content, and the dock's
+            // overlay scrollbar was drawn into it. Both are statements about
+            // where the panel ends rather than where its text does, so the
+            // description is that wide and its content is not.
+            .w(Sizing::Cells(inner_w.saturating_add(1)))
         }),
     };
     gesture(body)

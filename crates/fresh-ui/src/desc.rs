@@ -340,10 +340,11 @@ pub struct ViewportProps {
     pub scrollbar: bool,
     /// Keep the bar's gutter reserved even when no bar is drawn.
     pub stable_gutter: bool,
-    /// Withhold the bar this frame, keeping the column it would occupy.
-    ///
-    /// See [`Node::scrollbar_revealed`].
+    /// Withhold the bar this frame. See [`Node::scrollbar_revealed`].
     pub bar_hidden: bool,
+    /// The bar floats over the window's last column instead of taking a
+    /// gutter of its own. See [`Node::scrollbar_revealed`].
+    pub overlay: bool,
     /// Appearance of the bar itself, named apart from the window's.
     pub bar_theme: Option<Rc<str>>,
     pub mode: ScrollMode,
@@ -1213,20 +1214,21 @@ impl<M> Node<M> {
     /// caller says *whether*, once per frame, and the window says what that
     /// means.
     ///
-    /// What it means is two things, and the second is the one worth having:
-    /// the bar is not drawn, and it is not *there* — [`Node::scrollbar`]'s
-    /// pre-propagation grab is off, because a bar nobody can see is a bar
-    /// nobody should be able to catch by pressing the column it would have
-    /// been in.
-    ///
-    /// Implies [`scrollbar_gutter`](Node::scrollbar_gutter): a column that
-    /// came and went with the bar would reflow the content under the pointer
-    /// on the way in, which is the one thing a reveal must not do.
+    /// What it means is three things. The bar is not drawn. It is not
+    /// *there*: [`scrollbar`](Node::scrollbar)'s pre-propagation grab is off,
+    /// because a bar nobody can see is a bar nobody should be able to catch by
+    /// pressing the column it would have been in. And it takes **no gutter** —
+    /// it floats over the window's last column rather than carving one out,
+    /// which is what makes it an overlay and what keeps a bar that comes and
+    /// goes from reflowing the row being reached for. A window that would
+    /// rather give the bar a column of its own wants
+    /// [`scrollbar_gutter`](Node::scrollbar_gutter) and no reveal.
     pub fn scrollbar_revealed(mut self, shown: bool) -> Self {
         match &mut self.desc {
             Desc::Viewport(p) => {
                 p.scrollbar = true;
-                p.stable_gutter = true;
+                p.overlay = true;
+                p.stable_gutter = false;
                 p.bar_hidden = !shown;
             }
             _ => panic!("scrollbar_revealed() applies to Viewport nodes only"),

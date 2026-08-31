@@ -1270,6 +1270,12 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 selected,
                 reveal: cx.scrollbar_reveal,
             });
+            // **As wide as the panel, not as wide as its rows.** The rows
+            // arrive pre-rendered at the runtime's wrap width, so a window
+            // sized to its content stops where the text does — and the two
+            // things that belong at the panel's edge, the row band and the
+            // overlay scrollbar, stop with it.
+            let node = node.w(Sizing::Pct(100));
             match visible_rows {
                 Some(r) => node.h(Sizing::Cells(*r as u16)),
                 None => node.flex(1),

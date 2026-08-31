@@ -170,6 +170,7 @@ pub struct List<M> {
     scrollbar: bool,
     stable_gutter: bool,
     bar_hidden: bool,
+    overlay: bool,
     bar_theme: Option<String>,
     #[allow(clippy::type_complexity)]
     row_theme: Option<Rc<dyn Fn(usize, RowState) -> String>>,
@@ -243,6 +244,7 @@ impl<M: 'static> List<M> {
             autofocus: false,
             scrollbar: false,
             bar_hidden: false,
+            overlay: false,
             stable_gutter: false,
             bar_theme: None,
             row_theme: None,
@@ -356,7 +358,8 @@ impl<M: 'static> List<M> {
     /// [`Node::scrollbar_revealed`](crate::Node::scrollbar_revealed).
     pub fn scrollbar_revealed(mut self, shown: bool) -> Self {
         self.scrollbar = true;
-        self.stable_gutter = true;
+        self.overlay = true;
+        self.stable_gutter = false;
         self.bar_hidden = !shown;
         self
     }
@@ -534,8 +537,8 @@ impl<M: 'static> Component<M> for List<M> {
         if let Some(a) = anchor.clone() {
             body = body.anchor_to(a);
         }
-        if self.bar_hidden {
-            body = body.scrollbar_revealed(false);
+        if self.overlay {
+            body = body.scrollbar_revealed(!self.bar_hidden);
         } else if self.stable_gutter {
             body = body.scrollbar_gutter();
         } else if self.scrollbar {

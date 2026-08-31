@@ -784,9 +784,9 @@ fn a_stable_gutter_reserves_its_column_with_no_bar_to_put_in_it() {
 ///
 /// A window whose bar comes and goes is answering a question the window
 /// cannot ask — is anyone looking — so the caller answers it, once per frame.
-/// What the window owes in return is that nothing else moves: the gutter is
-/// the bar's column whether or not the bar is in it, because a column that
-/// appeared under the pointer would reflow the row being reached for.
+/// What the window owes in return is that nothing else moves: an overlay bar
+/// carves no gutter and floats over the last column, so the rows are the same
+/// width whether it is showing or not.
 #[test]
 fn a_revealed_bar_comes_and_goes_without_moving_the_rows() {
     let list = |shown: bool| -> Node<Msg> {
@@ -836,26 +836,71 @@ fn a_revealed_bar_comes_and_goes_without_moving_the_rows() {
         row_width(&shown),
         "revealing the bar must not reflow the rows under the pointer"
     );
-    assert_eq!(row_width(&hidden), frame.w - 1, "the gutter is not content");
+    assert_eq!(
+        row_width(&shown),
+        frame.w,
+        "an overlay bar takes no column from the content"
+    );
+}
+
+/// **An overlay bar is painted after the rows it reports on.**
+///
+/// A node's own paint is under its children, which is right for a ground and
+/// wrong for a bar that has no gutter to sit in: emitted with the rest of the
+/// window's output it would be covered by the very rows underneath it.
+#[test]
+fn an_overlay_bar_lands_on_top_of_the_rows() {
+    let mut ui: Ui<Msg> = Ui::new();
+    ui.frame(
+        List::windowed(500, fresh_ui::Key::from, |i| {
+            fresh_ui::col()
+                .theme("list.row")
+                .child(fresh_ui::text(format!("row {i}")))
+        })
+        .scrollbar_revealed(true)
+        .node(),
+        Size::new(20, 5),
+    );
+    let items = &ui.spec().items;
+    let bar = items
+        .iter()
+        .position(|i| matches!(i.draw, Draw::Scrollbar { .. }))
+        .expect("an overflowing list shows its bar");
+    let last_row = items
+        .iter()
+        .rposition(|i| matches!(i.draw, Draw::Fill))
+        .expect("rows paint their ground");
+    assert!(
+        bar > last_row,
+        "the bar must come after every row it floats over ({bar} vs {last_row})"
+    );
 }
 
 /// **A bar nobody can see is a bar nobody can catch.**
 ///
-/// The track's press is answered before propagation and jumps the window to
-/// the row pressed. A withheld bar still occupies its column — a reveal keeps
-/// the gutter, so the rows do not move — and a press there must do nothing at
-/// all rather than scroll a list to a place the user cannot see they asked
-/// for.
+/// The track's press is answered before propagation. An overlay bar that was
+/// not being revealed but still claimed its column would swallow presses
+/// aimed at the row drawn in it — and the row is what is visibly there.
 #[test]
-fn a_withheld_bar_does_not_take_a_press_on_the_column_it_would_have_used() {
+fn a_withheld_bar_leaves_its_column_to_whatever_is_behind_it() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let log: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
     let frame = Size::new(20, 5);
-    let ui_of = |shown: bool| {
+    let ui_of = |shown: bool, log: Rc<RefCell<Vec<usize>>>| {
         let mut ui: Ui<Msg> = Ui::new();
         ui.frame(
-            List::windowed(500, fresh_ui::Key::from, |i| {
-                fresh_ui::col()
-                    .theme("list.row")
-                    .child(fresh_ui::text(format!("row {i}")))
+            List::windowed(500, fresh_ui::Key::from, move |i| {
+                let log = log.clone();
+                fresh_ui::gesture(
+                    fresh_ui::col()
+                        .theme("list.row")
+                        .child(fresh_ui::text(format!("row {i}"))),
+                )
+                .on_click(move |_| {
+                    log.borrow_mut().push(i);
+                    Msg::Selected(i)
+                })
             })
             .scrollbar_revealed(shown)
             .node(),
@@ -863,39 +908,38 @@ fn a_withheld_bar_does_not_take_a_press_on_the_column_it_would_have_used() {
         );
         ui
     };
-    // Which rows the window holds, by the text it draws.
-    let rows = |ui: &Ui<Msg>| -> Vec<String> {
-        ui.spec()
-            .items
-            .iter()
-            .filter_map(|i| match &i.draw {
-                Draw::Lines(l) => Some(l.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
-                _ => None,
-            })
-            .flatten()
-            .collect()
-    };
+    let gutter = frame.w as i32 - 1;
     let press = |ui: &mut Ui<Msg>| {
-        let at = Point::new(frame.w as i32 - 1, frame.h as i32 - 1);
-        ui.dispatch(Input::press(at, MouseButton::Left, Mods::NONE));
-        ui.dispatch(Input::release(at, MouseButton::Left, Mods::NONE));
-        ui.tick();
+        ui.dispatch(Input::press(
+            Point::new(gutter, 2),
+            MouseButton::Left,
+            Mods::NONE,
+        ));
+        ui.dispatch(Input::release(
+            Point::new(gutter, 2),
+            MouseButton::Left,
+            Mods::NONE,
+        ));
     };
 
-    // Revealed: the bottom of the track is the end of the list.
-    let mut shown = ui_of(true);
-    let before = rows(&shown);
+    // Revealed: the column is the track, and the press scrolls rather than
+    // reaching the row.
+    let mut shown = ui_of(true, log.clone());
     press(&mut shown);
-    assert_ne!(rows(&shown), before, "a visible track jumps the window");
+    assert!(
+        log.borrow().is_empty(),
+        "a visible track takes its own column: {:?}",
+        log.borrow()
+    );
 
-    // Withheld: the same cell moves nothing.
-    let mut hidden = ui_of(false);
-    let before = rows(&hidden);
+    // Withheld: the same cell belongs to the row drawn in it.
+    log.borrow_mut().clear();
+    let mut hidden = ui_of(false, log.clone());
     press(&mut hidden);
     assert_eq!(
-        rows(&hidden),
-        before,
-        "a bar that is not drawn must not be grabbable either"
+        log.borrow().len(),
+        1,
+        "with no bar drawn the column is the row's"
     );
 }
 

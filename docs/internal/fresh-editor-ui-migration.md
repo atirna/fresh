@@ -228,19 +228,45 @@ this document keeps recording: **a description is exhaustive where a painter
 was incremental**, so a claim a surface does *not* make needs a word as much
 as one it does.
 
-**The third word was `Node::scrollbar_revealed`**, and it is the same shape
-one channel over. A painter draws a bar by choosing to; a description that
-has said `scrollbar()` has said the bar is there, and "there, but not right
-now" had no way to be said — so the dock's overlay bar, which the painter
-showed on hover and flashed on a keyboard move, came out as a permanent
-stripe and `WidgetEffects::flash_scrollbar` became a plugin-facing no-op. The
-withholding is the whole primitive: the gutter stays (a column that appeared
-under the pointer would reflow the row being reached for) and the
-pre-propagation `scrollbar_hit` stands down (a bar nobody can see is a bar
-nobody should catch by pressing where it would have been). What it does
-*not* own is when — the pointer's zone is the app's, and the flash is a
-deadline the app already ticks — so the caller hands down one `Option<bool>`
-per frame and every window inside the description reads it.
+**The third word was `Node::scrollbar_revealed`**, and it needed a fourth
+under it. It is the same shape one channel over: a painter draws a bar by
+choosing to; a description that has said `scrollbar()` has said the bar is
+there, and "there, but not right now" had no way to be said — so the dock's
+overlay bar, which the painter showed on hover and flashed on a keyboard
+move, came out as a permanent stripe and `WidgetEffects::flash_scrollbar`
+became a plugin-facing no-op. Three things make the word: the bar is not
+drawn; it is not *there*, so the pre-propagation `scrollbar_hit` stands down
+(a bar nobody can see is a bar nobody should catch by pressing where it would
+have been); and it takes no gutter, because a column that came and went would
+reflow the row being reached for. What it does *not* own is when — the
+pointer's zone is the app's, and the flash is a deadline the app already
+ticks — so the caller hands down one `Option<bool>` per frame and every
+window inside the description reads it.
+
+The fourth word is `RenderObject::paint_over`, and the gap it closes was
+already written down in the library, as the reason the gutter existed:
+"content laid out over it would paint the bar away, since a node's own paint
+is under its children". That rule is right for a ground and wrong for the few
+things that are genuinely on top — and without a hook after the children
+there is no such thing as an overlay bar, only a gutter with a bar in it. A
+viewport's bar moved from `paint` to `paint_over`, which changes nothing
+where the bar has a gutter and is the whole difference where it does not. Two
+smaller things fell out of proving it. The fold writes both halves of a bar
+cell now rather than the ground alone: the glyph is a space, so the
+foreground is invisible either way, and naming it is what keeps a bar
+floating over a row from taking that row's colour when it lights on hover.
+And a bar with no name of its own resolved thumb and track to the same
+ambient ink — a solid stripe rather than a bar — so the widget panels name
+the editor's one scrollbar pair, the way the overlay prompt already did.
+
+**The dock's rows reach the dock's edge again, and that is the same column.**
+The panel's inner area is one wider than the width its content wraps to; the
+painter filled that slack column with the row's band and drew its bar into
+it, and the description was laid out to the wrap width, so both stopped a
+column short. It is laid one wider than it wraps now — the wrap width is
+still the runtime's, because `probe_floating_widget`'s boxes come from a
+second layout at it — which is what puts the hover band back at the divider
+and the overlay bar back in the column the painter used.
 
 With it, precedence is declaration order and the ranks are redundant for
 dispatch: `keys_layer` for the dock is declared first, the floating panel's
@@ -315,7 +341,7 @@ section A.
 | C.3 | `HitArea` (byte ranges) and `LayoutBox` (a parent-linked, z-ordered arena). | Both deleted. `LayoutBox` is a second layout tree; goal 5 allows one. | Keeping `LayoutBox` as the web bridge's hit list. The web is a consumer of the display list (D.3), which already carries keyed rectangles. |
 | C.4 | `WidgetMutation`'s fast path — a channel that patches retained state in place. | An ordinary rebuild. Goal 3: a rebuild costs one allocation per node, so the incentive the fast path answers does not exist. | Keeping it as an optimisation without measuring it against 0.4's benchmark. |
 | C.5 | Buffer-mounted panels (`mountWidgetPanel`). | A subtree in the pane's content slot; the virtual buffer stays as a text mirror for search, copy and the `lines_changed` hooks. Removes the documented limitation that mounted panels drop overlays and popups. | Deciding it by which is less work. It is the only open *design* question left in the whole migration: it was deferred deliberately, to be taken with C.1's experience in hand, not settled by default. |
-| ~~C.5b~~ **Done.** | **The dock is editor-global UI built from `Editor.windows`, not from the active window.** Its content is the orchestrator's `WidgetSpec`; its column, grip and blur observer are already nodes. **Its paint order is fixed** (see below), which was a prerequisite nobody had written down. | Its content lands like any other panel (C.1), mounted *outside* the window key per 0.5: `Frame::dock_interior` is `panel_interior(PanelSlot::Dock)` and `render_floating_widget_panel`'s `described` gate no longer names the dock. Both of the things that "needed deciding" are decided. The dead-space press became `DockFocus` — the half of `DockPress` that was never about geometry. **The wheel is the viewport's**, and the arm that took it was worse than dead: `fresh-ui` chains a notch into a viewport only when nothing claimed it, so the catch-all `e.stop()` stopped the sessions list scrolling, while `DockScroll` went on moving the runtime's `WidgetInstanceState::scroll_offset` — which the description does not read but `probe_floating_widget` still does, so a few notches put hover and the context menu on a different row from the one drawn. It fires only while the interior is still a painter. **What the row got wrong** is the third clause: the right-press context menu *does* need something, because `probe_floating_widget`'s boxes come from a second layout of the same spec, and the interior was being laid out two columns wider than the runtime lays it (`floating_panel_inner_width` takes the divider and a column of slack). It takes the same two now. Its own two remainders are both closed: `chrome::Dock::on_layer_key` went with A.2, and the scrollbar-reveal hover came back as a library primitive rather than staying dead. **`Modality` was not the only claim missing a word — so was "this bar is an overlay bar".** `Node::scrollbar_revealed(shown)` is a bar that keeps its column and is drawn only while the caller says so, and its second half is the one worth having: a withheld bar is not *there*, so the pre-propagation `scrollbar_hit` does not grab a column nobody can see. What the caller says is `widgets::Ctx::scrollbar_reveal` — `None` for every panel but the dock, `Some(hovered || flashing)` for it — and neither half of that is the tree's to know: the flash is a deadline the plugin arms through `WidgetEffects::flash_scrollbar`, and the hover is now `UiFact::DockHover`, one pair of Enter/Leave listeners on the column's own surface where the painter recorded `scrollbar_hover_zones` and a mouse arm compared every motion event against them. Leaving it dead would have made a *plugin-facing* effect a no-op, which is the line the API promise draws. **One column did move**: the bar is the list's now, so it sits at the interior's right edge rather than in the slack column between it and the divider, where the painter drew it as a dock-level overlay. That is the seam in the row above — the interior is laid at the width the runtime lays it — and it goes when C.1's remaining half does. | Building its description from `active_window()`. `shell_frame` does that for nearly everything else, and the dock is the one surface for which it is wrong. |
+| ~~C.5b~~ **Done.** | **The dock is editor-global UI built from `Editor.windows`, not from the active window.** Its content is the orchestrator's `WidgetSpec`; its column, grip and blur observer are already nodes. **Its paint order is fixed** (see below), which was a prerequisite nobody had written down. | Its content lands like any other panel (C.1), mounted *outside* the window key per 0.5: `Frame::dock_interior` is `panel_interior(PanelSlot::Dock)` and `render_floating_widget_panel`'s `described` gate no longer names the dock. Both of the things that "needed deciding" are decided. The dead-space press became `DockFocus` — the half of `DockPress` that was never about geometry. **The wheel is the viewport's**, and the arm that took it was worse than dead: `fresh-ui` chains a notch into a viewport only when nothing claimed it, so the catch-all `e.stop()` stopped the sessions list scrolling, while `DockScroll` went on moving the runtime's `WidgetInstanceState::scroll_offset` — which the description does not read but `probe_floating_widget` still does, so a few notches put hover and the context menu on a different row from the one drawn. It fires only while the interior is still a painter. **What the row got wrong** is the third clause: the right-press context menu *does* need something, because `probe_floating_widget`'s boxes come from a second layout of the same spec, and the interior was being laid out two columns wider than the runtime lays it (`floating_panel_inner_width` takes the divider and a column of slack). It takes the same two now. Its own two remainders are both closed: `chrome::Dock::on_layer_key` went with A.2, and the scrollbar-reveal hover came back as a library primitive rather than staying dead. **`Modality` was not the only claim missing a word — so was "this bar is an overlay bar".** `Node::scrollbar_revealed(shown)` is a bar that keeps its column and is drawn only while the caller says so, and its second half is the one worth having: a withheld bar is not *there*, so the pre-propagation `scrollbar_hit` does not grab a column nobody can see. What the caller says is `widgets::Ctx::scrollbar_reveal` — `None` for every panel but the dock, `Some(hovered || flashing)` for it — and neither half of that is the tree's to know: the flash is a deadline the plugin arms through `WidgetEffects::flash_scrollbar`, and the hover is now `UiFact::DockHover`, one pair of Enter/Leave listeners on the column's own surface where the painter recorded `scrollbar_hover_zones` and a mouse arm compared every motion event against them. Leaving it dead would have made a *plugin-facing* effect a no-op, which is the line the API promise draws. **And the column it is in is the painter's**: the interior is laid one wider than it wraps, so the slack column between the content and the divider is the panel's — the row band reaches the divider again (`dock_compact_row_hover_band_spans_the_dock`) and the overlay bar is drawn over it. The wrap width is still the runtime's, because `probe_floating_widget`'s boxes come from a second layout at it; that seam goes when C.1's remaining half does. | Building its description from `active_window()`. `shell_frame` does that for nearly everything else, and the dock is the one surface for which it is wrong. |
 
 **The dock was painting over the tree, and had been since the band existed.**
 `render_floating_widget_panel(Dock)` is called from `render_panels_and_modals`,
