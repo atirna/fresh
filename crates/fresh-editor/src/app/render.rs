@@ -2229,7 +2229,9 @@ impl Editor {
         // The left tree's highlight follows the body, in both directions —
         // the same contract the wheel and the scrollbar had, stated once
         // against the window rather than at each thing that moves it.
-        if moved {
+        // ...but not when the cursor is what moved it: see
+        // `SettingsState::cursor_drove_body`.
+        if moved && !s.take_cursor_drove_body() {
             s.sync_tree_cursor_to_body_scroll();
         }
         // The search results' window, on the same terms. The list moves its
