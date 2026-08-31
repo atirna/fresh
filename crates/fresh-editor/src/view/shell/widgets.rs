@@ -290,102 +290,6 @@ fn keyed(node: Node<UiMsg>, key: Option<fresh_ui::Key>) -> Node<UiMsg> {
     }
 }
 
-pub fn covered(spec: &WidgetSpec) -> bool {
-    match spec {
-        WidgetSpec::Row { children, .. } | WidgetSpec::Col { children, .. } => {
-            children.iter().all(covered)
-        }
-        WidgetSpec::LabeledSection { child, .. } => covered(child),
-        WidgetSpec::Component { child, .. }
-        | WidgetSpec::Overlay { child, .. }
-        | WidgetSpec::Popup { child, .. } => covered(child),
-        WidgetSpec::Button { .. } | WidgetSpec::Toggle { .. } | WidgetSpec::Number { .. } => true,
-        WidgetSpec::Spacer { .. }
-        | WidgetSpec::Divider { .. }
-        | WidgetSpec::HintBar { .. }
-        | WidgetSpec::Raw { .. } => true,
-
-        // **The scrollable kinds cross when their state does, not before.**
-        //
-        // Where the *runtime* owns the scroll, it windows the rows itself and
-        // reports the offset on a `LayoutBox` for the painter to draw a bar
-        // from. The adapter turns rows into nodes and has nothing to say about
-        // a bar, so describing one of those would render it correctly and
-        // silently lose its scrollbar — worse than painting it whole. Wrapping
-        // already-windowed rows in a `viewport` does not rescue it either:
-        // there would be nothing to scroll, so the bar would be wrong rather
-        // than missing.
-        //
-        // `List` has crossed because `widgets::List` windows its own rows out
-        // of a viewport — the scroll is the element's and `scrollbar()` is the
-        // bar. A list of *cards* has not: its rows are multi-row subtrees with
-        // their own selection marking, which is the next substitution.
-        // A list of *cards* crosses on `List::row_rows`: an item is a band of
-        // rows rather than one, and everything else — the window in items, the
-        // selection, the press — is the list above.
-        WidgetSpec::List { .. } => true,
-        // A multi-line field crosses on the same window the card tree does:
-        // the collector is asked for the whole document and the `viewport`
-        // owns which of it shows. That was the last bar the panel's painter
-        // drew, so the coverage boundary closes here.
-        WidgetSpec::Text { .. } => true,
-        // A tree is a *flat, controlled* list of pre-rendered rows — its
-        // expansion is the plugin's — so it crosses on `widgets::List` too.
-        //
-        // **`card_borders` scrolls in rows, so it is a viewport rather than a
-        // list.** With it a tree's rows are heterogeneous — a card node takes
-        // `item_height + 2` and a folder header takes one — and the runtime's
-        // offset is a *row* into the flattened list, so a card straddling
-        // either edge is emitted and clipped. `widgets::List` snaps to whole
-        // items, which would be a different behaviour; the cells-scrolling
-        // `viewport` is the same one, and it owns the offset.
-        //
-        // **The two arms split on `card_borders` alone**, so between them they
-        // take every tree. They used to carry `item_height` in their guards as
-        // well, which left two shapes — a bordered tree of one-row cards, and
-        // a borderless one of tall rows — matching neither, and falling
-        // through to a generic adapter that has since been deleted. Neither
-        // shape is one a plugin is expected to emit (the only producer sets
-        // borders and height together), and that is exactly why the guards
-        // should not have mentioned height: a gap no caller happens to walk
-        // into is still a gap, and the fall-through it needed was the last
-        // thing keeping the adapter alive.
-        WidgetSpec::Tree { .. } => true,
-        // **`DualList` does not scroll**, which is why it crosses through the
-        // adapter with no substitution at all. It emits every row — its body
-        // is `max(available, included, visible_rows)` tall and there is no
-        // offset in its instance state — so there is no bar to lose. It was
-        // excluded with the scrollable kinds on an assumption; the source says
-        // otherwise.
-        //
-        // What it *does* need is the multi-hit row: each of its rows is two
-        // cells side by side, one per column, each with its own `dual_focus`
-        // hit over a byte range in the same row. That is exactly what
-        // `entry_row_hits` gives, and without it only the left column would
-        // have answered.
-        WidgetSpec::DualList { .. } => true,
-        // **`Dropdown`'s pop-over windows its options and paints no bar.** It
-        // has a `scroll_offset`, which is why it was held back with the
-        // scrollable kinds — but the boundary is the *scrollbar*, not the
-        // offset, and the host's pop-over pass draws a border and the rows and
-        // nothing else. `render_dropdown` clamps the scroll and slices, and
-        // hands over each visible row with its absolute index; describing that
-        // reproduces it exactly and loses nothing.
-        WidgetSpec::Dropdown { .. } => true,
-
-        // **`WindowEmbed` crosses as the `Host` leaf it always was.**
-        //
-        // It is a real editor window inside a panel — cells, permanently — and
-        // that was read for a long time as "this panel cannot be described",
-        // which sent every panel containing one down the runtime's whole paint
-        // path. But painting its own cells is precisely what a `Host` leaf
-        // *is*: the tree hands it a rectangle and knows nothing about its
-        // interior. The two were never in tension, and keeping them apart kept
-        // a second renderer alive for the sake of one variant.
-        WidgetSpec::WindowEmbed { .. } => true,
-    }
-}
-
 /// **A tree's `visibleRows` is a window, not a height** — and a list's is a
 /// height.
 ///
@@ -3142,7 +3046,6 @@ mod tests {
             ),
         ];
         for (label, spec) in cases {
-            assert!(covered(&spec), "{label} should be covered");
             assert_eq!(tree_rows(&spec), runtime_rows(&spec), "{label}");
         }
     }
@@ -3273,45 +3176,12 @@ mod tests {
                 .collect()
         };
         for (label, spec) in cases {
-            assert!(covered(&spec), "{label} should be covered");
             assert_eq!(
                 plain(tree_rows(&spec)),
                 plain(runtime_rows(&spec)),
                 "{label}"
             );
         }
-    }
-
-    /// **The gate has nothing left to exclude, and that is the finding.**
-    ///
-    /// `covered` existed to answer "is a panel described or painted", because
-    /// a panel had to be one or the other and one unmigrated child took the
-    /// whole spec down the old path. There is no unmigrated child any more —
-    /// the recursion has no `false` to propagate, so the predicate is
-    /// identically `true` and every branch on it is dead.
-    ///
-    /// The test that used to build a counter-example cannot: its witness was
-    /// `WindowEmbed`, "the one that never will" cross, and it has. What
-    /// replaces it is this assertion over the whole vocabulary, and the
-    /// deletion of the gate itself.
-    #[test]
-    fn the_coverage_gate_has_no_counter_example_left() {
-        let embed = WidgetSpec::WindowEmbed {
-            window_id: 1,
-            rows: 3,
-            key: None,
-        };
-        assert!(covered(&embed), "a window embed is a host leaf, not a hole");
-        assert!(
-            covered(&col_of(vec![
-                WidgetSpec::Raw {
-                    entries: vec![raw("x")],
-                    key: None
-                },
-                embed
-            ])),
-            "and a column holding one is described like any other"
-        );
     }
 
     /// The tree's rows for a spec under a context.
@@ -3476,7 +3346,6 @@ mod tests {
             ),
         ];
         for (label, spec, c) in cases {
-            assert!(covered(&spec));
             assert_eq!(tree_text(&spec, &c), runtime_text(&spec, &c), "{label}");
         }
     }
@@ -3586,7 +3455,6 @@ mod tests {
             cx(),
         ));
         for (label, spec, c) in cases {
-            assert!(covered(&spec));
             assert_eq!(tree_text(&spec, &c), runtime_text(&spec, &c), "{label}");
         }
     }
@@ -3693,7 +3561,6 @@ mod tests {
         cases.push(("editing".into(), editing, cx()));
 
         for (label, spec, c) in cases {
-            assert!(covered(&spec));
             assert_eq!(tree_text(&spec, &c), runtime_text(&spec, &c), "{label}");
         }
     }
@@ -3766,7 +3633,6 @@ mod tests {
             child: Box::new(inner.clone()),
             key: Some("picker".into()),
         };
-        assert!(covered(&wrapped));
         assert_eq!(tree_text(&wrapped, &cx()), tree_text(&inner, &cx()));
     }
 
@@ -3802,7 +3668,6 @@ mod tests {
                 key: None,
             },
         ]);
-        assert!(covered(&floated));
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(node(&floated, WIDTH, &cx()), Size::new(WIDTH, 24));
         let row_of = |ui: &Ui<UiMsg>, text: &str| -> i32 {
@@ -3896,7 +3761,6 @@ mod tests {
             ),
         ];
         for (label, spec) in cases {
-            assert!(covered(&spec), "{label} should be covered");
             assert_eq!(
                 tree_text(&spec, &cx()),
                 runtime_text(&spec, &cx()),
@@ -3971,22 +3835,29 @@ mod tests {
             ("a single-line field", multiline(1)),
             ("a multi-line field", multiline(6)),
             ("a card tree", card_tree(3, 0, 15)),
-        ] {
-            assert!(covered(&spec), "{what}");
-        }
+        ] {}
 
-        // And the one that used to not: `WindowEmbed` is a `Host` leaf, which
-        // is what "paints its own cells" has meant everywhere else in this
-        // migration. It was excluded on the reading that cells and a
+        // And the one that used to be excluded: `WindowEmbed` is a `Host`
+        // leaf, which is what "paints its own cells" has meant everywhere else
+        // in this migration. It was held out on the reading that cells and a
         // description are alternatives; they are not, and that exclusion was
-        // the last thing keeping a whole second panel painter alive.
+        // the last thing keeping a whole second panel painter alive. There is
+        // no coverage predicate left to assert it against — every variant is
+        // described, so the gate has been deleted — and this case simply
+        // renders, like the rest.
+        let embed = WidgetSpec::WindowEmbed {
+            window_id: 1,
+            rows: 3,
+            key: None,
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&embed, WIDTH, &cx()), Size::new(WIDTH, 24));
         assert!(
-            covered(&WidgetSpec::WindowEmbed {
-                window_id: 1,
-                rows: 3,
-                key: None,
-            }),
-            "a window embed is a hole in the description, not an escape from it"
+            ui.spec()
+                .in_flow()
+                .iter()
+                .any(|i| matches!(i.draw, fresh_ui::Draw::Host(_))),
+            "a window embed describes a host leaf for the fold to hand a rect"
         );
     }
 
@@ -4381,7 +4252,6 @@ mod tests {
     #[test]
     fn a_dual_list_renders_what_the_runtime_renders() {
         let spec = a_dual_list();
-        assert!(covered(&spec));
         assert_eq!(tree_text(&spec, &cx()), runtime_text(&spec, &cx()));
     }
 
@@ -4506,7 +4376,6 @@ mod tests {
                 width_pct: None,
                 key: None,
             };
-            assert!(covered(&spec));
             let mut ui: Ui<UiMsg> = Ui::new();
             ui.frame(
                 node(&spec, WIDTH, &cx()).key(fresh_ui::Key::Str("ls".into())),

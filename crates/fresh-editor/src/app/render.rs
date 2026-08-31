@@ -8374,7 +8374,7 @@ impl Editor {
     pub(crate) fn panel_is_described(&self, slot: crate::app::PanelSlot) -> bool {
         self.panel(slot)
             .and_then(|p| self.widget_registry.get(&p.panel_key))
-            .is_some_and(|w| crate::view::shell::widgets::covered(&w.spec))
+            .is_some()
     }
 
     /// The described mounted panel each visible pane is showing.
@@ -8475,9 +8475,6 @@ impl Editor {
             .into_iter()
             .next()?;
         let spec = self.widget_registry.get(&key)?.spec.clone();
-        if !crate::view::shell::widgets::covered(&spec) {
-            return None;
-        }
         Some(crate::view::shell::panel::Interior {
             spec: Rc::new(spec),
             states: Rc::new(
@@ -8516,7 +8513,7 @@ impl Editor {
             .into_iter()
             .next()
             .and_then(|key| self.widget_registry.get(&key))
-            .is_some_and(|w| crate::view::shell::widgets::covered(&w.spec))
+            .is_some()
     }
 
     /// Whether a mounted panel's buffer is one the **panel** scrolls rather
@@ -8558,9 +8555,6 @@ impl Editor {
         let panel = self.panel(slot)?;
         let key = panel.panel_key.clone();
         let spec = self.widget_registry.get(&key)?.spec.clone();
-        if !crate::view::shell::widgets::covered(&spec) {
-            return None;
-        }
         Some(crate::view::shell::panel::Interior {
             spec: Rc::new(spec),
             states: Rc::new(
