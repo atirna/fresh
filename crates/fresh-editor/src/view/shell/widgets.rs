@@ -1944,8 +1944,113 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                     .child(float_route(col().children(box_rows), cx.slot)),
             ])
         }
+        // **The dual list stops going through the collector** — the third of
+        // the five, after `Dropdown` and the single-line field.
+        //
+        // It never scrolled, which is why it crossed the coverage boundary
+        // early and then sat behind the adapter anyway: it emits every row it
+        // has, so there was no bar to lose and nothing but the round trip
+        // keeping it there.
+        //
+        // The rules the collector buried in its walk are now
+        // `kinds::dual_list`'s `resolve`, `header_row`, `body_row`,
+        // `label_row` and `hint_row`, called from the collector and from here
+        // both. `resolve` is the interesting one: which column the keyboard
+        // drives and where each cursor sits survive in instance state, the
+        // included set is sanitized against *this* spec's options, and each
+        // cursor is clamped into its own column — because the option set can
+        // change under a stored state and a cursor left past the end of a
+        // shortened column would mark a row that is no longer there.
+        //
+        // **Each row carries two press targets, and the ranges come back with
+        // the row.** A dual list's row is two cells side by side, each its own
+        // `dual_focus` target, and `Some` means exactly what the collector's
+        // `is_some()` guard meant: a value occupies the cell, so it can be
+        // pressed. Handing the ranges back with the row is the point — a
+        // caller given only the rendered text would have to measure it to find
+        // where the columns are, and re-deriving geometry from painted output
+        // is the duplication this migration exists to remove.
+        WidgetSpec::DualList {
+            options,
+            included,
+            excluded,
+            label,
+            focused,
+            active_included,
+            available_cursor,
+            included_cursor,
+            hint,
+            visible_rows,
+            key,
+        } => {
+            use crate::widgets::kinds::dual_list as dl;
+            let key = key.as_deref();
+            // A keyed widget takes focus from the host's resolved focus key; an
+            // unkeyed one falls back to the spec's initial-only `focused` hint.
+            let is_focused = match key.is_some_and(|k| !k.is_empty()) {
+                true => cx.is_focused(key),
+                false => *focused,
+            };
+            let st = dl::resolve(
+                options,
+                &dl::DualListSeed {
+                    included,
+                    excluded,
+                    active_included: *active_included,
+                    available_cursor: *available_cursor as usize,
+                    included_cursor: *included_cursor as usize,
+                },
+                key,
+                cx.states,
+                is_focused,
+            );
+            let col_w = crate::widgets::render::dual_col_width(width as u32);
+            let widget_key = key.unwrap_or("").to_string();
+            let mut kids: Vec<Node<UiMsg>> = Vec::new();
+            if let Some(e) = dl::label_row(label) {
+                kids.push(entry_row(&e, &cx.surface));
+            }
+            kids.push(entry_row(&dl::header_row(&st, col_w), &cx.surface));
+            for i in 0..st.body_rows(*visible_rows) {
+                let r = dl::body_row(options, &st, i, col_w);
+                let hits: Vec<((usize, usize), crate::widgets::HitArea)> =
+                    [(r.available, "available"), (r.included, "included")]
+                        .into_iter()
+                        .filter_map(|(range, column)| {
+                            let (byte_start, byte_end) = range?;
+                            Some((
+                                (byte_start, byte_end),
+                                crate::widgets::HitArea {
+                                    row_target: false,
+                                    context_click: false,
+                                    overlay: false,
+                                    widget_key: widget_key.clone(),
+                                    widget_kind: "dual_list",
+                                    buffer_row: 0,
+                                    byte_start,
+                                    byte_end,
+                                    payload: serde_json::json!({
+                                        "column": column,
+                                        "index": i,
+                                    }),
+                                    event_type: "dual_focus",
+                                    owner_key: None,
+                                },
+                            ))
+                        })
+                        .collect();
+                kids.push(match hits.is_empty() {
+                    true => entry_row(&r.entry, &cx.surface),
+                    false => entry_row_hits(&r.entry, cx.slot, &cx.surface, &hits),
+                });
+            }
+            if let Some(e) = dl::hint_row(hint) {
+                kids.push(entry_row(&e, &cx.surface));
+            }
+            col().children(kids)
+        }
         // The rest, with collectors of their own. See [`collected`].
-        WidgetSpec::List { .. } | WidgetSpec::Tree { .. } | WidgetSpec::DualList { .. } => {
+        WidgetSpec::List { .. } | WidgetSpec::Tree { .. } => {
             collected(spec, width, cx, site.escape)
         }
         // `covered` gates this; reaching it is a bug in the caller rather than

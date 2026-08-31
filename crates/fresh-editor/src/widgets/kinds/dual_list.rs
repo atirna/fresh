@@ -617,10 +617,7 @@ fn collect_dual_list(
     let col_w = dual_col_width(panel_width);
     let widget_key = key.unwrap_or("").to_string();
 
-    // Optional label row.
-    if !label.is_empty() {
-        let mut e = TextPropertyEntry::text(label);
-        ensure_trailing_newline(&mut e);
+    if let Some(e) = label_row(label) {
         out.entries.push(e);
     }
     let header_row_idx = out.entries.len() as u32;
@@ -660,23 +657,50 @@ fn collect_dual_list(
     // move an item across, Shift+↑↓ to reorder) aren't guessable from
     // its shape, so the host supplies a localized one-liner and it
     // rides with the control instead of only in a panel footer.
-    if !hint.is_empty() {
-        let text = format!("{DUAL_GUTTER_BLANK}{hint}");
-        let mut e = TextPropertyEntry::text(&text);
-        e.inline_overlays.push(InlineOverlay {
-            start: 0,
-            end: text.len(),
-            style: OverlayOptions {
-                fg: Some(OverlayColorSpec::theme_key(KEY_PLACEHOLDER_FG)),
-                ..Default::default()
-            },
-            properties: Default::default(),
-            unit: OffsetUnit::Byte,
-        });
-        ensure_trailing_newline(&mut e);
+    if let Some(e) = hint_row(hint) {
         out.entries.push(e);
     }
     out
+}
+
+/// The optional label above the columns. `None` when the plugin gave none,
+/// which is what "empty = omitted" means — an empty row is not the same as no
+/// row, because the column band below it would start one line lower.
+pub(crate) fn label_row(label: &str) -> Option<TextPropertyEntry> {
+    if label.is_empty() {
+        return None;
+    }
+    let mut e = TextPropertyEntry::text(label);
+    ensure_trailing_newline(&mut e);
+    Some(e)
+}
+
+/// The key hint under the columns.
+///
+/// The control's bindings — Shift+←/→ to move an item across, Shift+↑/↓ to
+/// reorder — are not guessable from its shape, so the host supplies a
+/// localized one-liner and it rides *with the control* rather than living only
+/// in a panel footer, where a control on a surface with no footer would lose
+/// it. Indented by the same blank gutter the cells reserve, so it lines up
+/// under the Available column rather than under the cursor channel.
+pub(crate) fn hint_row(hint: &str) -> Option<TextPropertyEntry> {
+    if hint.is_empty() {
+        return None;
+    }
+    let text = format!("{DUAL_GUTTER_BLANK}{hint}");
+    let mut e = TextPropertyEntry::text(&text);
+    e.inline_overlays.push(InlineOverlay {
+        start: 0,
+        end: text.len(),
+        style: OverlayOptions {
+            fg: Some(OverlayColorSpec::theme_key(KEY_PLACEHOLDER_FG)),
+            ..Default::default()
+        },
+        properties: Default::default(),
+        unit: OffsetUnit::Byte,
+    });
+    ensure_trailing_newline(&mut e);
+    Some(e)
 }
 
 /// Kind policy for the plugin `SetDualIncluded` mutation: drop values
