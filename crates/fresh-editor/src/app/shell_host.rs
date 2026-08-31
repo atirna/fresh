@@ -1574,7 +1574,15 @@ impl Editor {
                 if self.widget_registry.focus_key(&key) == Some(widget.as_str()) {
                     return;
                 }
-                self.widget_registry.set_focus_key(&key, widget);
+                // **Through the same door every other focus move uses.** This
+                // wrote `set_focus_key` directly while the comment above
+                // claimed the plugin was told, and it was not: the plugin's
+                // `focus` event and the kinds' own `on_focus_change` hook —
+                // which is how a `Tree` keeps its selected row coherent with
+                // focus — both hang off `set_panel_focus_and_notify`, and
+                // neither ran for a focus the tree decided. Tab ran them and
+                // a click did not.
+                self.set_panel_focus_and_notify(&key, widget);
                 self.rerender_widget_panel(&key);
             }
             UiFact::WidgetHover {
