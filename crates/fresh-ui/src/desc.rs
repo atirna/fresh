@@ -565,7 +565,10 @@ impl Modality {
     /// its to resolve. `Focus` is the variant that confines without
     /// swallowing, so this is the only place the two answers part.
     pub fn swallows_keys(self) -> bool {
-        matches!(self, Modality::Keyboard | Modality::Inert | Modality::Exclusive)
+        matches!(
+            self,
+            Modality::Keyboard | Modality::Inert | Modality::Exclusive
+        )
     }
 }
 

@@ -1338,7 +1338,11 @@ fn a_focus_modal_layer_confines_traversal_without_swallowing() {
         code: KeyCode::Char('x'),
         mods: Mods::NONE,
     }));
-    assert_eq!(seen.get(), 1, "the confined layer's chain saw the key first");
+    assert_eq!(
+        seen.get(),
+        1,
+        "the confined layer's chain saw the key first"
+    );
 
     // And no swallow: the handler declined to stop, so the key is still the
     // host's to resolve.
@@ -1357,14 +1361,12 @@ fn a_focus_modal_layer_confines_traversal_without_swallowing() {
 #[test]
 fn a_focus_modal_layer_still_claims_what_it_answers() {
     let mk = || -> Node<()> {
-        col().child(
-            layer()
-                .modality(Modality::Focus)
-                .child(focusable(text("prompt")).autofocus().on_key(|e: &Event| {
-                    e.stop();
-                    None
-                })),
-        )
+        col().child(layer().modality(Modality::Focus).child(
+            focusable(text("prompt")).autofocus().on_key(|e: &Event| {
+                e.stop();
+                None
+            }),
+        ))
     };
     let mut ui: Ui<()> = Ui::new();
     ui.frame(mk(), FRAME);
