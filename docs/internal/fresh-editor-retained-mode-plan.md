@@ -380,6 +380,30 @@ nodes. The per-surface "here is your key back" facts shrink and then go.
 *Exit:* tab order in the settings dialog is the tree's, and the base key
 dispatcher is not reached while a modal is up.
 
+*Progress:* the settings category tree interprets its own keys — eight of them
+arrive as what they *mean* rather than as a raw key handed back — and one of the
+ten `focusable(false)` opt-outs is gone. Its exit condition is not met, for a
+reason worth stating: the dialog's middle tab stop is the settings *body*, whose
+controls are plugin widgets, and Tab is overloaded inside them (it commits an
+edit rather than moving on).
+
+*What the plugin widgets need, now established.* The adapter contains exactly one
+`focusable` call — the `Component` arm's scope — so **no plugin widget is on the
+tree's ring at all**; the runtime's focus key, a string resolved across the whole
+panel, is the sole authority, and the adapter's remaining `focusable(false)`
+calls say so outright.
+
+The library has the piece required: `on_focus_change` on a focusable node. So the
+shape is available — declare each interactive widget focusable and keyed, and let
+that handler write the runtime's focus key, making it a *mirror* of the tree
+rather than a competitor. That is the same one-authority move Phase 2.1 made for
+the folds.
+
+The constraint to respect is that this cannot be done one *kind* at a time. A
+ring containing only buttons would let Tab cycle buttons and skip fields, which
+is worse than a ring the tree does not own at all. The unit is a panel: every
+interactive kind in it goes on the ring together, or none does.
+
 **3.3 Reconsider the focus and pointer modalities.** Their own documentation says
 they are only meaningful for a surface whose interior lives outside the tree.
 They are migration-shaped API in a general-purpose library; when 3.2 completes
