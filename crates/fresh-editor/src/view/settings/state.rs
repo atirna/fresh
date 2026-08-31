@@ -2258,16 +2258,6 @@ impl SettingsState {
     }
 
     pub(crate) fn sync_tree_cursor_to_body_scroll(&mut self) {
-        if std::env::var("FRESH_DBG").is_ok() {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/freshdbg.log")
-            {
-                let _=writeln!(f,"DBG sync: top_item={:?} selected_item={} computed_section={:?} cursor_was={:?}", self.topmost_visible_item_index(), self.selected_item, self.current_section_index(), self.tree_cursor_section);
-            }
-        }
         if let Some(section_idx) = self.current_section_index() {
             self.tree_cursor_section = Some(section_idx);
         }
