@@ -40,7 +40,7 @@ pub mod widgets;
 
 pub use ambient::{provide, provide_eq, scope, Ambient, AmbientKey, ProvideProps};
 pub use behavior::Behavior;
-pub use component::{AnyComponent, Component};
+pub use component::{memo, AnyComponent, Component, Memo};
 pub use desc::{
     col, focusable, gesture, host, host_leaf, layer, layout_reader, node_key, node_type, resolve,
     row, shared_rc, stack, text, text_runs, viewport, Align, Anchor, BoxProps, ComponentExt, Desc,
