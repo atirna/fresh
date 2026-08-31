@@ -1356,6 +1356,54 @@ fn a_focus_modal_layer_confines_traversal_without_swallowing() {
     );
 }
 
+/// **A surface can own the keyboard and still hand back what it declines**,
+/// and a host with its own pipeline behind the tree has to be able to ask
+/// each half separately: "may I intercept this key" is not "may I resolve
+/// it". `keyboard_owned` answers the second, `focus_confined` the first, and
+/// a `Modality::Focus` layer is precisely where the two disagree.
+///
+/// The editor's unfocused popups are the case. While a prompt is open they
+/// must not intercept a keystroke — the prompt owns the keyboard — but the
+/// prompt does not swallow, so what it declines is still the host's to
+/// resolve. Asking one question for both is what a ranked list of surfaces
+/// was doing.
+#[test]
+fn confining_focus_and_swallowing_keys_are_asked_separately() {
+    let ask = |m: Modality| -> (bool, bool) {
+        let mut ui: Ui<()> = Ui::new();
+        ui.frame(
+            col().child(
+                layer()
+                    .modality(m)
+                    .child(focusable(text("surface")).autofocus()),
+            ),
+            FRAME,
+        );
+        (ui.focus_confined(), ui.keyboard_owned())
+    };
+
+    assert_eq!(
+        ask(Modality::Focus),
+        (true, false),
+        "a Focus layer confines the keyboard and swallows nothing"
+    );
+    assert_eq!(
+        ask(Modality::Keyboard),
+        (true, true),
+        "a Keyboard layer does both"
+    );
+    assert_eq!(
+        ask(Modality::None),
+        (false, false),
+        "and an ordinary layer does neither"
+    );
+    assert_eq!(
+        ask(Modality::Pointer),
+        (false, false),
+        "nor does one that claims only the pointer"
+    );
+}
+
 /// The partner: a `Focus` layer still claims what its chain *does* act on.
 /// Declining is a node not stopping the flow, not the layer being absent.
 #[test]

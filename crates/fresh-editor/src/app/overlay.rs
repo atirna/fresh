@@ -110,27 +110,21 @@ pub(crate) fn any_layer_blocks_terminal_input(layers: &[Layer]) -> bool {
     layers.iter().any(|l| l.blocks_terminal_input)
 }
 
-/// True iff a layer ranked *above* the popup layer currently owns the
-/// keyboard. Used by the unfocused-popup key interception: the layers
-/// ranked above `Popup` (840) are the capture-all modals (Settings /
-/// KeybindingEditor / CalibrationWizard 880-900), WorkspaceTrust
-/// (870), Menu (860) and Prompt (850), plus the hardcoded event-debug
-/// head — the stack derives the set, so this list is documentation, not
-/// an encoding. While one of those owns the keyboard the popup must not
-/// intercept keys. Callers guarantee a `Popup` layer is present, so the
-/// `take_while` stops before the editor base layer.
-///
-/// **Still load-bearing after the key walk went.** The interception is the
-/// first rung of `dispatch_base_key` now, and base runs whenever the tree
-/// did not claim — which includes a `Modality::Focus` surface that
-/// *declined*. An open prompt still reports `owns_keyboard`, so this is
-/// what keeps Esc in a prompt from reaching past it to a stale popup.
-pub(crate) fn popup_blocked_by_higher_modal(layers: &[Layer]) -> bool {
-    layers
-        .iter()
-        .take_while(|l| l.kind != LayerKind::Popup)
-        .any(|l| l.owns_keyboard)
-}
+// **The ranked ordering read is gone.** `popup_blocked_by_higher_modal` was
+// here: walk the stack down to the `Popup` entry and ask whether anything
+// above it owns the keyboard. It was the last ordering reader of this list
+// that was not `get_key_context`, and the tree answers it by containment —
+// `Ui::focus_confined`, since a layer that confines focus is one that owns
+// the keyboard, and the focused element's ancestor chain names them. See
+// `Editor::resolve_unfocused_popup_action`.
+//
+// What is left reading this list reads it as a *set*
+// (`any_layer_blocks_terminal_input`, `cursor_suppressed_by_late_overlay`),
+// where the ranks were already irrelevant, plus `resolve_focus_context` —
+// which is A.5's, and cannot become a tree read for the reason written up
+// under section A: a rung may mutate state and then decline, so a lower
+// rung's context must be re-derived against post-mutation state, and the
+// tree is rebuilt once per frame.
 
 impl Editor {
     /// Whether editor-pane popups (LSP completion, hover, signature help,

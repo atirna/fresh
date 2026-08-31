@@ -197,7 +197,7 @@ provided at is the scope they belong to.
 | ~~A.1~~ **Done.** | ~~`context_menu`~~, ~~`menu`~~, ~~`popups`~~, ~~`prompt`~~, ~~`base`~~ — **`on_layer_key` is gone from the trait, and `dispatch_layer_keyboard` with it.** The prompt needed a word the library did not have, and so did A.2 — see the note under this table. The popups' last rung turned out not to be a layer's dispatch at all (an unfocused popup holds no focus, so its cancel/focus keys are ordinary editor bindings) and is the first rung of `dispatch_base_key` now. With one member left, the walk is a call: `handle_key` invokes `chrome::base` directly. **What `base` still owes is A.5**, not a seam — the keymap riding down as `Shortcut { key, intent }` data. | The surface declares `focusable()` / `focus_scope()`; its bindings ride down as `Shortcut { key, intent }` data and the library's Shortcuts → Intents → Actions chain resolves them. **The menu closed the gap that kept a surface half-migrated**: its navigation had been intents since decision 1, but a whole input handler stayed alive to *swallow* the keys it declined, because `Modality` was one knob for two channels and the chain could not take the keyboard without taking the pointer from the bar it hangs off. `Modality::Keyboard` says the one without the other; `blocks_pointer` and `owns_keyboard` are what the framework now asks, per channel, at each site. **The popups then needed the opposite** — a layer that owns the keyboard and can still step out of the way of one key — which is `Dismiss::passing_through` beating the modal claim, and is what a completion list's Enter has always meant. `view/ui/menu_input.rs`, `view/popup_input.rs`, `view/popup/input/` (four files), `Menu::on_layer_key` and the three capturing rungs of `dispatch_popup_keys` are gone. | Resolving key → action *before* dispatch and handing the tree an `Action`. §6.2 decision 1 settled this the other way: bindings flow down as data, the tree resolves. |
 | ~~A.2~~ **Done.** | `dock` + `floating_modal` `on_layer_key` handed the key to the widget dispatcher. | `view::shell::panel::keys_layer` — the prompt's seam, for the two surfaces that reach `dispatch_floating_widget_key`. It did *not* have to ride with C after all: what blocked it was the same missing word, not the interior. The `ToggleDockFocus` pre-resolution that had to run ahead of the panel's own dispatch (so the toggle stays symmetric once you have dived in) moved into the applier with it. | Migrating them early behind a shim that calls the old dispatcher from a `GestureKind::Key` handler. That is the walk with a new caller — and the difference is that a `Modality::Focus` layer is *offered* the key by containment rather than by a walk, and hands back what it declines. |
 | ~~A.3~~ **Done.** | The four `modals` handed the key to painter interiors through a capture-all `on_layer_key` apiece, offered in `layer_rank` order. | Containment, the same way the pointer crossed: each is a `Modality::Exclusive` layer, so it owns the keyboard, focus goes inside it, and `modal::keys` — an `on_key` at the top of that subtree — sees what the subtree declined. `UiFact::ModalKey(KeySlot)` names the surface; the interior is unchanged, which is the ruling that let `ModalPointer` cross the same seam. **The claim goes on every exclusive layer the surface can raise**, not only the band underneath: with a dialog or an entry level up, the band is no longer on the focus path. And on the *trust* prompt it is gated by `Trust::captures`, because an exclusive layer with nobody listening inside it stops a key rather than routing it — whether to claim has to be decided where the claim is made. |
-| A.4 | `layer_rank` — a central ordered list of surfaces. | Delete it. Precedence is *derived*: layer order, `Modality::Exclusive`, focus-scope containment — all already in the tree. | A `key_rank` property on layers, or a `Behavior` that walks them in order. Goal 2 forbids the central list by name; a renamed one is the same list. |
+| A.4 | `layer_rank` — a central ordered list of surfaces. **One of its two ordering readers is gone**: `popup_blocked_by_higher_modal` is now `Ui::focus_confined`, the `Modality::owns_keyboard` half of the same containment walk `keyboard_owned` does for `swallows_keys`. What is left reading the stack as an *order* is `get_key_context`, which is A.5's. | Delete it. Precedence is *derived*: layer order, `Modality::Exclusive`, focus-scope containment — all already in the tree. | A `key_rank` property on layers, or a `Behavior` that walks them in order. Goal 2 forbids the central list by name; a renamed one is the same list. |
 | A.5 | `KeyContext` — the mode enum the walk keyed on, and the largest remnant by reference count. | "Which bindings apply" becomes *where focus is*: a scope provides its shortcut set as an ambient, resolution walks the focus path up. | Keeping `KeyContext` as an ambient. That is the enum with a new home; the point is that containment already answers it. |
 
 **The two words that unblocked three of the four: `Modality::Focus` and
@@ -293,11 +293,26 @@ change, and it is the largest single item left in section A.
 
 A.4 and A.5 are closer than that paragraph left them, and one step further
 apart than they look. `layer_rank` no longer orders any *dispatch* — the walk
-is gone and `OwnedLayer`'s owner stamp with it — but three readers of
-`overlay_layers()` remain, and they do not all want the same thing:
+is gone and `OwnedLayer`'s owner stamp with it — and of the readers of
+`overlay_layers()` that remain, **only one still reads it as an order.**
 `any_layer_blocks_terminal_input` and `cursor_suppressed_by_late_overlay` read
-the stack as a *set*, so the ranks are already irrelevant to them;
-`popup_blocked_by_higher_modal` and `get_key_context` read it as an *order*.
+the stack as a *set*, so the ranks were already irrelevant to them.
+
+**`popup_blocked_by_higher_modal` is gone**, and it went the way A.4 says
+every ordering reader should: by being asked of the tree instead. It walked
+the stack down to the `Popup` entry and asked whether anything above it owned
+the keyboard — and that is containment, because a layer that confines focus
+*is* one that owns the keyboard and the focused element's ancestor chain
+names them. The library had half the question already: `keyboard_owned` is
+`Modality::swallows_keys` by containment, and `focus_confined` is the same
+walk with `Modality::owns_keyboard`, which is the other half of the split
+`Modality::Focus` created. **A host with its own pipeline behind the tree
+needs both, because "may I intercept this key" and "may I resolve this key"
+are not the same permission** — and an unfocused popup asks the first while
+an open prompt answers yes to it and no to the second.
+
+That leaves `get_key_context`, which is A.5's and cannot become a tree read
+for the reason below.
 
 **And `get_key_context` cannot become a read of the tree.** The obvious form
 of A.5 — every keyboard-owning layer `provide`s its `KeyContext`, and the host

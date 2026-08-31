@@ -450,9 +450,19 @@ impl Editor {
         // Higher-priority modal contexts (Settings, Menu, Prompt) own the
         // keyboard regardless of whether a buffer popup happens to be
         // visible underneath. Skip the unfocused-popup interception so
-        // pressing Esc in a settings dialog still closes the dialog
-        // rather than reaching past it to dismiss a stale popup.
-        if crate::app::overlay::popup_blocked_by_higher_modal(&self.overlay_layers()) {
+        // pressing Esc in a settings dialog still closes the dialog rather
+        // than reaching past it to dismiss a stale popup.
+        //
+        // **Asked by containment, not by rank.** This was
+        // `popup_blocked_by_higher_modal`: walk the ranked layer stack down to
+        // the `Popup` entry and ask whether anything above it owns the
+        // keyboard — an ordering read, and the last one A.4 had that was not
+        // `get_key_context`. Focus already answers it: a layer that confines
+        // focus *is* one that owns the keyboard, and the focused element's
+        // ancestor chain says which layers those are. The popup itself cannot
+        // be the answer, because the guard above returned when it was focused,
+        // and an unfocused popup confines nothing.
+        if self.shell_ui.as_ref().is_some_and(|ui| ui.focus_confined()) {
             return None;
         }
 
