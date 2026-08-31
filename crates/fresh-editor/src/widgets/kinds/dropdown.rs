@@ -169,8 +169,10 @@ fn collect_dropdown(
     } else {
         focused
     };
-    let Resolved { selected: cur, open } =
-        resolve(options, spec_selected, spec_open, key, prev, is_focused);
+    let Resolved {
+        selected: cur,
+        open,
+    } = resolve(options, spec_selected, spec_open, key, prev, is_focused);
     if let Some(k) = key {
         if !k.is_empty() {
             next_state.insert(

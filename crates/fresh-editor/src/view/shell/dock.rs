@@ -72,9 +72,15 @@ pub fn dock(
 /// `handle_floating_widget_click` already returns without doing anything
 /// when its probe finds no widget.
 ///
-/// A right press is unchanged either way: `probe_floating_widget` reads the
-/// registry's boxes, which the runtime fills whether or not the tree
-/// describes the panel.
+/// **A right press reports the same fact either way, but not by the same
+/// route.** The column emits `DockContext` on both sides of the seam; what
+/// answers it differs. While the interior is a painter,
+/// `handle_floating_widget_context_click` probes the runtime's boxes. Once it
+/// is described that probe stands down — it would answer from a *second*
+/// layout that reads the runtime's own scroll offset, which the description
+/// does not, so a scrolled list would raise the menu for a different row from
+/// the one clicked — and the menu comes from the widget's own
+/// `UiFact::WidgetContext` instead.
 fn column(interior: Option<super::panel::Interior>) -> Node<UiMsg> {
     let described = interior.is_some();
     let body = match interior {
@@ -389,10 +395,13 @@ mod tests {
         );
     }
 
-    /// **The right press does not change with the seam.**
-    /// `probe_floating_widget` reads the registry's boxes, which the runtime
-    /// fills whether or not the tree describes the panel — so the context
-    /// menu is reached the same way on both sides.
+    /// **The column says the same thing on either side of the seam.**
+    ///
+    /// This is about the *fact*, not the mechanism: `DockContext` carries the
+    /// cell, and the column emits it described or not. What consumes it
+    /// diverges — see `column`'s own doc, and
+    /// `handle_floating_widget_context_click`'s early-out for a described
+    /// panel — so this asserts what it can see and no more.
     #[test]
     fn a_right_press_reports_where_on_either_side_of_the_seam() {
         for mut ui in [described(Some(24), 100, 30), laid_out(Some(24), 100, 30)] {
