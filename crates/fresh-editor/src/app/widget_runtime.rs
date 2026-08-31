@@ -2940,6 +2940,20 @@ impl Editor {
     ) -> bool {
         let mut changed = false;
         for slot in [super::PanelSlot::Dock, super::PanelSlot::Floating] {
+            // **A described panel answers its own hover.** Its widgets are
+            // nodes, so `UiFact::WidgetHover` writes the same two memos from
+            // the rectangles layout already produced — and this probe is a
+            // *second* layout of the same spec per motion event, followed by a
+            // re-render request to the plugin. Two writers for one memo is the
+            // drift, not the cost: `probe_floating_widget` reads the runtime's
+            // own scroll offset, which the description does not, so a scrolled
+            // list would light a different row from the one under the pointer.
+            //
+            // The probe stays for the right-press context menu, which is not a
+            // node yet, and for a panel the tree still paints.
+            if self.panel_is_described(slot) {
+                continue;
+            }
             // A slot the pointer isn't addressing resolves to "nothing
             // hovered", which also *clears* whatever it had highlighted.
             // The hovered *row* travels beside the hovered widget: a

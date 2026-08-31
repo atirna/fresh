@@ -1341,6 +1341,43 @@ impl Editor {
                     }
                 }
             }
+            // **The tree's answer replaces the probe's**, for a panel whose
+            // interior the tree describes. Setting the memo is all of it: the
+            // description reads `hovered_widget_key`/`hovered_item_key` when
+            // it is next built, and the row renderers take the highlight from
+            // there — where `update_widget_hover` had to ask the plugin to
+            // re-render before the painter could show it.
+            UiFact::WidgetHover {
+                slot,
+                widget,
+                item,
+                entered,
+            } => {
+                use crate::view::shell::widgets::Slot;
+                let panel = match slot {
+                    Slot::Dock => crate::app::PanelSlot::Dock,
+                    Slot::Floating => crate::app::PanelSlot::Floating,
+                    // Gated at the source; nothing else has a panel memo.
+                    _ => return,
+                };
+                if let Some(p) = self.panel_mut(panel) {
+                    match entered {
+                        true => {
+                            p.hovered_widget_key = widget;
+                            p.hovered_item_key = item;
+                        }
+                        // Only if it is still the one being left. Enter and
+                        // leave are per-node and leaves fire first, so a row
+                        // handing the hover to the piece beside it would
+                        // otherwise clear what the enter had just set.
+                        false if p.hovered_widget_key == widget && p.hovered_item_key == item => {
+                            p.hovered_widget_key.clear();
+                            p.hovered_item_key.clear();
+                        }
+                        false => {}
+                    }
+                }
+            }
             UiFact::WidgetPopupHover { slot, index } => {
                 use crate::view::shell::widgets::Slot;
                 let now = index.map(|i| i.to_string()).unwrap_or_default();

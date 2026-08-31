@@ -589,6 +589,29 @@ pub enum UiFact {
         slot: super::widgets::Slot,
         index: Option<usize>,
     },
+    /// The pointer entered or left a widget's own rectangle.
+    ///
+    /// **The hover the runtime probed for.** `update_widget_hover` laid the
+    /// panel's spec out a second time on every motion event, hit-tested the
+    /// cell against the boxes that produced, and then asked the *plugin* to
+    /// re-render so the painter could draw the highlight — a round trip into
+    /// another language per mouse move, to answer a question the tree had
+    /// already answered by laying the row out. A described panel draws its own
+    /// highlight from `widgets::Ctx::hovered_key`, so all that is left is
+    /// saying which widget it is.
+    ///
+    /// `widget` is the widget's key and `item` the row's, because every row of
+    /// one tree shares the tree's key — without the second the highlight could
+    /// only light the whole list. A leave carries the same pair rather than
+    /// clearing blindly: enter and leave are per-node, two pieces of one row
+    /// hand the hover between them, and a leave that did not name what it was
+    /// leaving could undo the enter that had just replaced it.
+    WidgetHover {
+        slot: super::widgets::Slot,
+        widget: String,
+        item: String,
+        entered: bool,
+    },
     /// An open widget pop-over was dismissed — a press outside it, or Escape.
     ///
     /// **The layer says when, so nobody writes the rule twice.** The settings

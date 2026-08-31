@@ -1959,7 +1959,39 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
 /// hit-testing a rectangle it laid out, instead of the host reconstructing it
 /// from a row and a byte offset.
 fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<UiMsg> {
-    fresh_ui::gesture(n).on(
+    // **And the hover, for the same reason.** A widget's rectangle is what
+    // answers "is the pointer on it", and this is the one wrapper every hit
+    // piece goes through — a button, a list row, each of a tree row's three
+    // targets — so one pair of listeners here is the whole vocabulary. What it
+    // replaces is `update_widget_hover`: a second layout of the panel's spec
+    // per motion event, hit-tested against the boxes it produced, followed by
+    // a re-render request to the plugin.
+    //
+    // Only the panels. The settings dialog's rows carry their own hover facts
+    // (`SettingsItemHover` and its siblings) onto settings state, and its
+    // `Ctx` has no `hovered_key` to read, so a fact from here would be noise.
+    let hover = matches!(slot, Slot::Dock | Slot::Floating).then(|| {
+        let (widget, item) = (
+            hit.widget_key.clone(),
+            hit.payload
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        );
+        move |entered: bool| {
+            let (slot, widget, item) = (slot, widget.clone(), item.clone());
+            std::rc::Rc::new(move |_: &fresh_ui::Event| {
+                Some(UiMsg::Ui(super::msg::UiFact::WidgetHover {
+                    slot,
+                    widget: widget.clone(),
+                    item: item.clone(),
+                    entered,
+                }))
+            }) as fresh_ui::Handler<UiMsg>
+        }
+    });
+    let n = fresh_ui::gesture(n).on(
         fresh_ui::GestureKind::Press,
         std::rc::Rc::new(move |e: &fresh_ui::Event| {
             if e.button != fresh_ui::MouseButton::Left {
@@ -1973,7 +2005,11 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
                 clicks: e.clicks,
             }))
         }),
-    )
+    );
+    match hover {
+        None => n,
+        Some(h) => n.on_enter(h(true)).on_leave(h(false)),
+    }
 }
 
 /// The ground an entry asks to keep past the end of its text, if it asks.
