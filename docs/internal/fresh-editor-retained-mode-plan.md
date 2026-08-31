@@ -391,14 +391,25 @@ land on: its controls are plugin widgets, and no plugin widget was on the ring
 at all. They are now, and the body renders through the same adapter, so
 `move_focus` has real targets there.
 
-What is left is a *behaviour* decision rather than a mechanism. Tab is overloaded
-inside the body: while a control is being edited it commits the edit and stays
-put, so reaching the next control takes two presses. No node knows it is being
-edited, and deriving that from the description would be the two-writers shape
-§2.4 forbids. The expected behaviour in this kind of UI is that Tab commits *and*
-advances in one press — which is both simpler and what the ring wants — so the
-step is to make that the behaviour and re-pin the three tests that hold the
-two-press model.
+**The second blocker, as previously recorded here, was not real.** It was written
+down twice — that Tab is overloaded inside the body, committing an edit and
+staying put, so reaching the next control takes two presses, pinned by three
+tests. Checking the source says otherwise. `handle_text_editing_input`'s Tab arm
+already does `commit_text_edit(); stop_editing(); toggle_focus()` — commit *and*
+advance, in one press, and its comment explains the commit was added because a
+value typed and dismissed with Tab was being dropped on Save. Of the three tests
+cited, two use Tab only to commit and assert the value was accepted, and the
+third asserts merely that the screen changes, explicitly allowing either "move to
+the next setting" or "move to the footer panel". None pins a two-press model.
+
+What is actually left is smaller and is a design question rather than an
+obstacle. `toggle_focus` advances to the next *panel* — Categories → Settings →
+Footer — so Tab inside the body leaves the body rather than stepping to the next
+control in it. That was the only thing it could mean while the body's controls
+were not focusable. They are now, so Tab there could step control by control and
+leave the panel only at the end, which is what the ring makes available and what
+this kind of dialog does elsewhere. Whether it *should* is a taste call about the
+dialog, not a migration blocker.
 
 *What the plugin widgets need, now established.* The adapter contains exactly one
 `focusable` call — the `Component` arm's scope — so **no plugin widget is on the
