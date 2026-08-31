@@ -351,10 +351,16 @@ pub const RESULT_ROWS: u16 = 3;
 pub fn results(r: &Results) -> Node<UiMsg> {
     let rows: std::rc::Rc<Vec<ResultRow>> = std::rc::Rc::new(r.rows.clone());
     let n = rows.len();
+    // **The marker is the model's, not the row state's.** `row_theme` says
+    // what a selected row *looks* like, and a card list's selection reads as a
+    // band; the painter also wrote a `▸ ` in front of the name, which is the
+    // only thing that survives a theme whose selection colour is close to its
+    // ground. The selection is controlled here, so the builder can be told.
+    let sel = r.selected;
     let list = fresh_ui::List::windowed(
         n,
         |i| fresh_ui::Key::Pair("settings_result".into(), i as u64),
-        move |i| result_card(&rows[i]),
+        move |i| result_card(&rows[i], i == sel),
     )
     .row_rows(RESULT_ROWS)
     .focusable(false)
@@ -379,9 +385,20 @@ pub fn results(r: &Results) -> Node<UiMsg> {
 /// One result's three rows. The `▸` marks the cursor; the row's own theme
 /// says whether it is the selected one, so the marker is the only thing here
 /// that has to know.
-fn result_card(r: &ResultRow) -> Node<UiMsg> {
+fn result_card(r: &ResultRow, selected: bool) -> Node<UiMsg> {
     let dim = pair("ui.line_number_fg", "ui.popup_bg");
-    let mut name: Vec<Node<UiMsg>> = vec![text("  ")];
+    let marker = match selected {
+        true => "\u{25b8} ",
+        false => "  ",
+    };
+    let mut name: Vec<Node<UiMsg>> = vec![match selected {
+        true => text(marker).theme(attrs(
+            "ui.settings_selected_fg",
+            "ui.settings_selected_bg",
+            &["bold"],
+        )),
+        false => text(marker),
+    }];
     name.extend(
         r.name
             .iter()

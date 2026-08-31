@@ -2186,16 +2186,24 @@ impl Editor {
         let Some(ui) = self.shell_ui.as_ref() else {
             return;
         };
-        let Some(vp) = ui.find_by_key(&st::items_key()) else {
-            return;
+        // **Three windows, three answers, and no one of them gates the
+        // others.** The cards' viewport is only in the tree while the body is
+        // showing cards: a search replaces it with the results list, so
+        // returning here when it is missing left the results' own offset
+        // unread, and the count row went on reporting "(1-10 of 176)" however
+        // far the wheel had taken the list.
+        let body = ui.find_by_key(&st::items_key());
+        let vpr = body.map(|vp| ui.rect_of(vp)).unwrap_or_default();
+        let (scroll, content) = match body {
+            Some(vp) => ui.scroll(vp),
+            None => Default::default(),
         };
-        let vpr = ui.rect_of(vp);
-        let (scroll, content) = ui.scroll(vp);
         let offset = scroll.y.max(0) as u16;
-        let moved = self
-            .settings_state
-            .as_ref()
-            .is_some_and(|s| s.body.offset != offset);
+        let moved = body.is_some()
+            && self
+                .settings_state
+                .as_ref()
+                .is_some_and(|s| s.body.offset != offset);
         // Which card the window starts on. Only worth a walk when the window
         // has actually moved — it is the left tree's highlight that reads it,
         // and that only has to change when the body does.
@@ -2209,7 +2217,7 @@ impl Editor {
                     .map(|p| p.items.len())
                     .unwrap_or(0);
                 (0..n).find(|&i| {
-                    ui.find_by_key_in(vp, &st::card_key(i))
+                    body.and_then(|vp| ui.find_by_key_in(vp, &st::card_key(i)))
                         .map(|e| ui.rect_of(e))
                         // The first card whose bottom edge is below the
                         // window's top is the one the window starts on.
@@ -2220,12 +2228,14 @@ impl Editor {
         let Some(s) = self.settings_state.as_mut() else {
             return;
         };
-        s.body = crate::view::settings::state::BodyWindow {
-            offset,
-            height: vpr.h,
-            content: content.h,
-            top_item,
-        };
+        if body.is_some() {
+            s.body = crate::view::settings::state::BodyWindow {
+                offset,
+                height: vpr.h,
+                content: content.h,
+                top_item,
+            };
+        }
         // The left tree's highlight follows the body, in both directions —
         // the same contract the wheel and the scrollbar had, stated once
         // against the window rather than at each thing that moves it.
