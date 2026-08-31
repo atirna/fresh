@@ -381,11 +381,24 @@ nodes. The per-surface "here is your key back" facts shrink and then go.
 dispatcher is not reached while a modal is up.
 
 *Progress:* the settings category tree interprets its own keys — eight of them
-arrive as what they *mean* rather than as a raw key handed back — and one of the
-ten `focusable(false)` opt-outs is gone. Its exit condition is not met, for a
-reason worth stating: the dialog's middle tab stop is the settings *body*, whose
-controls are plugin widgets, and Tab is overloaded inside them (it commits an
-edit rather than moving on).
+arrive as what they *mean* rather than as a raw key handed back — and the plugin
+widgets are on the tree's ring, which leaves the registry's focused-key string a
+mirror written from one place rather than the authority on which control is live.
+
+**Its exit condition had two blockers and one is now gone.** The first was that
+the dialog's middle tab stop — the settings *body* — had nothing focus could
+land on: its controls are plugin widgets, and no plugin widget was on the ring
+at all. They are now, and the body renders through the same adapter, so
+`move_focus` has real targets there.
+
+What is left is a *behaviour* decision rather than a mechanism. Tab is overloaded
+inside the body: while a control is being edited it commits the edit and stays
+put, so reaching the next control takes two presses. No node knows it is being
+edited, and deriving that from the description would be the two-writers shape
+§2.4 forbids. The expected behaviour in this kind of UI is that Tab commits *and*
+advances in one press — which is both simpler and what the ring wants — so the
+step is to make that the behaviour and re-pin the three tests that hold the
+two-press model.
 
 *What the plugin widgets need, now established.* The adapter contains exactly one
 `focusable` call — the `Component` arm's scope — so **no plugin widget is on the
