@@ -1560,7 +1560,9 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                     let at = caret.filter(|_| sel == Some(i));
                     match mine.is_empty() && at.is_none() {
                         true => entry_row(&rows_src[i], &surface),
-                        false => row_pieces(&rows_src[i], slot, &surface, &mine, at),
+                        false => {
+                            row_pieces(&rows_src[i], slot, &surface, &mine, at, Fill::ToRowEnd)
+                        }
                     }
                 }
             })
@@ -1781,6 +1783,7 @@ fn rows_with_hits(
                     .map(|h| ((h.byte_start, h.byte_end), (*h).clone()))
                     .collect::<Vec<_>>(),
                 at,
+                Fill::ToRowEnd,
             ),
         };
         // An open dropdown's option list hangs off the row its trigger is on,
@@ -1950,7 +1953,7 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
         .iter()
         .enumerate()
         .map(|(i, e)| match p.row_indices.get(i) {
-            Some(idx) => entry_row_hit(
+            Some(idx) => entry_row_hit_boxed(
                 e,
                 (0, e.text.len()),
                 cx.slot,
@@ -2161,6 +2164,18 @@ pub fn entry_row_hit(
     entry_row_hits(entry, slot, surface, &[(range, hit)])
 }
 
+/// [`entry_row_hit`] for a row inside a box that hugs it — a pop-over's
+/// options. See [`Fill`].
+fn entry_row_hit_boxed(
+    entry: &TextPropertyEntry,
+    range: (usize, usize),
+    slot: Slot,
+    surface: &Ink,
+    hit: crate::widgets::HitArea,
+) -> Node<UiMsg> {
+    row_pieces(entry, slot, surface, &[(range, hit)], None, Fill::ToText)
+}
+
 /// One styled row carrying several hits, each over the bytes it names.
 ///
 /// **A row is not one target.** A tree row has three — the disclosure glyph
@@ -2174,7 +2189,7 @@ pub fn entry_row_hits(
     surface: &Ink,
     hits: &[((usize, usize), crate::widgets::HitArea)],
 ) -> Node<UiMsg> {
-    row_pieces(entry, slot, surface, hits, None)
+    row_pieces(entry, slot, surface, hits, None, Fill::ToRowEnd)
 }
 
 /// The key of the caret's cell, for the host that has to place a hardware
@@ -2207,6 +2222,24 @@ pub fn caret_key(slot: Slot) -> fresh_ui::Key {
     fresh_ui::Key::Str(tag.into())
 }
 
+/// Whether a row's hit reaches the end of the row it is drawn in.
+///
+/// **A row in a panel's flow fills; a row inside a box does not.** The panel's
+/// rows are as wide as the panel, so a row-wide hit has to be stated past the
+/// text or a click in the empty part of the row lands on nothing. A pop-over's
+/// option rows are the opposite case: the box hugs them, and a row that asks
+/// to fill makes the *box* grow to whatever it is offered — the whole frame
+/// for the settings dialog's dropdown, which then clamps to column 0 and
+/// stops looking like it belongs to its trigger at all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fill {
+    /// The row spans its container; a row-wide hit spans it too.
+    ToRowEnd,
+    /// The row is the width of its text, and its container is the width of the
+    /// row. Nothing to reach past.
+    ToText,
+}
+
 /// One row split into its hit pieces, with the caret's marker at `caret` if it
 /// falls on this row.
 fn row_pieces(
@@ -2215,6 +2248,7 @@ fn row_pieces(
     surface: &Ink,
     hits: &[((usize, usize), crate::widgets::HitArea)],
     caret: Option<usize>,
+    fill: Fill,
 ) -> Node<UiMsg> {
     let mut cuts: Vec<usize> = Vec::with_capacity(hits.len() * 2 + 1);
     for ((a, b), _) in hits {
@@ -2289,12 +2323,14 @@ fn row_pieces(
     // The last such hit wins, which is the collector's own precedence: "the
     // narrow targets are named before the row-wide one, so a byte inside the
     // glyph or the box belongs to it rather than to `select`".
-    if let Some((_, h)) = hits.iter().rev().find(|(_, h)| h.row_target) {
-        kids.push(hit_node(
-            row().w(Sizing::Flex(1)).h(Sizing::Cells(1)),
-            slot,
-            h.clone(),
-        ));
+    if fill == Fill::ToRowEnd {
+        if let Some((_, h)) = hits.iter().rev().find(|(_, h)| h.row_target) {
+            kids.push(hit_node(
+                row().w(Sizing::Flex(1)).h(Sizing::Cells(1)),
+                slot,
+                h.clone(),
+            ));
+        }
     }
     row().h(Sizing::Cells(1)).children(kids)
 }
