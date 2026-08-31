@@ -397,9 +397,32 @@ ring is necessary and is not sufficient: (i) the `WidgetFocus` applier returns
 early for every slot but Dock and Floating, so a `FocusGained` from a settings
 widget is dropped; and (ii) the dialog attaches an `on_key` that stops every key,
 and the library runs the focused chain *before* intent resolution, so Tab becomes
-`UiFact::ModalKey(Settings)` and `move_focus` is never reached. The tree's ring in
-the settings dialog is inert until both are addressed. That is 3.2's remaining
-work, and it is more than "re-enable the ring".
+`UiFact::ModalKey(Settings)` and `move_focus` is never reached.
+
+**And following that thread to the dock says the ring is inert there too, for a
+different reason and a worse one.** `panel::keys_layer` is a `Modality::Focus`
+layer holding a single `autofocus()`ed focusable whose `on_key` emits
+`UiFact::PanelKey(slot)` — and it is declared for exactly the case that matters,
+a panel with the keyboard. `Modality::Focus` makes it the topmost modal, and
+`focus_scope` retains only focusables *within* the topmost modal. The panel's
+widgets are in the dock column, not in that layer. So:
+
+- the panel's focus scope contains one node, the key sink, and traversal there
+  cannot reach a widget at all; and
+- `apply_autofocus` pulls focus back into the active scope on the next frame, so
+  a widget focused by a click is un-focused by the frame that follows it.
+
+`UiFact::WidgetFocus` still fires, because the transient `FocusGained` happens
+before the settle — which is why the registry key looked like a mirror. It is a
+mirror of a focus the tree does not keep.
+
+So 3.2's honest state is: **every interactive widget is focusable and none of
+them is reachable.** The remaining work is not "re-enable the ring" but making
+the panel's keyboard the widgets' own — the panel's subtree inside the keyboard
+scope, with `PanelKey` as the fallback for keys no widget claims, rather than a
+sink that owns the scope and holds focus. Until that lands, "delete the second
+focus ring" is not available: the box-arena ring in `handle_widget_focus_advance`
+is the only ring that works.
 
 **The second blocker, as previously recorded here, was not real.** It was written
 down twice — that Tab is overloaded inside the body, committing an edit and
