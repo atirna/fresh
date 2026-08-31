@@ -55,6 +55,18 @@ pub enum UiFact {
         /// geometry, so the offset inside it is what is left to say. `None`
         /// for a hit that arrived without a pointer behind it.
         at: Option<u16>,
+        /// How many presses in the run this one was — `Event::clicks`.
+        ///
+        /// **A row's index is not the whole of what activated it.** A settings
+        /// map field's `[+] Add new` row opens on one press and a committed row
+        /// on two (#604), so the surface has to know which it got. The applier
+        /// used to reach back for it through `Editor::shell_pointer_event`,
+        /// which is B.4's side channel; it rides on the fact now, exactly as
+        /// `PaneContentPress` carries the press's modifiers.
+        ///
+        /// `0` for a hit no mouse made — a keyboard activation, or the web's
+        /// own route.
+        clicks: u8,
     },
     /// The floating plugin panel's `[×]` was pressed.
     ///

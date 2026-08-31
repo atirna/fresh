@@ -879,7 +879,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 let plain = cx.surface.clone();
                 move |_, st| row_surface(st, &plain).to_string()
             })
-            .on_activate_handler(Rc::new(move |i| {
+            .on_activate_handler(Rc::new(move |i, e: &fresh_ui::Event| {
                 Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
                     slot,
                     hit: crate::widgets::HitArea {
@@ -902,6 +902,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                         owner_key: Some(list_key.clone()),
                     },
                     at: None,
+                    clicks: e.clicks,
                 }))
             }));
             // **`-1` is a controlled empty selection, not "no opinion".** A
@@ -1030,7 +1031,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                     _ => plain.clone(),
                 }
             })
-            .on_activate_handler(Rc::new(move |i| {
+            .on_activate_handler(Rc::new(move |i, e: &fresh_ui::Event| {
                 let item_key = hit_keys.get(i).cloned().unwrap_or_default();
                 Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
                     slot,
@@ -1052,6 +1053,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                         owner_key: Some(list_key.clone()),
                     },
                     at: None,
+                    clicks: e.clicks,
                 }))
             }));
             let list = match sel >= 0 {
@@ -1896,6 +1898,7 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
                 slot,
                 hit: hit.clone(),
                 at: Some(e.local.x.max(0) as u16),
+                clicks: e.clicks,
             }))
         }),
     )

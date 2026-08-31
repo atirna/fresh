@@ -1012,7 +1012,12 @@ impl Editor {
 /// `/settings` route calls by name — so a click still does the same thing in
 /// both frontends.
 impl Editor {
-    pub(crate) fn settings_widget_hit(&mut self, hit: &crate::widgets::HitArea, at: Option<u16>) {
+    pub(crate) fn settings_widget_hit(
+        &mut self,
+        hit: &crate::widgets::HitArea,
+        at: Option<u16>,
+        clicks: u8,
+    ) {
         use crate::view::settings::items::SettingControl;
         use crate::view::settings::SettingsHit;
 
@@ -1106,11 +1111,11 @@ impl Editor {
 
         // A map row activates on a *double* click and its add row on a
         // single one (#604), so the press's own doubleness travels with it —
-        // the same bit `handle_settings_mouse` was handed.
-        let dbl = self
-            .shell_pointer_event
-            .map(|(_, double)| double)
-            .unwrap_or(false);
+        // the same bit `handle_settings_mouse` was handed. It rides on the
+        // fact rather than being fetched back off the editor: the node that
+        // saw the press is the one that knows, and `List`'s activation
+        // handler is given its `Event` for exactly this.
+        let dbl = clicks >= 2;
         self.dispatch_settings_hit(resolved, dbl);
         if let Some(byte) = caret {
             if let Some(s) = self.settings_state.as_mut() {
@@ -1261,7 +1266,12 @@ impl Editor {
             // all three frontends already share, and it does not change.
             // `None` for the clicked byte: the byte range in the hit is a
             // payload now, not a position the caller resolved.
-            UiFact::WidgetHit { slot, hit, at } => {
+            UiFact::WidgetHit {
+                slot,
+                hit,
+                at,
+                clicks,
+            } => {
                 let slot = match slot {
                     crate::view::shell::widgets::Slot::Dock => crate::app::PanelSlot::Dock,
                     crate::view::shell::widgets::Slot::Floating => crate::app::PanelSlot::Floating,
@@ -1269,13 +1279,13 @@ impl Editor {
                     // are settings actions rather than a plugin's
                     // `widget_event`.
                     crate::view::shell::widgets::Slot::Settings => {
-                        self.settings_widget_hit(&hit, at);
+                        self.settings_widget_hit(&hit, at, clicks);
                         return;
                     }
                     // The same, one surface in: an entry dialog's fields are
                     // its own, not the page's.
                     crate::view::shell::widgets::Slot::SettingsEntry => {
-                        self.settings_entry_widget_hit(&hit, at);
+                        self.settings_entry_widget_hit(&hit, at, clicks);
                         return;
                     }
                 };
