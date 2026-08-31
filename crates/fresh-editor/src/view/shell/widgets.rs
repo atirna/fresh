@@ -49,6 +49,19 @@ pub fn panel_surface() -> Ink {
     Ink::keys(BASE_FG, BASE_BG)
 }
 
+/// The ink a panel *mounted into a pane* starts from.
+///
+/// **A mounted panel is not standing on a panel.** Its rows were the text of a
+/// virtual buffer, painted on the editor's own ground like every other line of
+/// every other buffer — so the surface it says is the editor's, not the
+/// suggestion palette the floating and dock panels sit on. Naming
+/// [`panel_surface`] here would repaint the search panel in the popup's
+/// background and make it look like a floating box welded to the bottom of the
+/// window.
+pub fn pane_surface() -> Ink {
+    Ink::keys("editor.fg", "editor.bg")
+}
+
 /// Which panel a description belongs to.
 ///
 /// The view layer's own spelling of `app::PanelSlot`, mirrored the way
@@ -1834,9 +1847,11 @@ fn float_route(n: Node<UiMsg>, slot: Slot) -> Node<UiMsg> {
                 }))
             }
             (Slot::Dock, _) => None,
-            // A pane-mounted panel's floats are the second step of C.5; it
-            // has none to route yet, and a fact for a surface that cannot
-            // raise one would be a claim nobody makes.
+            // A pane-mounted panel's float covers the panel and nothing else:
+            // there is no scrolling surface *behind* it to hand the notch on
+            // to the way the dock's column takes it, and `e.stop()` above has
+            // already kept it off the pane underneath. So the float swallows
+            // it, which is what no fact means here.
             (Slot::Pane(_), _) => None,
             // The settings dialog is a modal too, and its own box already
             // routes everything the tree does not answer for to that slot.
@@ -1874,10 +1889,15 @@ fn popup_anchor_key(slot: Slot, row: usize) -> fresh_ui::Key {
         Slot::Floating => "widget_popup_anchor:floating",
         Slot::Settings => "widget_popup_anchor:settings",
         Slot::SettingsEntry => "widget_popup_anchor:settings_entry",
-        // One tag for every pane: two panes cannot each hold an open pop-over
-        // yet, because a pane-mounted panel has none — and when it does, the
-        // pane's own leaf id is what tells them apart.
-        Slot::Pane(_) => "widget_popup_anchor:pane",
+        // A pane's tag carries its leaf, because two panes *can* each hold an
+        // open pop-over: a mounted panel is a subtree now, and a `Dropdown`
+        // inside one raises the same layer the dock's does.
+        Slot::Pane(leaf) => {
+            return fresh_ui::Key::Pair(
+                format!("widget_popup_anchor:pane:{}", leaf.0 .0).into(),
+                row as u64,
+            )
+        }
     };
     fresh_ui::Key::Pair(tag.into(), row as u64)
 }
@@ -2139,8 +2159,25 @@ pub fn entry_row_hits(
 /// text the row had already measured to paint it. A zero-width marker at the
 /// caret's byte lands where the glyphs put it, and the host reads the
 /// rectangle back rather than recomputing it.
-pub fn caret_key() -> fresh_ui::Key {
-    fresh_ui::Key::Str("widget_caret".into())
+///
+/// **Keyed per surface, because more than one can carry a caret at once.**
+/// A described panel emits this marker whenever *its own* focused field says
+/// so, and that is plugin state rather than a claim on the keyboard: the
+/// search panel mounted in a pane goes on reporting a focused query field
+/// while you type in the pane above it. One key for all of them would let the
+/// wrong surface's marker answer the lookup, and a hardware cursor would sit
+/// in a panel nobody is editing.
+pub fn caret_key(slot: Slot) -> fresh_ui::Key {
+    let tag = match slot {
+        Slot::Dock => "widget_caret:dock",
+        Slot::Floating => "widget_caret:floating",
+        Slot::Settings => "widget_caret:settings",
+        Slot::SettingsEntry => "widget_caret:settings_entry",
+        Slot::Pane(leaf) => {
+            return fresh_ui::Key::Pair("widget_caret:pane".into(), leaf.0 .0 as u64)
+        }
+    };
+    fresh_ui::Key::Str(tag.into())
 }
 
 /// One row split into its hit pieces, with the caret's marker at `caret` if it
@@ -2168,7 +2205,7 @@ fn row_pieces(
     };
     let marker = || {
         row()
-            .key(caret_key())
+            .key(caret_key(slot))
             .w(Sizing::Cells(0))
             .h(Sizing::Cells(1))
     };
@@ -4402,7 +4439,8 @@ mod tests {
                 node(&text_field(value, cursor, true), WIDTH, &focused),
                 Size::new(WIDTH, 8),
             );
-            ui.find_by_key(&caret_key()).map(|id| ui.rect_of(id).x)
+            ui.find_by_key(&caret_key(Slot::Floating))
+                .map(|id| ui.rect_of(id).x)
         };
         let head = at("hello", 0).expect("a caret at the head");
         let mid = at("hello", 3).expect("a caret in the middle");
@@ -4420,7 +4458,7 @@ mod tests {
             node(&text_field("hello", -1, false), WIDTH, &cx()),
             Size::new(WIDTH, 8),
         );
-        assert!(ui.find_by_key(&caret_key()).is_none());
+        assert!(ui.find_by_key(&caret_key(Slot::Floating)).is_none());
     }
 
     fn text_area(value: &str, cursor: i32, rows: u32, label: &str) -> WidgetSpec {

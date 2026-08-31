@@ -148,6 +148,12 @@ pub struct BodyPainter<'a> {
     /// The splits whose active buffer is a terminal shown in read-only
     /// scrollback. Gathered once per frame, for the same reason.
     scrollback: HashSet<LeafId>,
+    /// The panes the shell tree describes instead of painting — a buffer
+    /// holding a mounted plugin panel the adapter covers. Gathered here for
+    /// the same reason as the two above, and read by
+    /// [`crate::view::ui::split_rendering::orchestration::paint_leaf`] to skip
+    /// the text pass. See `FrameFacts::described_panes`.
+    described_panes: HashSet<LeafId>,
 }
 
 impl<'a> BodyPainter<'a> {
@@ -171,6 +177,7 @@ impl<'a> BodyPainter<'a> {
                 })
             })
             .unwrap_or_default();
+        let described_panes = editor.described_panes();
         Self {
             editor,
             state,
@@ -179,6 +186,7 @@ impl<'a> BodyPainter<'a> {
             screen_width: 0,
             pane_chrome,
             scrollback,
+            described_panes,
         }
     }
 
@@ -221,6 +229,7 @@ impl<'a> BodyPainter<'a> {
             buf.area.width,
             &self.pane_chrome,
             &self.scrollback,
+            &self.described_panes,
             |facts, stores, mgr, window_chrome| {
                 let base_visible = mgr.get_visible_buffers(area);
                 let pass = prepare_content(
@@ -266,6 +275,7 @@ impl<'a> BodyPainter<'a> {
             buf.area.width,
             &self.pane_chrome,
             &self.scrollback,
+            &self.described_panes,
             |facts, stores, _mgr, _window_chrome| {
                 paint_leaf(buf, pane, facts, pass, stores, out, caret);
             },
@@ -288,6 +298,7 @@ fn with_grid<R>(
     screen_width: u16,
     pane_chrome: &std::collections::HashMap<LeafId, PaneChrome>,
     scrollback_view_splits: &HashSet<LeafId>,
+    described_panes: &HashSet<LeafId>,
     f: impl FnOnce(&FrameFacts<'_>, &mut Stores<'_>, &crate::view::split::SplitManager, PaneChrome) -> R,
 ) -> Option<R> {
     // Built before the `&mut editor.windows` borrow below; it only borrows
@@ -336,6 +347,7 @@ fn with_grid<R>(
             grouped_subtrees: grouped_ref,
             pane_chrome,
             scrollback_view_splits,
+            described_panes,
             lsp_waiting: state.lsp_waiting,
             hide_cursor: state.hide_cursor,
             hovered_tab: state.hovered_tab,
@@ -1293,6 +1305,12 @@ impl Editor {
                     // where its key comes from: a pane is one buffer, and a
                     // buffer names its panel.
                     crate::view::shell::widgets::Slot::Pane(pane) => {
+                        // The focus half of the press, which a widget's own
+                        // hit would otherwise swallow: clicking a field in the
+                        // panel below has to move the keyboard there, exactly
+                        // as clicking the buffer above does. See
+                        // `UiFact::PaneFocus` for the presses no widget takes.
+                        self.focus_pane(pane);
                         if let Some(panel_key) = self.pane_panel_key(pane) {
                             self.deliver_widget_hit(&panel_key, &hit, None);
                         }
@@ -1552,6 +1570,10 @@ impl Editor {
                     tracing::warn!("pane content click failed: {e}");
                 }
             }
+            // A press in a described mounted panel that no widget claimed.
+            // Focus is all a panel wants from one: there is no byte under the
+            // pointer to put a caret at.
+            UiFact::PaneFocus(pane) => self.focus_pane(pane),
             // A pane's scrollbars, and its wheel. Every one of these took a
             // `(col, row)` and asked each pane's recorded rectangle in turn
             // whether it contained the point; the node says which pane, and

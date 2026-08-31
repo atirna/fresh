@@ -165,6 +165,21 @@ pub enum UiFact {
         mods: fresh_ui::Mods,
     },
 
+    /// A left press inside a pane whose content is a *described* mounted
+    /// plugin panel.
+    ///
+    /// **The half of `PaneContentPress` a panel still needs.** The other half
+    /// — turn this cell into a byte and put the caret there — is meaningless
+    /// for a panel: there is no text under the pointer, only widgets that
+    /// answer for themselves. What survives is that a press anywhere in a pane
+    /// moves the keyboard to it, which is how you get from the buffer above to
+    /// the search field below with the mouse.
+    ///
+    /// Raised by the panel's own surface for a press its widgets did not
+    /// claim; a press that *was* claimed carries the same focus move, applied
+    /// where the hit is delivered.
+    PaneFocus(LeafId),
+
     // -- a pane's scrollbars, and its wheel -----------------------------------
     /// A left press on one of a pane's scrollbars.
     ///
