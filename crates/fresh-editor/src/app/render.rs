@@ -1950,25 +1950,28 @@ impl Editor {
                 KeyStatus::Pending if current => (
                     ">".into(),
                     crate::app::shell_host::shell_theme::attrs(
-                        "ui.status_warning_fg",
+                        "diagnostic.warning_fg",
                         "ui.popup_bg",
                         &["bold"],
                     ),
                 ),
                 KeyStatus::Pending => (
                     " ".into(),
-                    crate::app::shell_host::shell_theme::pair("ui.line_number_fg", "ui.popup_bg"),
-                ),
-                KeyStatus::Captured => (
-                    "*".into(),
                     crate::app::shell_host::shell_theme::pair(
-                        "ui.diagnostic_info_fg",
+                        "editor.line_number_fg",
                         "ui.popup_bg",
                     ),
                 ),
+                KeyStatus::Captured => (
+                    "*".into(),
+                    crate::app::shell_host::shell_theme::pair("diagnostic.info_fg", "ui.popup_bg"),
+                ),
                 KeyStatus::Skipped => (
                     "-".into(),
-                    crate::app::shell_host::shell_theme::pair("ui.line_number_fg", "ui.popup_bg"),
+                    crate::app::shell_host::shell_theme::pair(
+                        "editor.line_number_fg",
+                        "ui.popup_bg",
+                    ),
                 ),
                 KeyStatus::Verified => (
                     "v".into(),
@@ -2039,7 +2042,7 @@ impl Editor {
                         ctrl(
                             "a",
                             t!("calibration.abort").to_string(),
-                            "ui.diagnostic_error_fg",
+                            "diagnostic.error_fg",
                         ),
                     ],
                 )
@@ -2054,12 +2057,12 @@ impl Editor {
                     ctrl(
                         "y",
                         t!("calibration.save").to_string(),
-                        "ui.diagnostic_info_fg",
+                        "diagnostic.info_fg",
                     ),
                     ctrl(
                         "a",
                         t!("calibration.abort").to_string(),
-                        "ui.diagnostic_error_fg",
+                        "diagnostic.error_fg",
                     ),
                 ],
             ),
@@ -2076,11 +2079,11 @@ impl Editor {
                         };
                         let theme = match status {
                             KeyStatus::Verified => crate::app::shell_host::shell_theme::pair(
-                                "ui.diagnostic_info_fg",
+                                "diagnostic.info_fg",
                                 "ui.popup_bg",
                             ),
                             _ => crate::app::shell_host::shell_theme::pair(
-                                "ui.status_warning_fg",
+                                "diagnostic.warning_fg",
                                 "ui.popup_bg",
                             ),
                         };
@@ -2110,18 +2113,18 @@ impl Editor {
                         ctrl(
                             "y",
                             t!("calibration.save").to_string(),
-                            "ui.diagnostic_info_fg",
+                            "diagnostic.info_fg",
                         ),
                         ctrl("b", t!("calibration.back").to_string(), "ui.help_key_fg"),
                         ctrl(
                             "r",
                             t!("calibration.restart").to_string(),
-                            "ui.status_warning_fg",
+                            "diagnostic.warning_fg",
                         ),
                         ctrl(
                             "a",
                             t!("calibration.abort").to_string(),
-                            "ui.diagnostic_error_fg",
+                            "diagnostic.error_fg",
                         ),
                     ],
                 )
@@ -2505,7 +2508,7 @@ impl Editor {
         use crate::view::shell::settings as st;
 
         let s = self.settings_state.as_ref().filter(|s| s.visible)?;
-        let dim = pair("ui.line_number_fg", "ui.popup_bg");
+        let dim = pair("editor.line_number_fg", "ui.popup_bg");
         let search = match s.search_active {
             false => st::Search::Hint(vec![
                 st::Span::new("Press ", dim.clone()),
@@ -2874,7 +2877,7 @@ impl Editor {
 
         let e = self.keybinding_editor.as_ref()?;
         let ink = pair("ui.popup_text_fg", "ui.popup_bg");
-        let accent = pair("ui.diagnostic_info_fg", "ui.popup_bg");
+        let accent = pair("diagnostic.info_fg", "ui.popup_bg");
         let key_ink = attrs("ui.help_key_fg", "ui.popup_bg", &["bold"]);
 
         let mut path = vec![
@@ -2906,7 +2909,7 @@ impl Editor {
                     kb::Span::new(e.search_query.clone(), ink.clone()),
                 ];
                 if e.search_focused {
-                    v.push(kb::Span::new("_", pair("ui.cursor", "ui.popup_bg")));
+                    v.push(kb::Span::new("_", pair("editor.cursor", "ui.popup_bg")));
                     v.push(kb::Span::new(
                         format!("  {}", t!("keybinding_editor.search_text_hint")),
                         ink.clone(),
@@ -2917,7 +2920,7 @@ impl Editor {
             (true, SearchMode::RecordKey) => vec![
                 kb::Span::new(
                     format!(" {} ", t!("keybinding_editor.label_record_key")),
-                    attrs("ui.status_warning_fg", "ui.popup_bg", &["bold"]),
+                    attrs("diagnostic.warning_fg", "ui.popup_bg", &["bold"]),
                 ),
                 kb::Span::new(
                     match e.search_key_display.is_empty() {
@@ -2970,7 +2973,7 @@ impl Editor {
         if e.has_changes {
             filters.push(kb::Span::new(
                 format!("  {}", t!("keybinding_editor.modified")),
-                pair("ui.status_warning_fg", "ui.popup_bg"),
+                pair("diagnostic.warning_fg", "ui.popup_bg"),
             ));
         }
 

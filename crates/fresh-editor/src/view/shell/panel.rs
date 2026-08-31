@@ -234,7 +234,7 @@ fn frame_box(p: &Panel) -> Node<UiMsg> {
 fn ring_theme(p: &Panel) -> String {
     // The same accent the file explorer's focused border wears.
     match p.focused {
-        true => pair("ui.cursor", "ui.suggestion_bg"),
+        true => pair("editor.cursor", "ui.suggestion_bg"),
         false => pair("ui.popup_border_fg", "ui.suggestion_bg"),
     }
 }

@@ -292,7 +292,7 @@ pub fn categories(c: &Categories) -> Node<UiMsg> {
         (
             fresh_ui::widgets::RowState::Selected | fresh_ui::widgets::RowState::SelectedBlur,
             false,
-        ) => pair("ui.menu_fg", "ui.selection_bg"),
+        ) => pair("ui.menu_fg", "editor.selection_bg"),
         _ => ink(),
     })
     .on_select({
@@ -386,7 +386,7 @@ pub fn results(r: &Results) -> Node<UiMsg> {
 /// says whether it is the selected one, so the marker is the only thing here
 /// that has to know.
 fn result_card(r: &ResultRow, selected: bool) -> Node<UiMsg> {
-    let dim = pair("ui.line_number_fg", "ui.popup_bg");
+    let dim = pair("editor.line_number_fg", "ui.popup_bg");
     let marker = match selected {
         true => "\u{25b8} ",
         false => "  ",
@@ -408,7 +408,7 @@ fn result_card(r: &ResultRow, selected: bool) -> Node<UiMsg> {
         row().h(Sizing::Cells(1)).children(name),
         line(
             format!("  {}", r.breadcrumb),
-            attrs("ui.line_number_fg", "ui.popup_bg", &["italic"]),
+            attrs("editor.line_number_fg", "ui.popup_bg", &["italic"]),
         ),
         match &r.desc {
             Some(d) => line(format!("  {d}"), dim).elide(fresh_ui::Elide::Tail),
@@ -468,7 +468,7 @@ fn strip_band(s: &Strip) -> Node<UiMsg> {
     }
     col().children([
         row().h(Sizing::Cells(1)).children(kids),
-        line(s.hint.clone(), pair("ui.line_number_fg", "ui.popup_bg")),
+        line(s.hint.clone(), pair("editor.line_number_fg", "ui.popup_bg")),
         row().h(Sizing::Cells(1)),
         rule(),
     ])
@@ -482,12 +482,12 @@ fn strip_band(s: &Strip) -> Node<UiMsg> {
 fn page_header(p: &Page) -> Node<UiMsg> {
     let mut rows: Vec<Node<UiMsg>> = vec![line(
         p.title.clone(),
-        attrs("ui.editor_fg", "ui.popup_bg", &["bold"]),
+        attrs("editor.fg", "ui.popup_bg", &["bold"]),
     )];
     if let Some(label) = &p.clear {
         let theme = match p.clear_hovered {
             true => pair("ui.menu_hover_fg", "ui.menu_hover_bg"),
-            false => pair("ui.line_number_fg", "ui.popup_bg"),
+            false => pair("editor.line_number_fg", "ui.popup_bg"),
         };
         rows.push(
             row().h(Sizing::Cells(1)).children([
@@ -552,7 +552,7 @@ fn card(c: &Card) -> Node<UiMsg> {
         rows.push(row().h(Sizing::Cells(1)));
         rows.push(line(
             name.clone(),
-            attrs("ui.editor_fg", "ui.popup_bg", &["bold"]),
+            attrs("editor.fg", "ui.popup_bg", &["bold"]),
         ));
     }
     rows.push(card_box(c));
@@ -752,7 +752,7 @@ fn description(c: &Card) -> Option<Node<UiMsg>> {
     Some(
         row().children([
             text(body)
-                .theme(pair("ui.line_number_fg", "ui.popup_bg"))
+                .theme(pair("editor.line_number_fg", "ui.popup_bg"))
                 .wrap()
                 .w(Sizing::Flex(1)),
             // The painter's `description_right_padding_cols`, so wrapped text does
@@ -766,12 +766,12 @@ fn description(c: &Card) -> Option<Node<UiMsg>> {
 fn inherit(idx: usize, i: &Inherit, band: &str) -> Node<UiMsg> {
     let node = match i {
         Inherit::Badge(label) => {
-            text(label.clone()).theme(attrs("ui.line_number_fg", band, &["italic"]))
+            text(label.clone()).theme(attrs("editor.line_number_fg", band, &["italic"]))
         }
         Inherit::Button { label, hovered } => {
             let theme = match hovered {
                 true => pair("ui.menu_hover_fg", "ui.menu_hover_bg"),
-                false => pair("ui.line_number_fg", band),
+                false => pair("editor.line_number_fg", band),
             };
             gesture(text(label.clone()).theme(theme))
                 .on(
@@ -798,7 +798,7 @@ fn inherit(idx: usize, i: &Inherit, band: &str) -> Node<UiMsg> {
         // column of whatever the control had painted there, which on a narrow
         // card is the middle of a value: "Default Language  (Inherited))".
         text(" ")
-            .theme(pair("ui.line_number_fg", band))
+            .theme(pair("editor.line_number_fg", band))
             .pointer_mode(PointerMode::Ignore),
     ])
 }
@@ -1251,7 +1251,7 @@ fn footer_row(f: &Footer) -> Node<UiMsg> {
 /// `Key:Action  Key:Action` as runs: the key reverse-videoed, the action dim.
 fn keyhints(text_: &str) -> Vec<Node<UiMsg>> {
     let key = pair("ui.popup_text_fg", "ui.split_separator_fg");
-    let desc = pair("ui.line_number_fg", "ui.popup_bg");
+    let desc = pair("editor.line_number_fg", "ui.popup_bg");
     let mut out: Vec<Node<UiMsg>> = Vec::new();
     for (i, seg) in text_.split("  ").enumerate() {
         let seg = seg.trim();
@@ -1420,7 +1420,7 @@ pub fn dialog_layer(d: &Dialog) -> Node<UiMsg> {
                     Dialog::EntryDiscard(_) | Dialog::EntryDelete(_) => 7,
                 };
                 let h = want.min(info.constraints.max_h.saturating_sub(4));
-                let warn = pair("ui.status_warning_fg", "ui.popup_bg");
+                let warn = pair("diagnostic.warning_fg", "ui.popup_bg");
                 let (ring, node) = match &d {
                     Dialog::Help { title, lines } => (
                         pair("ui.menu_highlight_fg", "ui.popup_bg"),
@@ -1488,7 +1488,7 @@ fn choice_box(c: &Choice, target: impl Fn(usize) -> Target + 'static) -> Node<Ui
     let mut rows: Vec<Node<UiMsg>> = vec![
         line(
             format!(" {} ", c.title),
-            attrs("ui.status_warning_fg", "ui.popup_bg", &["bold"]),
+            attrs("diagnostic.warning_fg", "ui.popup_bg", &["bold"]),
         ),
         line(c.prompt.clone(), ink()),
         blank(),
@@ -1511,15 +1511,15 @@ fn choice_box(c: &Choice, target: impl Fn(usize) -> Target + 'static) -> Node<Ui
     rows.push(buttons(c, target));
     rows.push(line(
         c.help.clone(),
-        pair("ui.line_number_fg", "ui.popup_bg"),
+        pair("editor.line_number_fg", "ui.popup_bg"),
     ));
     col().flex(1).children(rows)
 }
 
 fn ring_of(k: &Destructive) -> String {
     match k.grave {
-        true => pair("ui.diagnostic_error_fg", "ui.popup_bg"),
-        false => pair("ui.status_warning_fg", "ui.popup_bg"),
+        true => pair("diagnostic.error_fg", "ui.popup_bg"),
+        false => pair("diagnostic.warning_fg", "ui.popup_bg"),
     }
 }
 
@@ -1528,9 +1528,9 @@ fn grave_box(k: &Destructive, target: impl Fn(usize) -> Target + 'static) -> Nod
     let mut kids: Vec<Node<UiMsg>> = vec![row().flex(1)];
     for (i, label) in k.buttons.iter().enumerate() {
         let theme = match (i == k.selected, i == k.destructive) {
-            (true, true) => attrs("ui.diagnostic_error_fg", "ui.popup_selection_bg", &["bold"]),
+            (true, true) => attrs("diagnostic.error_fg", "ui.popup_selection_bg", &["bold"]),
             (true, false) => attrs("ui.popup_selection_fg", "ui.popup_selection_bg", &["bold"]),
-            (false, true) => attrs("ui.diagnostic_error_fg", "ui.popup_bg", &["bold"]),
+            (false, true) => attrs("diagnostic.error_fg", "ui.popup_bg", &["bold"]),
             (false, false) => ink(),
         };
         let marker = match i == k.selected {
@@ -1560,8 +1560,8 @@ fn grave_box(k: &Destructive, target: impl Fn(usize) -> Target + 'static) -> Nod
             format!(" {} ", k.title),
             attrs(
                 match k.grave {
-                    true => "ui.diagnostic_error_fg",
-                    false => "ui.status_warning_fg",
+                    true => "diagnostic.error_fg",
+                    false => "diagnostic.warning_fg",
                 },
                 "ui.popup_bg",
                 &["bold"],
@@ -1570,7 +1570,7 @@ fn grave_box(k: &Destructive, target: impl Fn(usize) -> Target + 'static) -> Nod
         line(k.message.clone(), ink()),
         row().flex(1),
         row().h(Sizing::Cells(1)).children(kids),
-        line(k.help.clone(), pair("ui.line_number_fg", "ui.popup_bg")),
+        line(k.help.clone(), pair("editor.line_number_fg", "ui.popup_bg")),
     ])
 }
 
@@ -1633,7 +1633,7 @@ mod tests {
     use fresh_ui::{Size, Ui};
 
     fn chrome() -> Chrome {
-        let dim = pair("ui.line_number_fg", "ui.popup_bg");
+        let dim = pair("editor.line_number_fg", "ui.popup_bg");
         Chrome {
             title: " Settings [user] ".into(),
             search: Search::Hint(vec![Span::new("Press / to search settings...", dim)]),
@@ -1715,7 +1715,7 @@ mod tests {
                 }),
                 suffix: vec![Span::new(
                     " (3 results)",
-                    pair("ui.line_number_fg", "ui.popup_bg"),
+                    pair("editor.line_number_fg", "ui.popup_bg"),
                 )],
             },
             // A search replaces the body, so neither the tree nor the page

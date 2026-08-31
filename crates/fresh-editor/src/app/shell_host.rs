@@ -765,10 +765,35 @@ pub mod shell_theme {
     /// An unreadable or unknown name falls back to the editor's own ground
     /// rather than failing, so a surface that has not been themed yet renders
     /// plainly instead of not at all.
+    ///
+    /// **But not quietly.** The fallback is what a *release* build should do
+    /// with a name it cannot read; a name that does not resolve is always a
+    /// bug, and a silent one — the surface simply comes out in the editor's
+    /// plain colours, which on most themes is close enough to the popup ground
+    /// to look like nothing at all. Ten of them had accumulated across the
+    /// migrated tree (`ui.selection_bg` and `ui.line_number_fg` among them,
+    /// whose fields live under `editor`, and four `ui.diagnostic_*` whose
+    /// section is `diagnostic`); the settings tree's unfocused cursor was one,
+    /// and it had simply stopped being drawn. Every test run now says so.
     pub fn resolve(name: &str, theme: &Theme) -> Style {
-        Ink::parse(name)
-            .and_then(|ink| ink.style(theme))
-            .unwrap_or_else(|| base(theme))
+        let Some(ink) = Ink::parse(name) else {
+            // Not a name at all — an empty theme, or a literal the grammar
+            // cannot read. The forgiving path, as documented.
+            return base(theme);
+        };
+        debug_assert!(
+            {
+                let (fg, bg) = ink.names();
+                [fg, bg]
+                    .into_iter()
+                    .flatten()
+                    .all(|k| theme.resolve_theme_key(k).is_some())
+            },
+            "shell theme name {name:?} names a key that is not one: \
+             `Theme::resolve_theme_key` does not know it, so the whole \
+             surface falls back to the editor's plain ground"
+        );
+        ink.style(theme).unwrap_or_else(|| base(theme))
     }
 
     /// The two halves of a written name, where each is a *name* rather than a
