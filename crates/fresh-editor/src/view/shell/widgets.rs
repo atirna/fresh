@@ -498,6 +498,16 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
         // Full width by definition — "so the separator always matches the
         // rendered width, including a user-dragged dock, without the plugin
         // computing the width itself".
+        // **A rule is as wide as the panel, and `width` is that width.**
+        //
+        // It is text of a computed length rather than something that fills,
+        // which is fine and stays fine *because* the caller passes the same
+        // number it lays the subtree out at. Where those two diverge — the
+        // dock, laid one column short of the painter's divider — everything
+        // else pins to the laid width by flex and this pins to the parameter,
+        // and the title bar's `×` comes to rest one column off the rule it
+        // lines up with. The fix is to keep them equal, not to make this fill;
+        // see `shell::dock::DIVIDER_COLS`.
         WidgetSpec::Divider { ch, style, .. } => {
             let glyph = match ch.is_empty() {
                 true => "─",

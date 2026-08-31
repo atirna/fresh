@@ -105,21 +105,14 @@ fn column(interior: Option<super::panel::Interior>) -> Node<UiMsg> {
                     surface: super::widgets::panel_surface(),
                 },
             )
-            // **The wrap width, and nothing wider.** The painter filled the
-            // slack column between the content and the divider — a row's band
-            // ran to the panel's inner edge, and the overlay scrollbar was
-            // drawn into it — so laying the description one wider looked like
-            // the way to get both back. It is not: the header rule is a
-            // `divider()` the *runtime* renders as text at the wrap width,
-            // while a `flexSpacer` in the description pins to the laid width,
-            // so the title bar's `×` came to rest one column right of the rule
-            // it is supposed to line up with
-            // (`dock_title_bar_close_button_hides_the_dock`).
-            //
-            // One width, and the slack column stays the runtime's. Reaching it
-            // needs the band and the bar to be stated *past* the content
-            // rather than the content to be stretched under them — which is
-            // C.1's remaining half, not a number here.
+            // **One width, laid and wrapped, and it now reaches the
+            // divider.** The first attempt at the slack column widened this
+            // `.w(...)` alone and left the number above it at the old value,
+            // so the header rule — text of exactly the width it is passed —
+            // stayed short while the title bar's `×` pinned to the new edge
+            // (`dock_title_bar_close_button_hides_the_dock`). Both come from
+            // `inner_w` now, and so do a hovered row's band and the overlay
+            // bar's column.
             .w(Sizing::Cells(inner_w))
         }),
     };
@@ -189,11 +182,24 @@ fn column(interior: Option<super::panel::Interior>) -> Node<UiMsg> {
 }
 
 /// The column's last cell, which the painter draws the draggable divider into
-/// and the interior therefore may not use. `floating_panel_inner_width` takes
-/// two for a left dock — the divider and the column of slack the runtime wraps
-/// against — and the description has to take the same, or the two disagree
-/// about where every right-pinned thing in the panel is.
-const DIVIDER_COLS: u16 = 2;
+/// and the interior therefore may not use.
+///
+/// **One, not the runtime's two.** `floating_panel_inner_width` takes two for a
+/// left dock — the divider, and a column of slack it wraps against — and the
+/// description took the same two so that a `flexSpacer` and a `divider()`
+/// would agree about where the right edge is. They agreed by both stopping
+/// short of it, which left the slack column empty: a hovered row's band ended
+/// one column before the divider, and the overlay scrollbar sat inboard of it.
+///
+/// The disagreement was never about *this* number. It was that the first
+/// attempt to reach the slack column widened only the laid node
+/// (`.w(Sizing::Cells(inner_w + 1))`) and went on passing the old `inner_w`
+/// as the wrap width — so the header rule, which is text of exactly the
+/// number it is given, stayed short while the `×` pinned to the new edge by
+/// flex. Two numbers, two edges. One number moves everything together, and
+/// then the only column the description may not have is the painter's
+/// divider itself.
+const DIVIDER_COLS: u16 = 1;
 
 /// One transparent column of the panel's width with the grip in its last cell.
 ///
