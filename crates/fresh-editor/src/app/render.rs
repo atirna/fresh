@@ -4151,6 +4151,10 @@ impl Editor {
             // otherwise — `panel_interior`'s `covered` gate is what makes
             // that decision, the same way it does for the floating panel.
             dock_interior: self.panel_interior(crate::app::PanelSlot::Dock),
+            dock_grip_hovered: matches!(
+                self.shell_hover,
+                Some(crate::app::types::HoverTarget::DockBorder)
+            ),
             // Which workspace the window-owned half of the frame belongs to.
             // One retained tree, N windows: without this the two match each
             // other and window B's first pane inherits window A's element

@@ -101,7 +101,7 @@ enum Source<M> {
     Windowed {
         count: usize,
         key: Rc<dyn Fn(usize) -> Key>,
-        row: Rc<dyn Fn(usize) -> Node<M>>,
+        row: Rc<dyn Fn(usize, RowState) -> Node<M>>,
     },
 }
 
@@ -126,10 +126,12 @@ impl<M> Source<M> {
         }
     }
 
-    fn at(&self, i: usize) -> Option<(Key, Node<M>)> {
+    fn at(&self, i: usize, state: RowState) -> Option<(Key, Node<M>)> {
         match self {
+            // Eager rows are built before the list knows anything about them,
+            // so their state cannot reach them. `row_theme` still names them.
             Source::Eager(v) => v.get(i).cloned(),
-            Source::Windowed { count, key, row } => (i < *count).then(|| (key(i), row(i))),
+            Source::Windowed { count, key, row } => (i < *count).then(|| (key(i), row(i, state))),
         }
     }
 }
@@ -193,6 +195,34 @@ impl<M: 'static> List<M> {
         count: usize,
         key: impl Fn(usize) -> Key + 'static,
         row: impl Fn(usize) -> Node<M> + 'static,
+    ) -> Self {
+        List::from_source(Source::Windowed {
+            count,
+            key: Rc::new(key),
+            row: Rc::new(move |i, _| row(i)),
+        })
+    }
+
+    /// The same, for rows that name their own ink.
+    ///
+    /// **A stamped theme is a ground, and a row that paints its own cells
+    /// covers it.** [`row_theme`](Self::row_theme) names the row node, which
+    /// emits a fill under whatever the builder produced — so a host whose rows
+    /// carry explicit foreground *and* background (which every row built from
+    /// an editor `TextPropertyEntry` does, because a description has no
+    /// "already" to show through) got a selection band only in the gaps
+    /// between its glyphs. The orchestrator dock's compact rows were the
+    /// symptom: the active session's highlight appeared on the padding after
+    /// the name and nowhere else.
+    ///
+    /// The state machine stays the widget's — which is the whole point of
+    /// [`RowState`] — and this hands it to the builder as well as to
+    /// `row_theme`, so a host can build the row *from* its state instead of
+    /// having one painted behind it.
+    pub fn windowed_stateful(
+        count: usize,
+        key: impl Fn(usize) -> Key + 'static,
+        row: impl Fn(usize, RowState) -> Node<M> + 'static,
     ) -> Self {
         List::from_source(Source::Windowed {
             count,
@@ -439,7 +469,6 @@ impl<M: 'static> Component<M> for List<M> {
             let first = (win.y.max(0) as usize).min(n.saturating_sub(visible.min(n)));
             let last = (first + visible + OVERSCAN).min(n);
             col().children((first..last).map(|i| {
-                let (k, row) = source.at(i).expect("index inside the source");
                 let state = if Some(i) == sel {
                     // A selected row reads as focused only when the list has
                     // focus; otherwise it is muted.
@@ -453,6 +482,7 @@ impl<M: 'static> Component<M> for List<M> {
                 } else {
                     RowState::Normal
                 };
+                let (k, row) = source.at(i, state).expect("index inside the source");
                 let theme: String = match &row_theme {
                     Some(f) => f(i, state),
                     None => state.theme().to_string(),
