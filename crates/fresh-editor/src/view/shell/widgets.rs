@@ -29,8 +29,6 @@
 //! leaf by rule and never crosses — so the gate is what remains of a boundary
 //! that has closed rather than a list of things still to do.
 
-use std::borrow::Cow;
-
 use fresh_core::api::{OverlayColorSpec, OverlayOptions, WidgetSpec};
 use fresh_core::text_property::TextPropertyEntry;
 use fresh_ui::{col, row, text_runs, Node, Run, Sizing};
@@ -2329,12 +2327,19 @@ fn entry_runs(
 /// Apply an overlay's properties over an existing ink.
 ///
 /// A colour the overlay does not set is inherited, which is the merge the
-/// painter does. A `ThemeKey` stays a name; an `Rgb` becomes a literal, which
-/// is the one thing in the display list with no theme entry behind it and is
-/// honest about that (F.2).
+/// painter does. An `Rgb` becomes a literal, which is the one thing in the
+/// display list with no theme entry behind it and is honest about that (F.2).
+///
+/// **A `ThemeKey` here is a name a *plugin* chose**, so it becomes
+/// [`Paint::Asked`] rather than [`Paint::Key`]: the editor's table is under no
+/// obligation to know it, and one the theme has never had must not take the
+/// run's other half down with it. `git_history.ts` colours commit hashes
+/// `syntax.number`, which is not a theme key and never has been — the painter
+/// left the row's own foreground in place, and this is that fallback said out
+/// loud rather than left to an unset field.
 fn ink_of(o: &OverlayOptions, under: &Ink) -> Ink {
-    let paint = |c: &OverlayColorSpec| match c {
-        OverlayColorSpec::ThemeKey(k) => Paint::key(Cow::Owned(k.clone())),
+    let paint = |c: &OverlayColorSpec, beneath: &Paint| match c {
+        OverlayColorSpec::ThemeKey(k) => Paint::asked(k.clone(), beneath.clone()),
         OverlayColorSpec::Rgb(r, g, b) => Paint::Lit(ratatui::style::Color::Rgb(*r, *g, *b)),
     };
     let mut attrs = under.attrs;
@@ -2352,8 +2357,16 @@ fn ink_of(o: &OverlayOptions, under: &Ink) -> Ink {
         }
     }
     Ink {
-        fg: o.fg.as_ref().map(paint).unwrap_or_else(|| under.fg.clone()),
-        bg: o.bg.as_ref().map(paint).unwrap_or_else(|| under.bg.clone()),
+        fg: o
+            .fg
+            .as_ref()
+            .map(|c| paint(c, &under.fg))
+            .unwrap_or_else(|| under.fg.clone()),
+        bg: o
+            .bg
+            .as_ref()
+            .map(|c| paint(c, &under.bg))
+            .unwrap_or_else(|| under.bg.clone()),
         attrs,
     }
 }

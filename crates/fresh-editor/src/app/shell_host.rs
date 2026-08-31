@@ -478,6 +478,27 @@ pub mod shell_theme {
         /// ordinary, inspectable, user-overridable name and this variant can
         /// go. See §6.2 of the migration doc.
         Lit(Color),
+        /// A name a **plugin** asked for, over the half that stands if the
+        /// theme has no such entry.
+        ///
+        /// **A plugin's theme key is data, not one of our names.** Everything
+        /// else here is written by the shell, so a name that does not resolve
+        /// is a typo and the `debug_assert` in [`resolve`] is right to say so.
+        /// A key that arrived in an `OverlayColorSpec` is the plugin author's,
+        /// and the editor's table is under no obligation to know it —
+        /// `git_history.ts` colours commit hashes `syntax.number`, which no
+        /// theme has ever had.
+        ///
+        /// The painter's answer was per half and implicit: it set `fg` only
+        /// when the key resolved, so an unknown one left the row's own
+        /// foreground in place. `Ink::style` is all-or-nothing, so the same
+        /// name dropped the *whole run* to the editor's plain ground — and
+        /// tripped the assert. This variant is that implicit fallback written
+        /// down: the plugin's name, and what it falls back to, both stated.
+        Asked {
+            name: Cow<'static, str>,
+            under: Box<Paint>,
+        },
     }
 
     impl Paint {
@@ -487,11 +508,33 @@ pub mod shell_theme {
             Paint::Key(k.into())
         }
 
+        /// A name a plugin asked for, over what stands without it.
+        pub fn asked(name: impl Into<Cow<'static, str>>, under: Paint) -> Paint {
+            Paint::Asked {
+                name: name.into(),
+                under: Box::new(under),
+            }
+        }
+
         /// The key behind this half, when there is one.
+        ///
+        /// A plugin's asked-for name counts: it is what this half is *for*,
+        /// and the theme inspector's job is to report provenance rather than
+        /// to grade it.
         pub fn name(&self) -> Option<&str> {
             match self {
                 Paint::Key(k) => Some(k),
+                Paint::Asked { name, .. } => Some(name),
                 Paint::Lit(_) => None,
+            }
+        }
+
+        /// The key **the shell itself wrote**, which is the only kind that can
+        /// be a typo — see [`resolve`]'s assertion.
+        fn declared(&self) -> Option<&str> {
+            match self {
+                Paint::Key(k) => Some(k),
+                Paint::Asked { .. } | Paint::Lit(_) => None,
             }
         }
 
@@ -499,6 +542,12 @@ pub mod shell_theme {
             match self {
                 Paint::Key(k) => theme.resolve_theme_key(k),
                 Paint::Lit(c) => Some(*c),
+                // The same two-step the painter used for an
+                // `OverlayColorSpec::ThemeKey` — one of the sixteen names, or
+                // a theme entry — and then what stands without either.
+                Paint::Asked { name, under } => crate::view::theme::named_color_from_str(name)
+                    .or_else(|| theme.resolve_theme_key(name))
+                    .or_else(|| under.color(theme)),
             }
         }
 
@@ -507,6 +556,14 @@ pub mod shell_theme {
         /// `#7ee787` is a 24-bit literal, `#i42` a palette index, `#Yellow`
         /// one of the sixteen names; anything else is a theme key.
         fn parse(half: &str) -> Option<Paint> {
+            // `asked|under`: neither a key nor a literal contains a pipe, so
+            // the first one separates the plugin's name from its fallback.
+            if let Some((name, under)) = half.split_once('|') {
+                if name.is_empty() {
+                    return None;
+                }
+                return Some(Paint::asked(name.to_string(), Paint::parse(under)?));
+            }
             let Some(rest) = half.strip_prefix('#') else {
                 return (!half.is_empty()).then(|| Paint::Key(Cow::Owned(half.to_string())));
             };
@@ -533,6 +590,7 @@ pub mod shell_theme {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
                 Paint::Key(k) => f.write_str(k),
+                Paint::Asked { name, under } => write!(f, "{name}|{under}"),
                 Paint::Lit(Color::Rgb(r, g, b)) => write!(f, "#{r:02x}{g:02x}{b:02x}"),
                 Paint::Lit(Color::Indexed(i)) => write!(f, "#i{i}"),
                 Paint::Lit(other) => write!(
@@ -725,9 +783,9 @@ pub mod shell_theme {
         /// with the structural ones the ink asked for.
         pub fn style(&self, theme: &Theme) -> Option<Style> {
             let (fg, bg) = (self.fg.color(theme)?, self.bg.color(theme)?);
-            let declared = match &self.fg {
-                Paint::Key(k) => theme.resolve_modifier_key(k),
-                Paint::Lit(_) => Modifier::empty(),
+            let declared = match self.fg.name() {
+                Some(k) => theme.resolve_modifier_key(k),
+                None => Modifier::empty(),
             };
             Some(
                 Style::default()
@@ -803,13 +861,10 @@ pub mod shell_theme {
             return base(theme);
         };
         debug_assert!(
-            {
-                let (fg, bg) = ink.names();
-                [fg, bg]
-                    .into_iter()
-                    .flatten()
-                    .all(|k| theme.resolve_theme_key(k).is_some())
-            },
+            [ink.fg.declared(), ink.bg.declared()]
+                .into_iter()
+                .flatten()
+                .all(|k| theme.resolve_theme_key(k).is_some()),
             "shell theme name {name:?} names a key that is not one: \
              `Theme::resolve_theme_key` does not know it, so the whole \
              surface falls back to the editor's plain ground"
@@ -928,6 +983,50 @@ mod shell_theme_tests {
             resolve("editor.fg/editor.bg+wobble", &theme()).fg,
             Some(theme().editor_fg)
         );
+    }
+
+    /// **A plugin's key that the theme does not know leaves the rest of the
+    /// run alone.** `Ink::style` is all-or-nothing, so before `Paint::Asked`
+    /// existed one such name — `git_history.ts` colours commit hashes
+    /// `syntax.number`, which no theme has ever had — dropped the whole run to
+    /// the editor's plain ground, and tripped `resolve`'s assertion on the way
+    /// past. The painter's behaviour was to leave the row's own foreground in
+    /// place, and that is what this reproduces.
+    #[test]
+    fn a_plugin_key_the_theme_does_not_know_falls_back_to_what_was_under_it() {
+        let t = theme();
+        let asked = |k: &str| {
+            Ink::new(
+                Paint::asked(k.to_string(), Paint::key("ui.suggestion_fg")),
+                Paint::key("ui.suggestion_bg"),
+            )
+        };
+        let unknown = asked("syntax.number");
+        let style = resolve(&unknown.to_string(), &t);
+        assert_eq!(
+            style.fg,
+            Some(t.suggestion_fg),
+            "an unknown plugin key leaves the row's own foreground"
+        );
+        assert_eq!(
+            style.bg,
+            Some(t.suggestion_bg),
+            "and does not take the background down with it"
+        );
+
+        // One the theme *does* know still wins over what is under it.
+        let known = asked("syntax.keyword");
+        assert_eq!(resolve(&known.to_string(), &t).fg, Some(t.syntax_keyword));
+
+        // And the whole thing survives the written form, fallback included.
+        for ink in [unknown, known] {
+            let written = ink.to_string();
+            assert_eq!(
+                Ink::parse(&written),
+                Some(ink),
+                "{written:?} did not read back"
+            );
+        }
     }
 
     /// A literal has no name by construction, and the inspector should say so
