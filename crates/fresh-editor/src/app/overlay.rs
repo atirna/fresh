@@ -89,12 +89,15 @@ pub(crate) struct Layer {
     pub blocks_terminal_input: bool,
 }
 
-/// One entry in the owner-stamped overlay stack: a [`Layer`] plus the
-/// registry index of the chrome component that declared it — the
-/// keyboard analogue of `chrome::ChromeBox::owner`. The key walk
-/// (`Editor::dispatch_layer_keyboard`) dispatches each layer to its
-/// owner's `on_layer_key`. `owner` is `None` only for the hardcoded
-/// event-debug head, which is a pre-walk intercept, not a component.
+/// One entry in the overlay stack: a [`Layer`] plus the registry index of the
+/// chrome component that declared it.
+///
+/// The stamp is a **provenance** now, not a dispatch address. It named the
+/// component whose `on_layer_key` the key walk would call; that walk is gone
+/// (every surface claims in the shell tree, and the editor base is a direct
+/// call), and what the stack answers is `get_key_context`, the PTY gate and
+/// the caret suppression. `owner` is `None` only for the hardcoded
+/// event-debug head, which is a pre-band intercept, not a component.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OwnedLayer {
     pub owner: Option<usize>,
@@ -231,8 +234,8 @@ impl Editor {
     /// explicit rank (`chrome::layer_rank`), and this concatenates
     /// and sorts them top-first. No central conditional ladder — a
     /// new overlay surface registers a component and appears here,
-    /// and the key walk reaches its `on_layer_key` with no edit to
-    /// any dispatcher.
+    /// and `get_key_context` and the PTY gate see it with no edit to
+    /// either.
     /// DELIBERATELY NOT MEMOIZED: this build is ~17 cheap activity
     /// predicates and one small Vec — and it is the ground truth every
     /// derived cache validates against. Any Editor API can flip a layer

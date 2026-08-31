@@ -297,33 +297,20 @@ impl Editor {
             None => {}
         }
 
-        // THE derived key walk: every registered overlay layer —
-        // capture-all modals, workspace trust, the prompt rungs, the
-        // popup rungs (including the unfocused popup-cancel/-focus
-        // interception), down to the editor base, whose handler is the
-        // pipeline tail (mode bindings, composite routing,
-        // chord/keybinding resolution — see `dispatch_base_key` in
-        // `chrome/base.rs`) — offered the key top-down in declared
-        // rank order. See `dispatch_layer_keyboard`.
-        let result = self.dispatch_layer_keyboard(&key_event);
-        // The base layer answers every key by contract (`Base::layers`
-        // pushes EDITOR_BASE unconditionally and `Base::on_layer_key`
-        // always returns `Some` — both commented as load-bearing at
-        // their sites, and pinned by `overlay_stack` unit tests). If
-        // that contract ever breaks anyway, an unhandled key is a far
-        // better failure mode on the main input path than a panic:
-        // degrade to Ignored in release, scream in debug.
-        debug_assert!(
-            result.is_some(),
-            "editor base layer must answer every key — a walk fell past Base \
-             (did Base::layers grow a gate, or Base::on_layer_key a None path?)"
-        );
-        match result {
-            Some(r) => {
-                r?;
-            }
-            None => {}
-        }
+        // **The pipeline tail.** Everything that used to be offered the key
+        // ahead of this — the capture-all modals, the workspace-trust prompt,
+        // the menu, the popups, the prompt, a focused dock or plugin panel —
+        // is a layer in the shell tree now and claimed above if it wanted the
+        // key. What is left is the editor content's own keyboard: mode
+        // bindings, composite routing, the unfocused-popup interception and
+        // chord/keybinding resolution, in `chrome::base`.
+        //
+        // This was `dispatch_layer_keyboard`, a walk down `overlay_stack()`
+        // offering each layer's component an `on_layer_key`. The stack is
+        // still derived and still read — by `get_key_context`, the PTY gate
+        // and the caret suppression — but nothing dispatches through it any
+        // more, so the walk is a call.
+        self.dispatch_base_key(code, modifiers)?;
         Ok(())
     }
 
