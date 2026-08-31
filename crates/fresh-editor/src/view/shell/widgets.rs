@@ -1681,10 +1681,20 @@ fn rows_with_hits(
         };
         // An open dropdown's option list hangs off the row its trigger is on,
         // one row down and at the button's own column.
+        //
+        // **The row is named, not just the parent.** The layer resolves to the
+        // same rectangle either way — it *is* this row — but naming it says so
+        // to the dismissal as well: a press on the trigger is a press on the
+        // thing the list belongs to, and closes it once instead of dismissing
+        // it and letting the trigger's own toggle re-open it in the same
+        // press. `Anchor::Parent` cannot carry that, because a parent is
+        // wherever the caller attached the layer.
         for p in popups.iter().filter(|p| p.anchor_row as usize == i) {
-            node = row()
-                .h(Sizing::Cells(1))
-                .children([node, popup_layer(p, cx)]);
+            let anchor = popup_anchor_key(cx.slot, i);
+            node = row().key(anchor.clone()).h(Sizing::Cells(1)).children([
+                node,
+                popup_layer(p, cx).anchor(fresh_ui::Anchor::Node(anchor)),
+            ]);
         }
         kids.push(node);
     }
@@ -1786,6 +1796,20 @@ fn float_route(n: Node<UiMsg>, slot: Slot) -> Node<UiMsg> {
 /// no scroll for the tree to own here and no bar to lose — which is why
 /// `Dropdown` crosses through the adapter rather than waiting for a
 /// substitution, unlike the kinds whose scrollbar the painter draws.
+/// The row an open pop-over hangs off, by name.
+///
+/// Keyed per slot and per row because two panels can each have a list open,
+/// and a key that collided would anchor one to the other's trigger.
+fn popup_anchor_key(slot: Slot, row: usize) -> fresh_ui::Key {
+    let tag = match slot {
+        Slot::Dock => "widget_popup_anchor:dock",
+        Slot::Floating => "widget_popup_anchor:floating",
+        Slot::Settings => "widget_popup_anchor:settings",
+        Slot::SettingsEntry => "widget_popup_anchor:settings_entry",
+    };
+    fresh_ui::Key::Pair(tag.into(), row as u64)
+}
+
 fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
     // **A float sits on its own ground, not on its trigger's.** `cx.surface`
     // is whatever the widget that opened this is standing on — and in the
