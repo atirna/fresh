@@ -240,7 +240,7 @@ that matters:
 *Exit:* no fold is written by one party and read by another, and the hit-test
 probe has no described-versus-painted branch.
 
-*Progress:* the render walk no longer decides anything for `Dropdown`, `Number`
+*Done.* The render walk no longer decides anything for `Dropdown`, `Number`
 or `DualList` — all three were writing derivations back — and carries their
 stored entry through only so the whole-map replace does not collect it. One rule
 had to move rather than vanish: a blur closes a dropdown, which the walk used to
@@ -250,12 +250,23 @@ enforce by storing its result, and which is now applied at every read.
 runtime state at all, because the element already owns the window. The registry's
 copy is vestigial for a described panel and retires with the painter, in 2.4.
 
-`Text` is the remainder and the only real one. Five of its seven fields were
-merely carried and now are; the two that are left — the caret window and the
-completion popup's forward-only offset — are folds, and they are still decided
-by the walk at the width the *registry* recorded while the description computes
-the same fold at the width layout gave it. The two agree only while those widths
-agree.
+`Text` was the remainder and the only real one. Five of its seven fields were
+merely carried and now are. Of the two folds left, the caret window has moved
+into element state — a component whose state is a `Cell`, seeded once from the
+registry and never read from there again — which settles the disagreement where
+the walk decided the window at the width the *registry* recorded while the
+description drew it at the width layout gave.
+
+**No library change was needed, and the belief that one was is worth recording.**
+`Component::build` takes `&Self::State` and so cannot mutate it, which reads like
+a prohibition on owning a fold. It is not: a component's state is its own
+scratch, nothing in reconciliation reads it, and memoisation compares props — so
+interior mutability is the entire mechanism. The same argument the library
+already makes for a caret ("it exists only while this field is on screen")
+applies to a window.
+
+The completion list's forward-only offset is the same shape and has not moved: it
+is carried on the runtime's `SetCompletions` state, which is the plugin's.
 
 **2.2 Describe the five collected variants for real.** Text, list, tree, dropdown
 and dual-list stop going through the runtime's collector. Each becomes a
@@ -308,8 +319,24 @@ same step that lets the layout reader go — and that is 2.2's job, not this one
 *Exit:* deleting the mirror changes no pixel. Met for height and for every other
 slot; the anchored width is the one remaining read, and it is named in the code.
 
-**2.4 Then delete the second renderer.** The widget runtime's paint role goes;
-it keeps only what the plugin API genuinely needs.
+**2.4 Then delete the second renderer.** *Done.* The widget runtime's paint role
+is gone; it keeps only what the plugin API genuinely needs.
+
+The unlock was not a deletion but the removal of an *exclusion*.
+`WindowEmbed` — a real editor window inside a panel — was held out of the
+coverage gate on the reading that painting its own cells and being described are
+alternatives. They are not: painting its own cells is what a host leaf *is*, and
+the tree has handed rectangles to host leaves all along. Once the embed became
+one, the gate had no `false` left to return, every branch on it was dead, and
+the second renderer went with them: the generic collector adapter, the interior
+painter, two probes that had become no-ops on every path, and three helpers each
+of which had already been replaced by a description — including the one that
+located the dock's active card by scanning painted cells for box glyphs.
+
+Two things were deliberately kept and are worth knowing. `probe_floating_widget`
+looks dead and is not: a dock open with *no* mounted panel has no interior, so
+its column still emits a press that reaches it. And the stored overlay rows stay
+with that probe, since it is their only reader.
 
 The same audit named the fields of the runtime's per-panel output whose every
 consumer is a path a described panel never takes: the window-embed rectangles
