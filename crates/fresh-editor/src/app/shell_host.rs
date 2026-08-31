@@ -1288,6 +1288,16 @@ impl Editor {
                         self.settings_entry_widget_hit(&hit, at, clicks);
                         return;
                     }
+                    // A panel mounted into a pane's buffer. It is a plugin
+                    // panel like the two above, and the only difference is
+                    // where its key comes from: a pane is one buffer, and a
+                    // buffer names its panel.
+                    crate::view::shell::widgets::Slot::Pane(pane) => {
+                        if let Some(panel_key) = self.pane_panel_key(pane) {
+                            self.deliver_widget_hit(&panel_key, &hit, None);
+                        }
+                        return;
+                    }
                 };
                 if let Some(panel_key) = self.panel(slot).map(|p| p.panel_key.clone()) {
                     self.deliver_widget_hit(&panel_key, &hit, None);
@@ -1313,6 +1323,9 @@ impl Editor {
                     // flag and `dropdown_toggle` is how every other surface
                     // flips it, so the dismissal goes through the same
                     // dispatch rather than reaching into the state map.
+                    // A pane-mounted panel has no pop-over yet: its dropdown
+                    // rows come with the rest of C.5's second step.
+                    Slot::Pane(_) => {}
                     Slot::Dock | Slot::Floating => {
                         let panel = match slot {
                             Slot::Dock => crate::app::PanelSlot::Dock,
@@ -1357,7 +1370,10 @@ impl Editor {
                 let panel = match slot {
                     Slot::Dock => crate::app::PanelSlot::Dock,
                     Slot::Floating => crate::app::PanelSlot::Floating,
-                    // Gated at the source; nothing else has a panel memo.
+                    // Gated at the source; nothing else has a panel memo. A
+                    // pane-mounted panel has none *yet* — it never had one,
+                    // because `update_widget_hover` only ever probed the two
+                    // above — so its highlight comes with C.5's second step.
                     _ => return,
                 };
                 if let Some(p) = self.panel_mut(panel) {
@@ -1411,6 +1427,8 @@ impl Editor {
                             s.hovered_popup_row = now;
                         }
                     }
+                    // As above: no pop-over on a pane-mounted panel yet.
+                    Slot::Pane(_) => {}
                     Slot::Dock | Slot::Floating => {
                         let panel = match slot {
                             Slot::Dock => crate::app::PanelSlot::Dock,
@@ -2197,8 +2215,10 @@ impl Editor {
                     Slot::Dock => crate::app::PanelSlot::Dock,
                     Slot::Floating => crate::app::PanelSlot::Floating,
                     // The settings surfaces reuse the widget vocabulary but
-                    // are not panels and never raise this layer.
-                    Slot::Settings | Slot::SettingsEntry => return,
+                    // are not panels and never raise this layer. Neither does
+                    // a pane-mounted panel: its keys are the buffer's, and the
+                    // pane already owns the keyboard when it is focused.
+                    Slot::Settings | Slot::SettingsEntry | Slot::Pane(_) => return,
                 };
                 // **The focus toggle is resolved ahead of the panel.** A
                 // focused dock swallows keys in the dispatch below, so the

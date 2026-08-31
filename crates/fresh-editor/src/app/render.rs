@@ -8179,6 +8179,23 @@ impl Editor {
     /// `None` sends the whole panel down the runtime's path. A panel is
     /// described or painted and never half of each, so `covered` asks the
     /// whole tree — see `view::shell::widgets::covered`.
+    /// The mounted panel a pane is showing, if it is showing one.
+    ///
+    /// **A pane is one buffer, and a buffer names its panel.** That is the
+    /// whole of what `Slot::Pane` has to carry: everything else about a
+    /// mounted panel — its spec, its state, its hits — is the same as the
+    /// dock's, because `widgets::node` never asks where a surface lives.
+    pub(crate) fn pane_panel_key(
+        &self,
+        pane: crate::model::event::LeafId,
+    ) -> Option<crate::widgets::PanelKey> {
+        let buffer = self.active_window().pane_buffer(pane)?;
+        self.widget_registry
+            .panels_for_buffer(buffer)
+            .into_iter()
+            .next()
+    }
+
     /// Whether the tree describes this panel's interior, without building it.
     ///
     /// [`Self::panel_interior`] clones the spec and the whole instance-state

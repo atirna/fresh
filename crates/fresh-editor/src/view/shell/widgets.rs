@@ -64,6 +64,16 @@ pub enum Slot {
     /// A settings entry-edit dialog's field. The same again, one surface in:
     /// its item indices are the dialog's, not the page's.
     SettingsEntry,
+    /// A panel mounted into a pane's buffer (`mountWidgetPanel`) — the
+    /// review-diff sidebar, Search & Replace.
+    ///
+    /// **It names the pane, because that is the only thing about it that is
+    /// different.** Everything in this module is slot-agnostic: a `Ctx` says
+    /// where the facts go and nothing in the translation asks where the
+    /// surface lives, which is what made C.5 a decision about drawing rather
+    /// than about the vocabulary. What the host cannot recover without this
+    /// is *which* mounted panel a hit belongs to, and a pane is one buffer.
+    Pane(crate::model::event::LeafId),
 }
 
 /// What a panel's widgets need beyond their spec.
@@ -1818,6 +1828,10 @@ fn float_route(n: Node<UiMsg>, slot: Slot) -> Node<UiMsg> {
                 }))
             }
             (Slot::Dock, _) => None,
+            // A pane-mounted panel's floats are the second step of C.5; it
+            // has none to route yet, and a fact for a surface that cannot
+            // raise one would be a claim nobody makes.
+            (Slot::Pane(_), _) => None,
             // The settings dialog is a modal too, and its own box already
             // routes everything the tree does not answer for to that slot.
             (Slot::Settings | Slot::SettingsEntry, _) => Some(UiMsg::Ui(
@@ -1854,6 +1868,10 @@ fn popup_anchor_key(slot: Slot, row: usize) -> fresh_ui::Key {
         Slot::Floating => "widget_popup_anchor:floating",
         Slot::Settings => "widget_popup_anchor:settings",
         Slot::SettingsEntry => "widget_popup_anchor:settings_entry",
+        // One tag for every pane: two panes cannot each hold an open pop-over
+        // yet, because a pane-mounted panel has none — and when it does, the
+        // pane's own leaf id is what tells them apart.
+        Slot::Pane(_) => "widget_popup_anchor:pane",
     };
     fresh_ui::Key::Pair(tag.into(), row as u64)
 }

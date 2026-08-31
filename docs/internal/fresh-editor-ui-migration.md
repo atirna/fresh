@@ -709,12 +709,25 @@ documented limitation and a direct consequence of the mirror being text.
 A subtree gets the pop-overs the dock's dropdown already has, for free,
 because a layer is a layer wherever it is declared.
 
-**First step**, the same one C.1 took: `Slot` gains the pane, so a fact from a
-described pane-mounted panel names which one — everything else in
-`widgets::node` is already slot-agnostic — and `view::shell::splits`'
-`content()` returns that subtree in place of the `Host` leaf when the pane's
-buffer is a widget panel and `widgets::covered` says yes. `WindowEmbed` keeps
-the leaf, by G's rule, exactly as it does for the floating panel.
+**First step, done: `Slot` gains the pane.** A fact from a described
+pane-mounted panel names which one, and `Editor::pane_panel_key` resolves it
+the only way it can be resolved — a pane is one buffer, and a buffer names its
+panel. `WidgetHit` reaches `deliver_widget_hit` through it, exactly as the
+dock's does. The other arms are honest about what a mounted panel does not
+have yet rather than pretending: it raises no pop-over (so `float_route` and
+`popup_anchor_key` say so), it holds no keyboard layer (its keys are the
+buffer's), and it has no hover memo — which is not a regression, because
+`update_widget_hover` only ever probed the dock and the floating panel, so a
+mounted panel's rows have never lit under the pointer.
+
+**Second step**, the flip itself: `Splits` carries the per-pane `Interior` and
+`live_interior` returns that subtree in place of `content_surface`, gated on
+`widgets::covered` the way the dock's is. `WindowEmbed` keeps the leaf, by G's
+rule, exactly as it does for the floating panel. The one thing this step has
+to decide that C.5b did not: the pane's `Host` covers the whole pane, so the
+painter draws the mirror's *text* under the described widgets — the tree wins
+where they differ, but that is a duplicate paint, and suppressing the text
+pass for a described panel is what makes it one drawing rather than two.
 
 ### D. Paint arrangements still mixed
 
