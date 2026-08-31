@@ -305,11 +305,12 @@ impl Editor {
         // bindings, composite routing, the unfocused-popup interception and
         // chord/keybinding resolution, in `chrome::base`.
         //
-        // This was `dispatch_layer_keyboard`, a walk down `overlay_stack()`
-        // offering each layer's component an `on_layer_key`. The stack is
-        // still derived and still read — by `get_key_context`, the PTY gate
-        // and the caret suppression — but nothing dispatches through it any
-        // more, so the walk is a call.
+        // This was `dispatch_layer_keyboard`, a walk down an owner-stamped
+        // `overlay_stack()` offering each layer's component an `on_layer_key`.
+        // The stack is still derived and still read — by `get_key_context`,
+        // the PTY gate and the caret suppression — but nothing dispatches
+        // through it any more, so the walk is a call and the owner stamp that
+        // addressed the dispatch is gone with it (`overlay_layers`).
         self.dispatch_base_key(code, modifiers)?;
         Ok(())
     }

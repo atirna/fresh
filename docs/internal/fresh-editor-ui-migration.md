@@ -200,7 +200,8 @@ provided at is the scope they belong to.
 | A.4 | `layer_rank` — a central ordered list of surfaces. | Delete it. Precedence is *derived*: layer order, `Modality::Exclusive`, focus-scope containment — all already in the tree. | A `key_rank` property on layers, or a `Behavior` that walks them in order. Goal 2 forbids the central list by name; a renamed one is the same list. |
 | A.5 | `KeyContext` — the mode enum the walk keyed on, and the largest remnant by reference count. | "Which bindings apply" becomes *where focus is*: a scope provides its shortcut set as an ambient, resolution walks the focus path up. | Keeping `KeyContext` as an ambient. That is the enum with a new home; the point is that containment already answers it. |
 
-**The one word that unblocked three of the four: `Modality::Focus`.**
+**The two words that unblocked three of the four: `Modality::Focus` and
+`Modality::Pointer`.**
 `Modality` was a single knob for two questions — *confinement* (traversal
 stays inside the layer, so its own focus chain is offered the key first) and
 *swallowing* (a key that chain declines stops there rather than reaching the
@@ -209,7 +210,23 @@ the dock and the floating panel need the first without the second: while a
 prompt is up it is unambiguously where the keyboard is, and yet the keys it
 does not act on are still the editor's. `owns_keyboard` keeps the first
 meaning and `swallows_keys` is split out beside it, exactly the way
-`blocks_pointer` was split out for the other channel.
+`blocks_pointer` was split out for the other channel. `Modality` now answers
+three questions rather than one — does the pointer stop here, is focus
+confined here, does a declined key stop here — and the three variants between
+`None` and `Exclusive` each say one channel without the other.
+
+**`Modality::Pointer` is the mirror, and the migration needed it too.** The
+floating plugin panel's modal slot claims the *pointer*: the box swallows
+every press outside it, while its keys are the widget runtime's and arrive on
+the panel's own `Focus` layer. Saying `Exclusive` for that took the keyboard
+as well, and the cost was exact: an exclusive layer owns the keyboard, so
+containment made the slot the focus scope, found nothing focusable inside it,
+and dropped focus — and the panel's real keyboard layer stopped being the one
+the tree looked in. The dock's plugin context menu stopped closing on Escape.
+That is the same lesson as `Focus` in the other direction, and the same one
+this document keeps recording: **a description is exhaustive where a painter
+was incremental**, so a claim a surface does *not* make needs a word as much
+as one it does.
 
 With it, precedence is declaration order and the ranks are redundant for
 dispatch: `keys_layer` for the dock is declared first, the floating panel's
@@ -234,10 +251,35 @@ which is what A.1's *Avoid* column asks for and what A.5 is: not a seam, but
 `KeyContext` becoming "where focus is". That is the change those two are one
 change, and it is the largest single item left in section A.
 
-A.4 and A.5 are closer than that paragraph left them: `layer_rank` no longer
-orders any *dispatch* — only `base` is on the walk, and it is the floor — but
-the PTY gate and `get_key_context` still read the ranks, so deleting the block
-means giving those two the same containment answer the keyboard now has.
+A.4 and A.5 are closer than that paragraph left them, and one step further
+apart than they look. `layer_rank` no longer orders any *dispatch* — the walk
+is gone and `OwnedLayer`'s owner stamp with it — but three readers of
+`overlay_layers()` remain, and they do not all want the same thing:
+`any_layer_blocks_terminal_input` and `cursor_suppressed_by_late_overlay` read
+the stack as a *set*, so the ranks are already irrelevant to them;
+`popup_blocked_by_higher_modal` and `get_key_context` read it as an *order*.
+
+**And `get_key_context` cannot become a read of the tree.** The obvious form
+of A.5 — every keyboard-owning layer `provide`s its `KeyContext`, and the host
+looks the ambient up at the focused element — is wrong for a reason the
+dispatcher already wrote down: a rung may mutate state and then decline (the
+popup rung processes a deferred `ClosePopup` and falls through), so a lower
+rung's `get_key_context()` must re-derive against *post-mutation* state.
+`overlay_layers` is deliberately never memoized for exactly that reason — it
+is ~17 cheap predicates rebuilt on every call, and its own comment says it is
+the ground truth every derived cache validates against. The shell tree is
+rebuilt once per *frame*, so an ambient read at focus would hand every rung a
+snapshot from before the keystroke, and a key would resolve in the surface's
+previous context.
+
+So A.5 is not "the enum with a new home", and it is not an ambient lookup
+either: it is the keymap itself riding down as `Shortcut { key, intent }` data,
+which is what A.1's *Avoid* column has said all along. Resolved in the tree at
+dispatch time, "which bindings apply" is answered where focus is with no
+snapshot in between, and there is no host-side `get_key_context` left to be
+stale. That dissolves A.4's ordering reader rather than working around it,
+which is why the two are one change and the largest single item left in
+section A.
 
 ### B. The modal interiors
 

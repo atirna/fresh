@@ -1379,3 +1379,73 @@ fn a_focus_modal_layer_still_claims_what_it_answers() {
         "the node stopped the flow, so the key is spent"
     );
 }
+
+/// **The pointer's mirror of `Modality::Keyboard`**, and the variant a
+/// surface needs when the tree owns its pointer while its *interior* owns its
+/// keyboard host-side.
+///
+/// The editor's plugin panel is the shape: the box swallows every press that
+/// lands outside it, and its keys go to the widget runtime through a layer of
+/// its own. Saying `Exclusive` for the pointer half took the keyboard too —
+/// focus moved into a layer with nothing focusable inside it, was dropped for
+/// want of anywhere to go, and the surface's real keyboard layer stopped
+/// being the one containment found. That is a plugin context menu that no
+/// longer closes on Escape, and it is what this variant prevents.
+#[test]
+fn a_pointer_modal_layer_takes_the_pointer_and_leaves_the_keyboard() {
+    let pressed = Rc::new(Cell::new(0));
+    let keyed = Rc::new(Cell::new(0));
+    let p = pressed.clone();
+    let k = keyed.clone();
+    let mk = move || -> Node<()> {
+        let (p, k) = (p.clone(), k.clone());
+        col()
+            .child(gesture(text("behind")).on(
+                GestureKind::Press,
+                Rc::new(move |_: &Event| {
+                    p.set(p.get() + 1);
+                    None
+                }),
+            ))
+            // The behind-the-scenes keyboard owner: a surface elsewhere in the
+            // frame that wants focus, standing in for the panel's own layer.
+            .child(focusable(text("elsewhere")).autofocus().on_key({
+                let k = k.clone();
+                move |_: &Event| {
+                    k.set(k.get() + 1);
+                    None
+                }
+            }))
+            // The claim: the whole frame, pointer only, nothing focusable in
+            // it — exactly the editor's modal slot.
+            .child(
+                layer()
+                    .modality(Modality::Pointer)
+                    .anchor(Anchor::Screen(Align::Start))
+                    .place(Place::Fill)
+                    .child(text("claim")),
+            )
+    };
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(mk(), FRAME);
+
+    // The pointer stops at the claim: the row behind it never sees the press.
+    click(&mut ui, 1, 0);
+    assert_eq!(pressed.get(), 0, "a pointer-modal layer takes the press");
+
+    // The keyboard is untouched: focus stayed where it asked to be, and the
+    // key reached it.
+    ui.dispatch(Input::Key(KeyPress {
+        code: KeyCode::Char('x'),
+        mods: Mods::NONE,
+    }));
+    assert_eq!(
+        keyed.get(),
+        1,
+        "focus never moved into the claim, so the key reached the real owner"
+    );
+    assert!(
+        !ui.keyboard_owned(),
+        "and the claim swallows nothing it never took"
+    );
+}

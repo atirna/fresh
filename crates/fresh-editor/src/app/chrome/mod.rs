@@ -13,7 +13,7 @@
 //! is what keeps stale-geometry races impossible; see the plan's "what NOT
 //! to do"). It IS memoized, though: [`chrome_tree`] caches the last build
 //! and reuses it only when a VALIDATED claim holds — the coarse `ui_gen`
-//! epoch matches AND a fresh (cheap, never-memoized) `overlay_stack` build
+//! epoch matches AND a fresh (cheap, never-memoized) `overlay_layers` build
 //! equals the snapshot the cached tree was built from. Staleness is
 //! checked, not trusted: surface changes from any Editor API show up in
 //! the stack comparison without a hand-maintained bump roster, and debug
@@ -316,13 +316,13 @@ mod tests {
         assert_eq!(set.len(), ranks.len(), "two layers share a rank");
     }
 
-    /// The base-layer contract `handle_key` degrades on (and
-    /// `dispatch_layer_keyboard` terminates through): the stack of a
-    /// live editor ALWAYS ends with the editor base layer, owned by a
-    /// registered component, owning the keyboard. `Base::layers` must
-    /// never grow a state gate.
+    /// The base-layer contract: the stack of a live editor ALWAYS ends with
+    /// the editor base layer, owning the keyboard. `Base::layers` must never
+    /// grow a state gate — `get_key_context` resolves against the first
+    /// owning layer with a context and `expect`s one, so a gate here would
+    /// panic the input path.
     #[test]
-    fn overlay_stack_always_ends_with_an_owning_base_layer() {
+    fn the_stack_always_ends_with_an_owning_base_layer() {
         let temp = tempfile::tempdir().unwrap();
         let dir_context = crate::config_io::DirectoryContext::for_testing(temp.path());
         let ed = crate::app::Editor::for_test(
@@ -339,19 +339,16 @@ mod tests {
             false,
         )
         .unwrap();
-        let stack = ed.overlay_stack();
+        let stack = ed.overlay_layers();
         let last = stack.last().expect("stack never empty");
         assert!(
-            matches!(last.layer.kind, crate::app::overlay::LayerKind::Editor),
+            matches!(last.kind, crate::app::overlay::LayerKind::Editor),
             "the editor base terminates the stack"
         );
+        assert!(last.owns_keyboard, "the base always owns the keyboard");
         assert!(
-            last.layer.owns_keyboard,
-            "the base always owns the keyboard"
-        );
-        assert!(
-            last.owner.is_some(),
-            "the base is a registered component (the walk can dispatch to it)"
+            last.key_context.is_some(),
+            "the base names a context, which `get_key_context` expects to find"
         );
     }
 }

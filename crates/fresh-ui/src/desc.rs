@@ -490,19 +490,39 @@ impl Fit {
 
 /// How much of the input a layer takes away from what is behind it.
 ///
-/// The variants are ordered by how much they take. Every one above `None`
-/// **confines focus traversal** to the layer, so the layer's own focus chain
-/// is offered the keyboard first; every one above `Focus` also **swallows**,
-/// so a key that chain does not act on stops at the layer rather than
-/// reaching what is behind it.
+/// **Three questions, not one**, and each variant answers them:
 ///
-/// Those are two questions, not one, and the split is what `Focus` exists to
-/// say — see its own note.
+/// * does the pointer stop here (`blocks_pointer`),
+/// * is focus traversal confined here, so this layer's own chain is offered
+///   every key first (`owns_keyboard`),
+/// * and does a key that chain declines stop here (`swallows_keys`)?
+///
+/// `None` answers no to all three and `Exclusive` yes to all three; the three
+/// in between each say one channel without the other, which is what the
+/// surfaces that have a *host-side* interior need. `Keyboard` and `Pointer`
+/// are mirrors, and `Focus` is confinement without a swallow — see each one's
+/// own note for the surface it exists for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Modality {
     /// Content underneath keeps pointer and keyboard.
     #[default]
     None,
+    /// **The pointer only.** Nothing behind this layer is interactive to a
+    /// press, and the keyboard is untouched — focus does not move here and a
+    /// key is routed as if this layer were not up.
+    ///
+    /// The mirror of [`Modality::Keyboard`], and it exists for the same
+    /// reason: a surface whose *interior* still owns its own keyboard, host
+    /// side, while the tree owns the pointer for it. A plugin panel mounted
+    /// over the frame is the shape — the box swallows every press that lands
+    /// outside it, and its keys go to the widget runtime through the panel's
+    /// own layer rather than to the claim.
+    ///
+    /// Without it such a surface had to say `Exclusive`, which also takes the
+    /// keyboard: focus moved into a layer with nothing focusable inside it,
+    /// and the surface's real keyboard layer stopped being the one
+    /// containment found.
+    Pointer,
     /// **Confinement without a swallow.** Focus traversal is confined here
     /// and this layer's chain is offered every key first, but a key nothing
     /// inside acted on carries on to whatever is behind the tree.
@@ -544,7 +564,10 @@ impl Modality {
     /// answers, which is the whole reason `Keyboard` exists: a layer can own
     /// every key while leaving the surface it hangs from clickable.
     pub fn blocks_pointer(self) -> bool {
-        matches!(self, Modality::Inert | Modality::Exclusive)
+        matches!(
+            self,
+            Modality::Pointer | Modality::Inert | Modality::Exclusive
+        )
     }
 
     /// Whether this layer owns the keyboard: focus traversal is confined to
@@ -554,7 +577,7 @@ impl Modality {
     /// [`Modality::swallows_keys`], and the two differ for exactly one
     /// variant.
     pub fn owns_keyboard(self) -> bool {
-        !matches!(self, Modality::None)
+        !matches!(self, Modality::None | Modality::Pointer)
     }
 
     /// Whether a key this layer's focus chain did not act on stops here.
