@@ -2276,6 +2276,7 @@ mod tests {
             hovered_item_key: String::new(),
             hovered_popup_row: String::new(),
             avail_height: None,
+            scrollbar_reveal: None,
             surface: panel_surface(),
         }
     }

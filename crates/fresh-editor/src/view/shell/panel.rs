@@ -685,6 +685,7 @@ mod tests {
             hovered_popup_row: String::new(),
             marker_gutter: false,
             avail_height: None,
+            scrollbar_reveal: None,
         });
         let ui = laid_out(Some(p));
         let body = rect(&ui, &body_key()).expect("a content area");
@@ -743,6 +744,7 @@ mod tests {
             hovered_popup_row: String::new(),
             marker_gutter: false,
             avail_height: None,
+            scrollbar_reveal: None,
         });
         let mut ui = laid_out(Some(p));
         let at = ui
@@ -792,6 +794,7 @@ mod tests {
             hovered_popup_row: String::new(),
             marker_gutter: false,
             avail_height: None,
+            scrollbar_reveal: None,
         });
         let mut ui = laid_out(Some(p));
         let body = rect(&ui, &body_key()).expect("a content area");

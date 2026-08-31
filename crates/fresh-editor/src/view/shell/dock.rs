@@ -329,6 +329,7 @@ mod tests {
                     hovered_popup_row: String::new(),
                     marker_gutter: false,
                     avail_height: None,
+                    scrollbar_reveal: None,
                 }),
                 ..Frame::default()
             }),
