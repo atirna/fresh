@@ -45,8 +45,16 @@ pub fn grip_key() -> Key {
 /// painter fills — the same safety valve the floating panel has had since
 /// M6a, and the reason this flip cannot half-land: `panel_interior` returns
 /// `None` for an uncovered spec and the dock stays exactly as it was.
-pub fn dock(interior: Option<super::panel::Interior>, grip_hovered: bool) -> Node<UiMsg> {
-    stack().children([column(interior), grip_strip(grip_hovered)])
+pub fn dock(
+    interior: Option<super::panel::Interior>,
+    grip_hovered: bool,
+    focused: bool,
+) -> Node<UiMsg> {
+    let described = interior.is_some();
+    stack().children([
+        column(interior),
+        grip_strip(grip_hovered, focused, described),
+    ])
 }
 
 /// The panel's own pointer surface.
@@ -159,19 +167,36 @@ const DIVIDER_COLS: u16 = 2;
 /// and this only claims the pointer that lands on it — and then keeps it,
 /// through every move and the release, because a resize drag leaves the grip's
 /// own cell on its first step.
-/// What the grip paints: nothing at rest, and its own run of `│` when hovered.
+/// The divider the dock is dragged by, and what it looks like.
 ///
-/// **The same affordance the file explorer's border has**, and for the same
-/// reason: a column you can drag has to say so before you drag it. The dock's
-/// grip was a bare `row()` — draggable, and invisible whether the pointer was
-/// on it or not — so the only way to discover the resize was to guess. This is
-/// `file_explorer::grip_ink`, one panel over; the run is built during layout
-/// because a description is written before the strip's height is known.
-fn grip_ink(hovered: bool) -> Node<UiMsg> {
-    if !hovered {
+/// **It is the tree's now, for a described dock.** The painter drew it as a
+/// `Block::borders(RIGHT)` from `render_floating_widget_panel`, which runs
+/// *after* the overlay band folds — so with the settings box open over the
+/// dock, this one column of the dock came back through the middle of the
+/// dialog. The column is already this node's; drawing it here puts it in the
+/// background band with the rest of the dock's content, where a modal covers
+/// it like everything else.
+///
+/// The colours are the painter's: the accent `editor.cursor` while the dock
+/// has focus (the same one the file explorer's focused border wears, so
+/// exactly one region wears it at a time), and `ui.split_separator_hover_fg`
+/// under the pointer — which is the affordance the grip did not have at all.
+/// A column you can drag has to say so before you drag it.
+///
+/// While the interior is still a painter the border stays the painter's, so
+/// this draws nothing but the hover: two nodes painting one cell is how they
+/// drift apart.
+fn grip_ink(hovered: bool, focused: bool, described: bool) -> Node<UiMsg> {
+    use crate::app::shell_host::shell_theme::pair;
+    let fg = match (hovered, focused) {
+        (true, _) => "ui.split_separator_hover_fg",
+        (false, true) => "editor.cursor",
+        (false, false) => "ui.popup_border_fg",
+    };
+    if !hovered && !described {
         return row();
     }
-    let ink = crate::app::shell_host::shell_theme::pair("ui.split_separator_hover_fg", "editor.bg");
+    let ink = pair(fg, "editor.bg");
     fresh_ui::layout_reader(move |c: fresh_ui::LayoutInfo| {
         fresh_ui::col().children(
             (0..c.constraints.max_h)
@@ -180,7 +205,7 @@ fn grip_ink(hovered: bool) -> Node<UiMsg> {
     })
 }
 
-fn grip_strip(hovered: bool) -> Node<UiMsg> {
+fn grip_strip(hovered: bool, focused: bool, described: bool) -> Node<UiMsg> {
     // The width and the key go on the OUTSIDE, on the gesture node `draggable`
     // returns: it is the node that hit-tests, and an unconstrained one would
     // stretch across the whole strip and swallow presses meant for the panel
@@ -190,7 +215,7 @@ fn grip_strip(hovered: bool) -> Node<UiMsg> {
     };
     let grip = super::grip::draggable(
         super::msg::Grip::DockWidth,
-        grip_ink(hovered),
+        grip_ink(hovered, focused, described),
         Rc::new(|_: &Event| Some(UiMsg::Ui(UiFact::DockResizeBegin))),
     )
     .w(Sizing::Cells(1))

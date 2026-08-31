@@ -141,6 +141,9 @@ pub struct Frame {
     /// Whether the pointer is on the dock's resize grip; the grip paints its
     /// own `│` from this, the way the file explorer's does.
     pub dock_grip_hovered: bool,
+    /// Whether the dock has keyboard focus; its divider wears the accent then,
+    /// the way the file explorer's border does.
+    pub dock_focused: bool,
     /// The sidebar's content, or `None` when it is hidden. Like the
     /// search-options row, content rather than a flag: the tree measures the
     /// panel's rows and reads their rectangles back.
@@ -262,6 +265,7 @@ impl Default for Frame {
             dock: None,
             dock_interior: None,
             dock_grip_hovered: false,
+            dock_focused: false,
             explorer: None,
             menu: None,
             dropdowns: Vec::new(),
@@ -517,7 +521,7 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
         match f.dock {
             Some(w) => named(
                 HostRegion::Dock,
-                super::dock::dock(f.dock_interior.clone(), f.dock_grip_hovered),
+                super::dock::dock(f.dock_interior.clone(), f.dock_grip_hovered, f.dock_focused),
             )
             .w(Sizing::Cells(w)),
             None => region(HostRegion::Dock).w(Sizing::Cells(0)),

@@ -4155,6 +4155,7 @@ impl Editor {
                 self.shell_hover,
                 Some(crate::app::types::HoverTarget::DockBorder)
             ),
+            dock_focused: self.dock.as_ref().is_some_and(|d| d.focused),
             // Which workspace the window-owned half of the frame belongs to.
             // One retained tree, N windows: without this the two match each
             // other and window B's first pane inherits window A's element
@@ -7261,10 +7262,14 @@ impl Editor {
                     false => block.style(ratatui::style::Style::default().bg(theme.suggestion_bg)),
                 };
                 let inner = block.inner(overlay_rect);
-                if draw {
-                    if !described {
-                        frame.render_widget(Clear, overlay_rect);
-                    }
+                // **The divider goes with the content.** For a described dock
+                // it is `dock::grip_ink`'s, drawn in the background band; this
+                // painter runs after the overlay band folds, so the border it
+                // used to draw here came back through the middle of any modal
+                // open over the dock. What is left for the described case is
+                // the rectangle, which the callers below still need.
+                if draw && !described {
+                    frame.render_widget(Clear, overlay_rect);
                     frame.render_widget(block, overlay_rect);
                 }
                 inner
