@@ -388,8 +388,18 @@ mirror written from one place rather than the authority on which control is live
 **Its exit condition had two blockers and one is now gone.** The first was that
 the dialog's middle tab stop — the settings *body* — had nothing focus could
 land on: its controls are plugin widgets, and no plugin widget was on the ring
-at all. They are now, and the body renders through the same adapter, so
-`move_focus` has real targets there.
+at all. They are now, and the body renders through the same adapter, so the ring
+has real targets there.
+
+**But "so `move_focus` has real targets there" was itself an overclaim**, caught
+by the review in §6, and in the same shape as the Tab blocker below. Being on the
+ring is necessary and is not sufficient: (i) the `WidgetFocus` applier returns
+early for every slot but Dock and Floating, so a `FocusGained` from a settings
+widget is dropped; and (ii) the dialog attaches an `on_key` that stops every key,
+and the library runs the focused chain *before* intent resolution, so Tab becomes
+`UiFact::ModalKey(Settings)` and `move_focus` is never reached. The tree's ring in
+the settings dialog is inert until both are addressed. That is 3.2's remaining
+work, and it is more than "re-enable the ring".
 
 **The second blocker, as previously recorded here, was not real.** It was written
 down twice — that Tab is overloaded inside the body, committing an edit and
@@ -441,8 +451,21 @@ fold stops being cut in half and the tree's z-order becomes authoritative.
 
 **4.1 Every region but the body stops being a `Host`.** The dock, menu bar,
 explorer, status bar, search options and prompt line each become descriptions all
-the way down. The body — the split grid, buffers, terminals and the text pipeline
-— stays a `Host`, permanently and correctly.
+the way down. Of those, only the prompt line is still painted: the others are
+described, and an empty dock or an itemless status bar is the only way their
+`Host` is reached at all.
+
+The body — the split grid, buffers, terminals and the text pipeline — stays a
+`Host`, permanently and correctly. **But the tab strip is inside that boundary
+and does not belong to it.** `view/ui/tabs.rs` is 1,369 non-test lines of
+ordinary chrome — tabs, close buttons, a `+`, scroll arrows — and it is the last
+painter-recorded-rectangle hit-test in the editor: `render.rs` files
+`tab_layouts` and the event path in `app/chrome/splits.rs` and `app/tab_drag.rs`
+reads them back. `view/shell/splits.rs` says so plainly ("The strip is the node;
+its interior is still the painter's"). Declaring the body permanent is right for
+the text; extending that to the strip fences the hardest remaining piece of
+chrome inside a boundary labelled out of scope. **4.1 is not finished while the
+strip is hit-tested against what it painted.**
 
 **4.2 F.2.** `Paint::Lit` retires into a dynamic theme tier once plugins can
 register named keys, after which provenance is total.
@@ -518,7 +541,61 @@ Three additions, in priority order:
 
 ---
 
-## 6. Merge posture for the current branch
+## 6. What an independent review found
+
+A reviewer with no stake in this plan read the branch (354 commits, ~52k
+insertions) and was told only the objective — that the plan itself might be
+wrong. Its verdict is recorded here because it is sharper than this document was:
+
+> substantially, genuinely retained for the editor's chrome, and not retained at
+> all for the plugin-widget half
+
+and it judged this document's remaining-work list to understate the gap "by a
+wide margin". The specific corrections, all verified against the source:
+
+- **Four comments argued for properties the code lacks** — the class §1.4 exists
+  to close. One of them was written *while closing that class*, claiming the
+  status bar is a `Host` because its prompt states paint outside the fold; the
+  prompt row is a different region and is painted inside the fold. Another
+  declared F.6 open twenty lines below the commit that fixed it. Three separate
+  reviewers had been misled by these. Fixed.
+- **The card bands sat in the region host-id space**, resolving to `Dock`,
+  `MenuBar`, `Explorer`, `Body` and `StatusBar`. Fixed, with a tag and a test.
+- **2.2's exit is not met, and the two survivors are the expensive ones**: a
+  `render_collected` per card per frame, and one that formats a multi-line text
+  field's *whole document* per frame — both from inside the retained description
+  build. Two more immediate-mode renders sit on the click path purely to resolve
+  a caret byte by measuring the text they just produced.
+- **3.1 is barely started at the seam that matters.** Three memo sites, three
+  `Component` impls. Worse, the three memos wrap the node build *after*
+  `shell_frame` has already run the menu walk, the status-bar content pass and a
+  deep clone of every panel's spec — the expensive half is outside the memo.
+- **There are two focus rings over one `focus_key`.** The tree's writes it via
+  `UiFact::WidgetFocus`; `handle_widget_focus_advance` writes it from the
+  immediate-mode box arena. No gate between them.
+- **3.2's note here was wrong in the same shape as the Tab claim.** The settings
+  body's widgets are on the tree's ring, but the applier drops every slot but
+  Dock and Floating, and the dialog's `on_key` stops every key before intent
+  resolution — so the tree's ring in the settings dialog is inert.
+- **F.2 is wider than "plugins cannot register named keys."** Provenance drops
+  any item whose ink resolved to literals, and the status bar hard-codes literals
+  for its own separator, so provenance is blank there today with no plugin
+  involved.
+
+The gate it named, which supersedes the ordering in §3 for this branch: close the
+two `render_collected` calls and the two click-path re-renders; delete the second
+focus ring or make the arena one a mirror; fix the host-id collision; sweep the
+four comments.
+
+It also named what should not be re-litigated: the read-back family reads the
+tree that painted rather than a parallel walk, the settings dialog's painter is
+down to a box and a divider column, the widget-panel interior painter really is
+deleted, and `fresh-ui`'s own focus fixes are real bugs found with the right
+explanation.
+
+---
+
+## 7. Merge posture for the current branch
 
 The branch is a large net improvement and should land — but not as-is. Phase 1 is
 the gate: F.6 is a shipped feature dead over most of the chrome, 1.1 is a live
