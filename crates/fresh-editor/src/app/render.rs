@@ -7309,30 +7309,14 @@ impl Editor {
         // here: they describe the *box*, and the box is the tree's
         // (`Editor::panel_description`). What is left is what the interior
         // needs.
-        let (
-            entries,
-            focus_cursor,
-            embeds,
-            overlays,
-            scroll_regions,
-            placement,
-            panel_focused,
-            scrollbar_zone_hovered,
-            scrollbar_flash_until,
-            popup,
-        ) = match self.panel(slot) {
-            Some(fwp) => (
-                fwp.entries.clone(),
-                fwp.focus_cursor,
-                fwp.embeds.clone(),
-                fwp.overlays.clone(),
-                fwp.boxes.clone(),
-                fwp.placement,
-                fwp.focused,
-                fwp.scrollbar_zone_hovered,
-                fwp.scrollbar_flash_until,
-                fwp.popup.clone(),
-            ),
+        // **Two facts, where there were ten.** This used to lift the whole of
+        // the runtime's per-panel output — the rows, the caret, the embed
+        // rectangles, the floated overlay rows, the box arena, the open
+        // pop-over — because it painted every one of them. The tree does that
+        // now, so what is left for the painter is where the panel sits and
+        // whether it wears the focused ring.
+        let (placement, panel_focused) = match self.panel(slot) {
+            Some(fwp) => (fwp.placement, fwp.focused),
             None => return,
         };
         let theme = self.theme.read().unwrap().clone();

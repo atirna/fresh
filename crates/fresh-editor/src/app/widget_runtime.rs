@@ -973,7 +973,6 @@ impl Editor {
         let panel_slot = Self::slot_for_panel_buffer(buffer_id);
         let focus_cursor = out_pieces.focus_cursor;
         let entries = out_pieces.entries;
-        let embeds = out_pieces.embeds;
         let overlays = out_pieces.overlays;
         let panel_boxes = out_pieces.boxes.clone();
         let popup = out_pieces.popup;
@@ -997,8 +996,6 @@ impl Editor {
             if let Some(fwp) = self.panel_mut(slot) {
                 if &fwp.panel_key == panel_key {
                     fwp.entries = entries;
-                    fwp.focus_cursor = focus_cursor;
-                    fwp.embeds = embeds;
                     fwp.overlays = overlays;
                     fwp.boxes = panel_boxes;
                     fwp.popup = popup;
