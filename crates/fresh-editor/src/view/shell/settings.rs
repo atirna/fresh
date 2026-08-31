@@ -721,8 +721,13 @@ fn inherit(idx: usize, i: &Inherit, band: &str) -> Node<UiMsg> {
         row().w(Sizing::Flex(1)).pointer_mode(PointerMode::Ignore),
         node,
         // The painter's trailing column, so the affordance is not flush
-        // against the border.
-        row().w(Sizing::Cells(1)).pointer_mode(PointerMode::Ignore),
+        // against the border — and it carries the band's own background,
+        // because it lies *over* the control. Left transparent it showed one
+        // column of whatever the control had painted there, which on a narrow
+        // card is the middle of a value: "Default Language  (Inherited))".
+        text(" ")
+            .theme(pair("ui.line_number_fg", band))
+            .pointer_mode(PointerMode::Ignore),
     ])
 }
 
@@ -1148,6 +1153,11 @@ fn footer_row(f: &Footer) -> Node<UiMsg> {
         // the slack pushed the right-hand group off the box's edge and the
         // last button came out cut in half.
         kids.push(row().flex(1).children(keyhints(&f.help)));
+        // The hints are clipped to that flexible child, so at a narrow width
+        // they run right up against the first button and read as one word:
+        // "↑↓ Naviga[ User ]". The same two columns that separate the buttons
+        // separate them from the hints.
+        kids.push(text("  ").theme(ink()));
         for (on, b, label) in [
             (show_layer, Button::Layer, &f.layer),
             (show_reset, Button::Reset, &f.reset),

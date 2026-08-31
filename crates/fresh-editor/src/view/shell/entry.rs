@@ -395,7 +395,14 @@ fn affordance(item: usize, a: &Affordance, band: &str) -> Node<UiMsg> {
                         Some(UiMsg::Ui(UiFact::SettingsEntryFieldAction(item, i)))
                     }),
                 ));
-                kids.push(row().w(Sizing::Cells(1)).pointer_mode(PointerMode::Ignore));
+                // Themed, not bare: this column lies over the control, and a
+                // transparent one shows a column of whatever the control
+                // painted under it.
+                kids.push(
+                    text(" ")
+                        .theme(pair("ui.line_number_fg", band))
+                        .pointer_mode(PointerMode::Ignore),
+                );
             }
         }
     }
