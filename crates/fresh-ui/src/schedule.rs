@@ -502,6 +502,15 @@ pub struct Ui<M> {
     pub(crate) geom_store: Rc<RefCell<crate::services::GeomStore>>,
     /// The viewport whose scrollbar is being dragged, between press and release.
     pub(crate) scrollbar_drag: Option<crate::render::object::RenderId>,
+    /// Where in the thumb the drag was grabbed, in rows from its top.
+    ///
+    /// **A press on the thumb picks it up; a press on the track jumps to it.**
+    /// Without this every press put the thumb's *top* under the pointer, so
+    /// grabbing a thumb anywhere but its first row shifted it up by however
+    /// far down it had been grabbed — a press that moved the viewport without
+    /// the pointer moving at all. Zero for a press on the bare track, which is
+    /// the jump.
+    pub(crate) scrollbar_grab: i32,
 }
 
 impl<M: 'static> Default for Ui<M> {
@@ -550,6 +559,7 @@ impl<M: 'static> Ui<M> {
             anchored: Vec::new(),
             geom_store: Rc::new(RefCell::new(crate::services::GeomStore::default())),
             scrollbar_drag: None,
+            scrollbar_grab: 0,
         }
     }
 
