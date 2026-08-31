@@ -3366,6 +3366,101 @@ mod tests {
         assert_eq!(hit.payload["key"], "k2");
     }
 
+    /// **A right press on a row is that row's, and it carries the screen
+    /// cell.** The probe used to answer which row a right press belonged to,
+    /// from a second layout of the same spec; the node has the rectangle, so
+    /// it answers itself. The cell rides along because the plugin anchors its
+    /// popup at the click and the payload carries only the row index.
+    #[test]
+    fn a_right_press_on_a_tree_row_raises_its_own_context_menu() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&a_tree(&["r"], 0), WIDTH, &cx()), Size::new(WIDTH, 24));
+        let at = fresh_ui::Point::new(8, 2);
+        let msgs = ui
+            .dispatch(fresh_ui::Input::press(
+                at,
+                fresh_ui::MouseButton::Right,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs;
+        let (hit, x, y) = msgs
+            .into_iter()
+            .find_map(|m| match m {
+                UiMsg::Ui(UiFact::WidgetContext { hit, x, y, .. }) => Some((hit, x, y)),
+                _ => None,
+            })
+            .expect("a right press on a tree row");
+        assert_eq!(hit.widget_kind, "tree");
+        assert!(hit.context_click, "only a kind that declared it claims");
+        assert_eq!((x, y), (8, 2), "the screen cell, not the widget's own");
+    }
+
+    /// And a widget that declared no context menu leaves the press alone, so
+    /// it reaches the surface behind — which is where a right press with no
+    /// widget under it has always gone.
+    #[test]
+    fn a_right_press_on_a_button_is_left_to_the_surface_behind_it() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            node(&button("Go", Some("go"), false, false), WIDTH, &cx()),
+            Size::new(WIDTH, 24),
+        );
+        let msgs = ui
+            .dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(2, 0),
+                fresh_ui::MouseButton::Right,
+                fresh_ui::Mods::NONE,
+            ))
+            .msgs;
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| matches!(m, UiMsg::Ui(UiFact::WidgetContext { .. }))),
+            "a button raises no menu: {msgs:?}"
+        );
+    }
+
+    /// **The hover the runtime probed for.** Entering a row names the widget
+    /// *and* the row, because every row of one tree shares the tree's key;
+    /// leaving names the same pair, so two pieces of one row can hand the
+    /// hover between them without the leave undoing the enter.
+    #[test]
+    fn entering_a_tree_row_reports_it_and_leaving_gives_it_back() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&a_tree(&["r"], 0), WIDTH, &cx()), Size::new(WIDTH, 24));
+        let hover = |ui: &mut Ui<UiMsg>, x: i32, y: i32| -> Vec<(String, String, bool)> {
+            ui.dispatch(fresh_ui::Input::Move {
+                pos: fresh_ui::Point::new(x, y),
+                mods: fresh_ui::Mods::NONE,
+            })
+            .msgs
+            .into_iter()
+            .filter_map(|m| match m {
+                UiMsg::Ui(UiFact::WidgetHover {
+                    widget,
+                    item,
+                    entered,
+                    ..
+                }) => Some((widget, item, entered)),
+                _ => None,
+            })
+            .collect()
+        };
+
+        let entered = hover(&mut ui, 8, 2);
+        assert!(
+            entered.iter().any(|(w, _, e)| w == "tr" && *e),
+            "entering a row names the tree it belongs to: {entered:?}"
+        );
+
+        // Off every row: the same pair comes back, released.
+        let left = hover(&mut ui, 8, 20);
+        assert!(
+            left.iter().any(|(w, _, e)| w == "tr" && !*e),
+            "leaving names what it is leaving: {left:?}"
+        );
+    }
+
     fn tree_node(text: &str, depth: u32, has_children: bool) -> fresh_core::api::TreeNode {
         fresh_core::api::TreeNode {
             text: raw(text),
