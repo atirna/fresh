@@ -5505,7 +5505,7 @@ impl Editor {
     /// back after. `pending_hardware_cursor` and
     /// `cell_theme_map` use scratch locals so the active editor
     /// area's hit-testing isn't clobbered by the preview pass.
-    fn render_session_preview_into_rect(
+    pub(crate) fn render_session_preview_into_rect(
         &mut self,
         buf: &mut ratatui::buffer::Buffer,
         inner: ratatui::layout::Rect,

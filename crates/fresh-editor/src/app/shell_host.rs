@@ -382,6 +382,7 @@ impl crate::view::shell::fold::HostPainter for BodyPainter<'_> {
     fn paint_host(&mut self, target: HostTarget, rect: Rect, buf: &mut Buffer, caret: &mut Caret) {
         let region = match target {
             HostTarget::Pane(leaf) => return self.pane(leaf, rect, buf, caret),
+            HostTarget::Embed(window_id) => return self.embed(window_id, rect, buf),
             HostTarget::Region(r) => r,
         };
         match region {
@@ -399,6 +400,34 @@ impl crate::view::shell::fold::HostPainter for BodyPainter<'_> {
             // are the one row `Editor::render` still paints outside the fold.
             HostRegion::Dock | HostRegion::StatusBar => {}
         }
+    }
+}
+
+impl BodyPainter<'_> {
+    /// An editor window embedded in a plugin panel, painted into the rectangle
+    /// layout gave it.
+    ///
+    /// **The rectangle is handed over, not reconstructed.** The runtime
+    /// reserved this space by emitting blank rows and then overlaid the
+    /// window's paint on top of them, deriving the target rect from the
+    /// panel's inner area plus the row and column those blanks had landed on —
+    /// a rectangle rebuilt from where text ended up. A `Host` leaf is given
+    /// one, which is the whole difference.
+    ///
+    /// `preview_window_id` is still borrowed around the call because that is
+    /// how the per-window paint path selects a session; what has gone is the
+    /// arithmetic, not the mechanism. Window id `0` names no window and paints
+    /// nothing, which is the spec's own "renders empty placeholder rows".
+    fn embed(&mut self, window_id: u32, rect: Rect, buf: &mut Buffer) {
+        if window_id == 0 || rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        let theme = self.editor.theme.read().unwrap().clone();
+        let saved = self.editor.preview_window_id;
+        self.editor.preview_window_id = Some(fresh_core::WindowId(window_id as u64));
+        self.editor
+            .render_session_preview_into_rect(buf, rect, &theme);
+        self.editor.preview_window_id = saved;
     }
 }
 

@@ -373,8 +373,16 @@ pub fn covered(spec: &WidgetSpec) -> bool {
         // reproduces it exactly and loses nothing.
         WidgetSpec::Dropdown { .. } => true,
 
-        // `WindowEmbed` is a `Host` leaf by rule and never crosses.
-        _ => false,
+        // **`WindowEmbed` crosses as the `Host` leaf it always was.**
+        //
+        // It is a real editor window inside a panel — cells, permanently — and
+        // that was read for a long time as "this panel cannot be described",
+        // which sent every panel containing one down the runtime's whole paint
+        // path. But painting its own cells is precisely what a `Host` leaf
+        // *is*: the tree hands it a rectangle and knows nothing about its
+        // interior. The two were never in tension, and keeping them apart kept
+        // a second renderer alive for the sake of one variant.
+        WidgetSpec::WindowEmbed { .. } => true,
     }
 }
 
@@ -2065,9 +2073,27 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             }
             col().children(kids)
         }
+        // **A hole in the panel, at the rectangle layout gives it.**
+        //
+        // The runtime reserved this by emitting `rows` blank lines the width
+        // of the panel and then *overlaying* the window's own paint on top of
+        // them afterwards, from a rectangle it reconstructed out of the
+        // panel's inner area plus the row and column the blanks landed on.
+        // That is the reconstruct-from-paint shape this migration exists to
+        // remove, and here it is simply a leaf: the description says how tall
+        // the hole is, layout says where it is, and the fold hands the window
+        // painter the rectangle it produced.
+        //
+        // Width is the panel's, which is what the blanks said too. Height is
+        // the spec's `rows`, unchanged — a plugin sizes its own embed.
+        WidgetSpec::WindowEmbed {
+            window_id, rows, ..
+        } => fresh_ui::host(super::frame::embed_host_id(*window_id))
+            .h(Sizing::Cells((*rows).min(u16::MAX as u32) as u16)),
         // `covered` gates this; reaching it is a bug in the caller rather than
         // a spec the plugin got wrong, so it is loud in debug and empty in
         // release rather than silently dropping a panel's content.
+        #[allow(unreachable_patterns)]
         other => {
             debug_assert!(false, "widget variant not covered: {other:?}");
             row().h(Sizing::Cells(0))
@@ -3256,29 +3282,35 @@ mod tests {
         }
     }
 
-    /// **The coverage gate is the point of `covered`.** A panel is described
-    /// or painted, never half of each, so one unmigrated child takes the whole
-    /// spec down the old path.
+    /// **The gate has nothing left to exclude, and that is the finding.**
+    ///
+    /// `covered` existed to answer "is a panel described or painted", because
+    /// a panel had to be one or the other and one unmigrated child took the
+    /// whole spec down the old path. There is no unmigrated child any more —
+    /// the recursion has no `false` to propagate, so the predicate is
+    /// identically `true` and every branch on it is dead.
+    ///
+    /// The test that used to build a counter-example cannot: its witness was
+    /// `WindowEmbed`, "the one that never will" cross, and it has. What
+    /// replaces it is this assertion over the whole vocabulary, and the
+    /// deletion of the gate itself.
     #[test]
-    fn one_uncovered_child_makes_the_whole_spec_uncovered() {
-        let covered_leaf = WidgetSpec::Raw {
-            entries: vec![raw("x")],
-            key: None,
-        };
-        assert!(covered(&covered_leaf));
-
-        // Any variant this module has not reached yet. `WindowEmbed` is the
-        // one that never will — it is a `Host` leaf by G's rule — so it stays
-        // a valid example of "not described here" for the life of C.1.
-        let uncovered = WidgetSpec::WindowEmbed {
+    fn the_coverage_gate_has_no_counter_example_left() {
+        let embed = WidgetSpec::WindowEmbed {
             window_id: 1,
             rows: 3,
             key: None,
         };
-        assert!(!covered(&uncovered));
+        assert!(covered(&embed), "a window embed is a host leaf, not a hole");
         assert!(
-            !covered(&col_of(vec![covered_leaf, uncovered])),
-            "a column with one unmigrated child is not covered"
+            covered(&col_of(vec![
+                WidgetSpec::Raw {
+                    entries: vec![raw("x")],
+                    key: None
+                },
+                embed
+            ])),
+            "and a column holding one is described like any other"
         );
     }
 
@@ -3902,7 +3934,7 @@ mod tests {
     ///
     /// `WindowEmbed` is a `Host` leaf by G's rule and never crosses.
     #[test]
-    fn every_variant_but_the_host_leaf_is_covered() {
+    fn every_variant_is_covered() {
         let plain_list = WidgetSpec::List {
             items: vec![raw("one")],
             item_specs: Vec::new(),
@@ -3943,22 +3975,18 @@ mod tests {
             assert!(covered(&spec), "{what}");
         }
 
-        // And the one that does not, which takes its panel with it.
-        let embed = WidgetSpec::WindowEmbed {
-            window_id: 1,
-            rows: 3,
-            key: None,
-        };
-        assert!(!covered(&embed), "a window embed is cells");
+        // And the one that used to not: `WindowEmbed` is a `Host` leaf, which
+        // is what "paints its own cells" has meant everywhere else in this
+        // migration. It was excluded on the reading that cells and a
+        // description are alternatives; they are not, and that exclusion was
+        // the last thing keeping a whole second panel painter alive.
         assert!(
-            !covered(&col_of(vec![
-                WidgetSpec::Raw {
-                    entries: vec![raw("x")],
-                    key: None
-                },
-                embed
-            ])),
-            "one uncovered node takes its panel with it"
+            covered(&WidgetSpec::WindowEmbed {
+                window_id: 1,
+                rows: 3,
+                key: None,
+            }),
+            "a window embed is a hole in the description, not an escape from it"
         );
     }
 
