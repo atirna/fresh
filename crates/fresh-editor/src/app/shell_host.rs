@@ -2061,6 +2061,50 @@ impl Editor {
                     self.shell_interior_took_key = true;
                 }
             }
+            // **A focused plugin panel: the same declining seam.** Its
+            // interior is `dispatch_floating_widget_key`, which hands back a
+            // shortcut the panel does not bind — a blurred dock and ordinary
+            // keybinding resolution — so the layer confines the keyboard
+            // without swallowing, and the claim is completed here.
+            UiFact::PanelKey(slot) => {
+                use crate::view::shell::widgets::Slot;
+                let Some(ev) = self.shell_key_event else {
+                    return;
+                };
+                let slot = match slot {
+                    Slot::Dock => crate::app::PanelSlot::Dock,
+                    Slot::Floating => crate::app::PanelSlot::Floating,
+                    // The settings surfaces reuse the widget vocabulary but
+                    // are not panels and never raise this layer.
+                    Slot::Settings | Slot::SettingsEntry => return,
+                };
+                // **The focus toggle is resolved ahead of the panel.** A
+                // focused dock swallows keys in the dispatch below, so the
+                // global toggle (default Alt+O) could never hand focus back
+                // to the editor once you had dived in. Only the blur-out
+                // direction needs this — focusing a blurred dock is ordinary
+                // keybinding resolution, because the editor owns the keyboard
+                // then.
+                if slot == crate::app::PanelSlot::Dock {
+                    let ctx = self.get_key_context();
+                    let resolved = self.keybindings.read().ok().map(|kb| kb.resolve(&ev, ctx));
+                    if matches!(
+                        resolved,
+                        Some(crate::input::keybindings::Action::ToggleDockFocus)
+                    ) {
+                        if let Err(e) =
+                            self.handle_action(crate::input::keybindings::Action::ToggleDockFocus)
+                        {
+                            tracing::warn!("dock focus toggle failed: {e}");
+                        }
+                        self.shell_interior_took_key = true;
+                        return;
+                    }
+                }
+                if self.dispatch_floating_widget_key(slot, ev.code, ev.modifiers) {
+                    self.shell_interior_took_key = true;
+                }
+            }
             UiFact::ModalPointer(slot) => {
                 use crate::view::shell::modal::Slot;
                 let Some((ev, _)) = self.shell_pointer_event else {

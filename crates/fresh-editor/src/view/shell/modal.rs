@@ -94,8 +94,11 @@ pub fn layer(slot: Slot) -> Node<UiMsg> {
         Slot::Settings => keys(KeySlot::Settings, content),
         // The floating panel's keys are the widget runtime's, and reach it
         // through `dispatch_floating_widget_key` — a different interior from
-        // a dialog's own dispatcher, and one that declines rather than
-        // swallowing (an unhandled shortcut blurs the dock).
+        // a dialog's own dispatcher, and one that *declines* rather than
+        // swallowing (an unhandled shortcut blurs the dock). That is what
+        // `keys` above cannot express and `Modality::Focus` can, so the panel
+        // brings its own keyboard layer (`super::panel::keys_layer`) instead
+        // of borrowing this seam.
         Slot::FloatingPanel => content,
     };
     fresh_ui::layer()

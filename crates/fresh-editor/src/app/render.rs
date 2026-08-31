@@ -4185,6 +4185,15 @@ impl Editor {
             // still owns every key. `chrome::Prompt::layers` asked
             // `is_prompting()` for exactly this and so does the layer.
             prompt_keys: self.is_prompting(),
+            // A focused panel is the keyboard's owner, which is what
+            // `chrome::Dock::layers` and `chrome::FloatingModal::layers` say
+            // with `owns_keyboard` — asked here so the frame can declare the
+            // layer that used to be a rank.
+            dock_keys: self.dock.as_ref().is_some_and(|d| d.focused),
+            panel_keys: self
+                .floating_widget_panel
+                .as_ref()
+                .is_some_and(|f| f.focused),
             dock: dock_area.map(|d| d.width),
             explorer,
             menu: self.open_context_menu_for_shell(),

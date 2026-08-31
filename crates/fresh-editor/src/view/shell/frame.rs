@@ -137,6 +137,12 @@ pub struct Frame {
     /// draws no row and still owns the keyboard. See
     /// [`super::prompt::keys_layer`].
     pub prompt_keys: bool,
+    /// Whether the dock has keyboard focus, and so whether its layer is the
+    /// keyboard's owner. `chrome::Dock::layers`' `owns_keyboard`, said where
+    /// the precedence is now derived. See [`super::panel::keys_layer`].
+    pub dock_keys: bool,
+    /// The same for the centred plugin panel.
+    pub panel_keys: bool,
     /// Column width, already resolved against the frame width.
     pub dock: Option<u16>,
     /// The dock's content as a description, when the adapter covers every
@@ -268,6 +274,8 @@ impl Default for Frame {
             status_bar_items: None,
             prompt_line: false,
             prompt_keys: false,
+            dock_keys: false,
+            panel_keys: false,
             dock: None,
             dock_interior: None,
             dock_grip_hovered: false,
@@ -454,6 +462,27 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // over them — the order `layer_rank::MENU` below `layer_rank::CONTEXT_MENU`
     // states in the precedence table, expressed here as the order they are
     // declared in.
+    //
+    // **The two panel keyboards lead, because they are the floor of the
+    // routable band.** `DOCK` was the lowest rank and `FLOATING_MODAL` the
+    // next, both under `POPUP` — the R1 rank-inversion fix, which says a
+    // prompt, a popup or a menu takes a key before a focused dock or centred
+    // modal does. Declared first, they are exactly that: `Modality::Focus`
+    // confines the keyboard to the topmost such layer, and the topmost is the
+    // one declared last.
+    //
+    // They carry no state, which is why the window scope around this column
+    // is not the problem it would be for the dock's *content*: a keyboard
+    // seam has nothing to lose when a workspace switch rebuilds it, and it
+    // re-autofocuses on the next frame.
+    let chrome = match f.dock_keys {
+        true => chrome.child(super::panel::keys_layer(super::widgets::Slot::Dock)),
+        false => chrome,
+    };
+    let chrome = match f.panel_keys {
+        true => chrome.child(super::panel::keys_layer(super::widgets::Slot::Floating)),
+        false => chrome,
+    };
     // The overlay prompt's card, over everything the frame holds and under the
     // menus — a context menu opened from inside it still paints on top, the
     // same declaration-order rule the dropdowns follow.

@@ -487,6 +487,16 @@ pub enum UiFact {
     /// (`Editor::shell_interior_took_key`) and the prompt's layer is
     /// `Modality::Focus`, which confines the keyboard without swallowing it.
     PromptKey,
+    /// A key belongs to a focused plugin panel, whose interior is the widget
+    /// runtime's.
+    ///
+    /// The same declining seam as [`UiFact::PromptKey`], for the two surfaces
+    /// that reach `dispatch_floating_widget_key`: a shortcut the panel does
+    /// not bind blurs the dock and falls through to the editor's own
+    /// resolution, so the layer confines the keyboard (`Modality::Focus`)
+    /// without swallowing what it declines, and the applier completes the
+    /// claim.
+    PanelKey(super::widgets::Slot),
     /// A press on one of the keybinding editor's dialogs.
     ///
     /// **The dialogs answer for themselves, the table does not — yet.** Five
