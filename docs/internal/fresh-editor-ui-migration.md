@@ -340,7 +340,7 @@ section A.
 | C.2 | `WidgetInstanceState` — a `HashMap<String, _>` keyed by the widget's key. | Element state. Goal 4 names this failure exactly: identity by tree position and key, "never by hashing an identifier stack into a side table". | Keeping the map "because keys are already unique". The map is the side table. |
 | C.3 | `HitArea` (byte ranges) and `LayoutBox` (a parent-linked, z-ordered arena). | Both deleted. `LayoutBox` is a second layout tree; goal 5 allows one. | Keeping `LayoutBox` as the web bridge's hit list. The web is a consumer of the display list (D.3), which already carries keyed rectangles. |
 | C.4 | `WidgetMutation`'s fast path — a channel that patches retained state in place. | An ordinary rebuild. Goal 3: a rebuild costs one allocation per node, so the incentive the fast path answers does not exist. | Keeping it as an optimisation without measuring it against 0.4's benchmark. |
-| C.5 | Buffer-mounted panels (`mountWidgetPanel`). | A subtree in the pane's content slot; the virtual buffer stays as a text mirror for search, copy and the `lines_changed` hooks. Removes the documented limitation that mounted panels drop overlays and popups. | Deciding it by which is less work. It is the only open *design* question left in the whole migration: it was deferred deliberately, to be taken with C.1's experience in hand, not settled by default. |
+| C.5 | Buffer-mounted panels (`mountWidgetPanel`). | **Decided: a subtree in the pane's content slot**; the virtual buffer stays as a text mirror for search, copy and the `lines_changed` hooks. Removes the documented limitation that mounted panels drop overlays and popups. The argument, and the first step, are under "What the table settles" above — in short: `widgets::node` is slot-agnostic and the runtime already renders a mounted spec through the identical path, so the seam is where the result is drawn rather than how it is built; and these panels are the last thing keeping C.2, C.3 and C.4 alive. | Deciding it by which is less work. It was the only open *design* question left in the whole migration, deferred deliberately to be taken with C.1's experience in hand rather than settled by default. |
 | ~~C.5b~~ **Done.** | **The dock is editor-global UI built from `Editor.windows`, not from the active window.** Its content is the orchestrator's `WidgetSpec`; its column, grip and blur observer are already nodes. **Its paint order is fixed** (see below), which was a prerequisite nobody had written down. | Its content lands like any other panel (C.1), mounted *outside* the window key per 0.5: `Frame::dock_interior` is `panel_interior(PanelSlot::Dock)` and `render_floating_widget_panel`'s `described` gate no longer names the dock. Both of the things that "needed deciding" are decided. The dead-space press became `DockFocus` — the half of `DockPress` that was never about geometry. **The wheel is the viewport's**, and the arm that took it was worse than dead: `fresh-ui` chains a notch into a viewport only when nothing claimed it, so the catch-all `e.stop()` stopped the sessions list scrolling, while `DockScroll` went on moving the runtime's `WidgetInstanceState::scroll_offset` — which the description does not read but `probe_floating_widget` still does, so a few notches put hover and the context menu on a different row from the one drawn. It fires only while the interior is still a painter. **What the row got wrong** is the third clause: the right-press context menu *does* need something, because `probe_floating_widget`'s boxes come from a second layout of the same spec, and the interior was being laid out two columns wider than the runtime lays it (`floating_panel_inner_width` takes the divider and a column of slack). It takes the same two now. Its own two remainders are both closed: `chrome::Dock::on_layer_key` went with A.2, and the scrollbar-reveal hover came back as a library primitive rather than staying dead. **`Modality` was not the only claim missing a word — so was "this bar is an overlay bar".** `Node::scrollbar_revealed(shown)` is a bar that keeps its column and is drawn only while the caller says so, and its second half is the one worth having: a withheld bar is not *there*, so the pre-propagation `scrollbar_hit` does not grab a column nobody can see. What the caller says is `widgets::Ctx::scrollbar_reveal` — `None` for every panel but the dock, `Some(hovered || flashing)` for it — and neither half of that is the tree's to know: the flash is a deadline the plugin arms through `WidgetEffects::flash_scrollbar`, and the hover is now `UiFact::DockHover`, one pair of Enter/Leave listeners on the column's own surface where the painter recorded `scrollbar_hover_zones` and a mouse arm compared every motion event against them. Leaving it dead would have made a *plugin-facing* effect a no-op, which is the line the API promise draws. **And the column it is in is the painter's**: the interior is laid one wider than it wraps, so the slack column between the content and the divider is the panel's — the row band reaches the divider again (`dock_compact_row_hover_band_spans_the_dock`) and the overlay bar is drawn over it. The wrap width is still the runtime's, because `probe_floating_widget`'s boxes come from a second layout at it; that seam goes when C.1's remaining half does. | Building its description from `active_window()`. `shell_frame` does that for nearly everything else, and the dock is the one surface for which it is wrong. |
 
 **The dock was painting over the tree, and had been since the band existed.**
@@ -673,9 +673,48 @@ substitution rather than a rewrite.
   "confined to a region" from "confined to the frame". Before #3108 they
   would have been two mechanisms.
 
-What the table does *not* settle is C.5 — whether a buffer-mounted panel is a
-subtree in the pane's content slot or stays a virtual buffer. That was
-deferred deliberately, to be taken with C.1's experience in hand.
+**C.5 is settled, and C.1's experience is what settles it: a buffer-mounted
+panel is a subtree in the pane's content slot, and the virtual buffer stays
+as a text mirror.**
+
+The question was left open because the experience might have shown the
+translation to be lossy enough that a pane-mounted panel wanted to stay text.
+It showed the opposite, three times over. `view::shell::widgets::node` is
+*slot-agnostic* — `Ctx::slot` names only where the facts go, and nothing in
+the translation asks where the surface lives — so the same nineteen variants
+that crossed for the dock and the floating panel cross here unchanged. And
+the runtime already treats the two the same: `render_widget_panel` renders a
+buffer-mounted spec through the identical path, with `slot_for_panel_buffer`
+returning `None` and the width coming from `widget_panel_width` instead of
+`floating_panel_inner_width`. The seam is where the result is *drawn*, not
+how it is built.
+
+What the described panels then proved is that the second half follows on its
+own: once the spec is a subtree, the panel answers its own hover, its own
+left press, its own right press and its own wheel from rectangles layout
+already produced, and `probe_floating_widget` — the second layout of the same
+spec — has no reader left. That is the argument for doing it here as well,
+and it is also what makes C.2, C.3 and C.4 deletable rather than merely
+smaller: the buffer-mounted panels are the last thing keeping
+`WidgetInstanceState`, `LayoutBox` and the mutation fast path alive.
+
+The mirror is not the rendering path and never was. Search, copy and the
+`lines_changed` hooks read *text*, and the runtime already fills the mirror
+for a described panel while the tree draws it. Keeping it costs a text
+buffer; it buys the three features that are genuinely about text.
+
+And the case *for* the move, rather than merely the absence of a case
+against: a mounted panel today drops overlays and popups, which is a
+documented limitation and a direct consequence of the mirror being text.
+A subtree gets the pop-overs the dock's dropdown already has, for free,
+because a layer is a layer wherever it is declared.
+
+**First step**, the same one C.1 took: `Slot` gains the pane, so a fact from a
+described pane-mounted panel names which one — everything else in
+`widgets::node` is already slot-agnostic — and `view::shell::splits`'
+`content()` returns that subtree in place of the `Host` leaf when the pane's
+buffer is a widget panel and `widgets::covered` says yes. `WindowEmbed` keeps
+the leaf, by G's rule, exactly as it does for the floating panel.
 
 ### D. Paint arrangements still mixed
 
