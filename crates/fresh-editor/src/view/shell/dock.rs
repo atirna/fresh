@@ -226,6 +226,21 @@ const DIVIDER_COLS: u16 = 1;
 /// While the interior is still a painter the border stays the painter's, so
 /// this draws nothing but the hover: two nodes painting one cell is how they
 /// drift apart.
+///
+/// **The one thing that interrupts it is the active card's tab** (F.8), and
+/// it is not this node's business which rows those are. The dock's active
+/// session reads as a browser tab merging into the editor: its card's rows
+/// lose their right border and the divider is scooped away across them, `╯`
+/// above and `╮` below. That band is the *card's*, and only the card can say
+/// where it is — it moves with the tree's scroll, and a card scrolled half
+/// out of the list has no tab at all — so the card declares the scoop itself,
+/// anchored to its own block, as a layer over this column
+/// (`widgets::tab_scoop`). This still draws the divider whole: the rule "the
+/// dock has a wall down its last cell" is one fact with one author, and what
+/// the tab says is the separate fact that the active card is open on that
+/// side. The alternative — passing a row band from the interior to here —
+/// would be the two halves of one rectangle computed twice, which is what
+/// the painter did and what F.8 was.
 fn grip_ink(hovered: bool, focused: bool, described: bool) -> Node<UiMsg> {
     use crate::app::shell_host::shell_theme::pair;
     let fg = match (hovered, focused) {

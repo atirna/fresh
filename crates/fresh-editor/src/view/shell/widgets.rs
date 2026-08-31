@@ -1248,10 +1248,12 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
         // — the library's cells-scrolling window, which clips at both edges by
         // construction and owns the offset itself.
         //
-        // The rows are the runtime's, marking included: a selected card gets
-        // the heavy box frame rather than a band, and those heavy glyphs are
-        // also the marker `paint_dock_seamless_active_tab` keys on to merge
-        // the active card into the editor beside it.
+        // The rows are the runtime's, and so is most of the marking: a
+        // selected card gets a box frame rather than a band, because a band
+        // "reads garish over a multi-row card". Which frame is this module's,
+        // and it depends on what the card is standing next to — the heavy one
+        // everywhere, and in the dock the seamless tab, which is
+        // [`open_card_edge`] and [`tab_scoop`] together.
         WidgetSpec::Tree {
             nodes,
             item_keys,
@@ -1297,14 +1299,25 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 // block selects as one unit and so must light as one — and
                 // selection outranks it.
                 let as_card = crate::widgets::render::tree_node_is_card(&n, *checkable);
+                // **In the dock, the selected card is the seamless tab.**
+                // There the card sits against a wall — `dock::grip_ink`'s
+                // divider, in the column's last cell — and the active session
+                // is the one mirrored in the editor beside it, so its card
+                // opens onto the editor instead of being boxed off from it
+                // (F.8). That is the whole marker, and it is made of glyphs:
+                // nothing here depends on a colour. Everywhere else there is
+                // no wall to open onto, so the heavy frame stays what
+                // selection looks like.
+                let tab = is_selected && as_card && matches!(cx.slot, Slot::Dock);
                 let hovered = !is_selected
                     && !cx.hovered_item_key.is_empty()
                     && cx.hovered_item_key == item_key;
                 let dress = |e: &mut TextPropertyEntry| {
                     if is_selected {
-                        match as_card {
-                            true => crate::widgets::render::mark_list_card_selected(e),
-                            false => {
+                        match (as_card, tab) {
+                            (true, true) => open_card_edge(e),
+                            (true, false) => crate::widgets::render::mark_list_card_selected(e),
+                            (false, _) => {
                                 let mut st = e.style.clone().unwrap_or_default();
                                 st.bg = Some(OverlayColorSpec::theme_key("ui.popup_selection_bg"));
                                 st.extend_to_line_end = true;
@@ -1372,14 +1385,16 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                     });
                 }
                 let h = rows.len() as u32;
+                let block = fresh_ui::Key::Str(
+                    match item_key.is_empty() {
+                        true => i.to_string(),
+                        false => item_key.clone(),
+                    }
+                    .into(),
+                );
                 blocks.push(Chunk {
-                    key: fresh_ui::Key::Str(
-                        match item_key.is_empty() {
-                            true => i.to_string(),
-                            false => item_key.clone(),
-                        }
-                        .into(),
-                    ),
+                    edge: tab.then(|| tab_scoop(block.clone(), at, h, &cx.surface)),
+                    key: block,
                     start: at,
                     rows,
                 });
@@ -1670,6 +1685,128 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
     }
 }
 
+/// One row of the dock's active card, with its right edge opened.
+///
+/// **The card keeps its own light glyphs; what changes is the last one.** A
+/// border row's closing corner becomes another `─`, so the rule runs on to
+/// where the wall is and [`tab_scoop`] turns it back with `╯` above and `╮`
+/// below; a content row's closing `│` becomes a space, so the row flows into
+/// the editor with no wall between them. The left border, the text and every
+/// overlay on it are untouched — and so are the byte offsets, because the
+/// glyph replaced is the row's last.
+///
+/// The emphasis is [`crate::widgets::render::mark_list_card_selected`]'s,
+/// minus its glyph swap: the heavy frame is a marker for a card that has
+/// nothing else to say selection with, and the tab says it by *shape*, which
+/// no theme can wash out either.
+fn open_card_edge(entry: &mut TextPropertyEntry) {
+    let end = entry.text.trim_end_matches('\n').len();
+    if let Some(edge) = entry.text[..end].chars().next_back() {
+        let open = match edge {
+            '╮' | '╯' => Some('─'),
+            '│' => Some(' '),
+            _ => None,
+        };
+        if let Some(open) = open {
+            entry
+                .text
+                .replace_range(end - edge.len_utf8()..end, open.encode_utf8(&mut [0u8; 4]));
+        }
+    }
+    let mut st = entry.style.clone().unwrap_or_default();
+    st.bold = true;
+    // `trim_start`: tree cards indent nested rows by depth, so the border
+    // glyph may sit after leading spaces.
+    let head = entry.text.trim_start();
+    if head.starts_with('╭') || head.starts_with('╰') {
+        // A pure border row, so a whole-row fg tints the whole rule.
+        st.fg = Some(OverlayColorSpec::theme_key("ui.popup_border_fg"));
+        entry.style = Some(st);
+        return;
+    }
+    // A content row holds the session's text after the left border. A
+    // whole-row fg would repaint that text, so only the border glyph is
+    // tinted — and there is only one of them now.
+    entry.style = Some(st);
+    if let Some(bar) = entry.text.find('│') {
+        entry
+            .inline_overlays
+            .push(fresh_core::text_property::InlineOverlay {
+                start: bar,
+                end: bar + '│'.len_utf8(),
+                style: OverlayOptions {
+                    fg: Some(OverlayColorSpec::theme_key("ui.popup_border_fg")),
+                    bold: true,
+                    ..Default::default()
+                },
+                properties: Default::default(),
+                unit: fresh_core::text_property::OffsetUnit::Byte,
+            });
+    }
+}
+
+/// The dock's divider, interrupted across the active card's rows: `╯` where
+/// the card's top rule meets it, spaces beside the card's open rows, `╮`
+/// where its bottom rule does.
+///
+/// **The band never travels.** The two halves of the seamless tab are the
+/// card's rows ([`open_card_edge`]) and this, and what they have to agree
+/// about is *which rows* — a fact that was a screen band in the painter, read
+/// back off the cells it had just written. Here the scoop is declared by the
+/// card itself and anchored to the card's own block, so layout answers where
+/// the band is, in the same frame that drew it: [`fresh_ui::Anchor::Node`] on
+/// the key the block already carries, placed `RightOf` it, which is the
+/// column's last cell because the block is as wide as the panel's rows.
+///
+/// **A layer, because the divider is drawn under it.** `dock::grip_ink` draws
+/// one `│` per row of the whole column and does not know a card is there;
+/// this is out of flow, so it paints above that column and takes those cells
+/// back. It claims no pointer: the cell it covers is still the width grip's
+/// to drag.
+///
+/// `start` and `rows` are the block's own place in the tree's content, and
+/// they are here for the one thing layout will not do: a card scrolled half
+/// out of the window still *has* a rectangle, and a scoop placed against it
+/// would land on the toolbar above the list or the column below it. The
+/// enclosing viewport's window is what says whether the whole card is on
+/// screen, and inside the viewport it is there for the asking — this is the
+/// guard the painter spelled as "only when both border rows survived".
+fn tab_scoop(block: fresh_ui::Key, start: u32, rows: u32, surface: &Ink) -> Node<UiMsg> {
+    let ink = surface
+        .clone()
+        .with_fg(Paint::key("ui.popup_border_fg"))
+        .to_string();
+    fresh_ui::layout_reader(move |i: fresh_ui::LayoutInfo| {
+        let hidden = || row().h(Sizing::Cells(0));
+        // Three rows at the least: a rule, something between, a rule.
+        let Some(win) = i.scroll_window.filter(|_| rows >= 3) else {
+            return hidden();
+        };
+        let (top, bottom) = (i64::from(start), i64::from(start + rows));
+        let (win_top, win_bottom) = (i64::from(win.y), i64::from(win.y) + i64::from(win.h));
+        if top < win_top || bottom > win_bottom {
+            return hidden();
+        }
+        let ink = ink.clone();
+        fresh_ui::layer()
+            .anchor(fresh_ui::Anchor::Node(block.clone()))
+            .place(fresh_ui::Place::RightOf)
+            .pointer_mode(fresh_ui::PointerMode::Ignore)
+            .child(col().children((0..rows).map(|r| {
+                let glyph = match r {
+                    0 => "╯",
+                    r if r + 1 == rows => "╮",
+                    _ => " ",
+                };
+                fresh_ui::text(glyph)
+                    .theme(ink.clone())
+                    .w(Sizing::Cells(1))
+                    .h(Sizing::Cells(1))
+            })))
+    })
+    .h(Sizing::Cells(0))
+}
+
 /// One addressable run of rows inside a [`Scrolled`]: a card tree's node, or
 /// a single line of a text area. `start` is where it begins in the content.
 struct Chunk {
@@ -1677,6 +1814,11 @@ struct Chunk {
     /// First row of this block within the whole tree's rows.
     start: u32,
     rows: Vec<Node<UiMsg>>,
+    /// What this block does to the column's right edge, if anything: the
+    /// dock's active card scoops the divider away across its own rows (see
+    /// [`tab_scoop`]). Out of flow, so it is not one of `rows` — the row
+    /// count is what `start` and the reveal are counted in.
+    edge: Option<Node<UiMsg>>,
 }
 
 #[derive(Default)]
@@ -1734,11 +1876,11 @@ impl fresh_ui::Component<UiMsg> for Scrolled {
         }
         let mut content = col();
         for b in self.blocks.iter() {
-            content = content.child(
-                col()
-                    .key(b.key.clone())
-                    .children(b.rows.iter().map(|r| r.clone())),
-            );
+            let block = col().key(b.key.clone()).children(b.rows.iter().cloned());
+            content = content.child(match b.edge.clone() {
+                Some(e) => block.child(e),
+                None => block,
+            });
         }
         let body = fresh_ui::viewport(content)
             .scrollbar_when(self.reveal)
@@ -4534,9 +4676,10 @@ mod tests {
         assert_eq!(band("s1"), (y0 + 5, 5), "and the next block under it");
     }
 
-    /// The selected card is framed in heavy glyphs — the marker
-    /// `paint_dock_seamless_active_tab` keys on, so a background band here
-    /// would silently lose the seamless-tab treatment.
+    /// The selected card is framed in heavy glyphs, wherever there is no wall
+    /// for it to open onto: a background band "reads garish over a multi-row
+    /// card", and the frame is a marker no theme can wash out. In the dock it
+    /// is the seamless tab instead — see below.
     #[test]
     fn the_selected_card_is_framed_in_heavy_glyphs() {
         let picked = tree_rows(&card_tree(3, 1, 20));
@@ -4548,6 +4691,97 @@ mod tests {
         assert!(
             !plain.iter().any(|r| r.contains('┏')),
             "and only when something is selected: {plain:?}"
+        );
+    }
+
+    /// **In the dock the selected card is the seamless tab** (F.8): its rows
+    /// keep the light box and lose the right border, so the active session's
+    /// card flows into the editor mirroring it, and the column's divider is
+    /// scooped away across exactly those rows — `╯` where the card's top rule
+    /// meets it, `╮` where its bottom rule does.
+    ///
+    /// Both halves are asserted from one laid-out frame, because the whole
+    /// point is that they agree without a band travelling between them: the
+    /// scoop is anchored to the card's own block, so it is at the block's
+    /// right edge and as tall as the block by construction rather than by
+    /// arithmetic.
+    #[test]
+    fn the_docks_selected_card_opens_onto_the_editor() {
+        let dock = Ctx {
+            slot: Slot::Dock,
+            ..cx()
+        };
+        let spec = card_tree(3, 1, 20);
+        let rows = tree_text(&spec, &dock);
+        assert!(
+            !rows.iter().any(|r| r.contains('┏')),
+            "the tab is the marker here, not a heavy frame: {rows:?}"
+        );
+        let open: Vec<&String> = rows
+            .iter()
+            .filter(|r| r.starts_with('╭') || r.starts_with('╰'))
+            .collect();
+        assert!(
+            open.iter().any(|r| r.ends_with('─')),
+            "the selected card's rules run on to the wall: {rows:?}"
+        );
+        assert!(
+            open.iter().any(|r| r.ends_with('╮')) && open.iter().any(|r| r.ends_with('╯')),
+            "and every other card still closes its box: {rows:?}"
+        );
+
+        // The scoop itself: one column wide, at the right edge of the card it
+        // belongs to, top and bottom turning back into the divider.
+        // The dock's own geometry: the panel is `WIDTH` wide and the column
+        // has one more cell, which is the divider's.
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            node(&spec, WIDTH, &dock).w(Sizing::Cells(WIDTH)),
+            Size::new(WIDTH + 1, 24),
+        );
+        let card = ui.rect_of(
+            ui.find_by_key(&fresh_ui::Key::Str("s1".into()))
+                .expect("the selected card's block"),
+        );
+        let scoop: Vec<(i32, i32, String)> = ui
+            .spec()
+            .layers()
+            .iter()
+            .filter_map(|i| match &i.draw {
+                fresh_ui::Draw::Lines(l) => Some((i.rect.x, i.rect.y, l.concat())),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            scoop.iter().all(|(x, ..)| *x == card.x + card.w as i32),
+            "the scoop sits in the column's last cell, past the card: {scoop:?} vs {card:?}"
+        );
+        let glyphs: Vec<&str> = scoop.iter().map(|(_, _, g)| g.as_str()).collect();
+        assert_eq!(
+            glyphs,
+            vec!["╯", " ", " ", " ", "╮"],
+            "the divider turns away above the card and back below it"
+        );
+        assert_eq!(
+            (scoop.first().map(|(_, y, _)| *y), scoop.len()),
+            (Some(card.y), card.h as usize),
+            "across the card's rows and no others"
+        );
+    }
+
+    /// …and only in the dock: everywhere else the card has no wall beside it,
+    /// so nothing is scooped and the heavy frame stays the marker.
+    #[test]
+    fn no_other_surface_scoops_a_divider() {
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            node(&card_tree(3, 1, 20), WIDTH, &cx()),
+            Size::new(WIDTH, 24),
+        );
+        assert!(
+            ui.spec().layers().is_empty(),
+            "a floating panel's selected card declares no edge: {:?}",
+            ui.spec().layers()
         );
     }
 
