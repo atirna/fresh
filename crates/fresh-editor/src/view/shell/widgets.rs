@@ -871,15 +871,24 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             // when it widens a completion popup back out by four. Two of those
             // columns are on this side, so an overlay the child floats starts
             // two left of where the child does.
-            let framed = col().theme(ring.clone()).border().pad(1, 0).child(node_in(
-                child,
-                width.saturating_sub(4).max(1),
-                cx,
-                Site {
-                    axis: Axis::Down,
-                    escape: 2,
-                },
-            ));
+            // **Rounded, because that is what this box has always been.**
+            // `render_section_top_border` writes `╭─ label ─…─╮`; the fold's
+            // border was unconditionally `┌┐└┘`, so describing the section
+            // squared it off. `BorderStyle` is the description saying which
+            // corner set it meant — see `fresh_ui::BorderStyle`.
+            let framed = col()
+                .theme(ring.clone())
+                .border_style(fresh_ui::BorderStyle::Rounded)
+                .pad(1, 0)
+                .child(node_in(
+                    child,
+                    width.saturating_sub(4).max(1),
+                    cx,
+                    Site {
+                        axis: Axis::Down,
+                        escape: 2,
+                    },
+                ));
             match label.is_empty() {
                 true => framed,
                 // The legend rides the top edge, the way every other titled
@@ -2869,21 +2878,25 @@ mod tests {
                     }
                 }
                 // The glyphs `fold::border` writes, so the two agree on what a
-                // bordered node looks like.
-                fresh_ui::Draw::Border if r.w >= 2 && r.h >= 2 => {
+                // bordered node looks like — including which corner set, now
+                // that a description can name one. A mirror that hard-coded
+                // `┌┐└┘` would put square corners into the text a user copies
+                // out of a rounded box.
+                fresh_ui::Draw::Border(bs) if r.w >= 2 && r.h >= 2 => {
                     let (right, low) = (r.x + r.w as i32 - 1, r.y + r.h as i32 - 1);
+                    let (h, v, tl, tr, br, bl) = bs.glyphs();
                     for x in r.x..=right {
-                        put(&mut grid, &mut bottom, x, r.y, '─');
-                        put(&mut grid, &mut bottom, x, low, '─');
+                        put(&mut grid, &mut bottom, x, r.y, h);
+                        put(&mut grid, &mut bottom, x, low, h);
                     }
                     for y in r.y..=low {
-                        put(&mut grid, &mut bottom, r.x, y, '│');
-                        put(&mut grid, &mut bottom, right, y, '│');
+                        put(&mut grid, &mut bottom, r.x, y, v);
+                        put(&mut grid, &mut bottom, right, y, v);
                     }
-                    put(&mut grid, &mut bottom, r.x, r.y, '┌');
-                    put(&mut grid, &mut bottom, right, r.y, '┐');
-                    put(&mut grid, &mut bottom, r.x, low, '└');
-                    put(&mut grid, &mut bottom, right, low, '┘');
+                    put(&mut grid, &mut bottom, r.x, r.y, tl);
+                    put(&mut grid, &mut bottom, right, r.y, tr);
+                    put(&mut grid, &mut bottom, r.x, low, bl);
+                    put(&mut grid, &mut bottom, right, low, br);
                 }
                 _ => {}
             }

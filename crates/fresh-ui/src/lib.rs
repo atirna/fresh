@@ -64,7 +64,7 @@ pub use render::object::{
     FocusReg, Geom, Hit, HostLeaf, LayerGeom, LayoutCx, LayoutInfo, PlainHost, RenderId,
     RenderObject, ScrollInfo,
 };
-pub use render::spec::{CursorSpec, Draw, DrawList, Item, LayoutSpec, ThemeKey};
+pub use render::spec::{BorderStyle, CursorSpec, Draw, DrawList, Item, LayoutSpec, ThemeKey};
 pub use schedule::{BuildCx, DirtyCause, InitCx, NullRenderer, Renderer, Sched, Ui, Updater};
 pub use services::{GeomHandle, GeomSnapshot, Geometry, Job, Services};
 pub use widgets::{
