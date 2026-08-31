@@ -1774,43 +1774,86 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 false => *focused,
             };
             let st = tx::resolve(value, *cursor_byte, false, key, cx.states);
-            let line = tx::single_line(
-                &st.editor,
-                st.scroll,
-                label,
-                placeholder.as_deref(),
+            // **The window becomes the element's here.**
+            //
+            // Which character the value starts at is a fold — "move just far
+            // enough that the caret shows" depends on where the window already
+            // was — and it lived in the runtime's registry, written by its
+            // walk at the width the *registry* recorded while this description
+            // draws at the width layout gave. The two agree only while those
+            // widths do. [`windowed`] gives it to the element, which is the
+            // one party that renders it, at the one width that is real. The
+            // registry's value seeds the cell on mount and is not read again.
+            //
+            // The candidate list's forward-only offset is the same shape and
+            // is *not* moved: it still comes from `st`, because it is the
+            // runtime's `SetCompletions` state that carries it. Named so the
+            // remaining half is visible.
+            let ed = st.editor.clone();
+            let label_s = label.clone();
+            let placeholder_s = placeholder.clone();
+            let key_s = key.map(|k| k.to_string());
+            let (fw, mvc, fullw, bc, sel, lw, gutter, w32) = (
                 *field_width,
                 *max_visible_chars,
                 *full_width,
                 *block_caret,
                 (*sel_start, *sel_end),
                 *label_width,
-                is_focused,
-                key,
                 cx.marker_gutter,
                 width as u32,
             );
+            let build_line = move |window: u32| {
+                tx::single_line(
+                    &ed,
+                    window,
+                    &label_s,
+                    placeholder_s.as_deref(),
+                    fw,
+                    mvc,
+                    fullw,
+                    bc,
+                    sel,
+                    lw,
+                    is_focused,
+                    key_s.as_deref(),
+                    gutter,
+                    w32,
+                )
+            };
             // One hit or none — an unkeyed field emits none, because a hit
             // with no widget to name could not say what it focused — and the
             // caret's marker rides in the same split, exactly as
             // `rows_with_hits` places it: the `block_caret` overlay is already
             // on the entry, and this is the *cell* the host drops a hardware
             // cursor into.
-            let hits: Vec<((usize, usize), crate::widgets::HitArea)> = line
-                .hit
-                .into_iter()
-                .map(|h| ((h.byte_start, h.byte_end), h))
-                .collect();
-            let field = match hits.is_empty() && line.caret.is_none() {
-                true => entry_row(&line.entry, &cx.surface),
-                false => row_pieces(
-                    &line.entry,
-                    cx.slot,
-                    &cx.surface,
-                    &hits,
-                    line.caret,
-                    Fill::ToRowEnd,
-                ),
+            let field = {
+                let (slot, surface) = (cx.slot, cx.surface.clone());
+                windowed(
+                    state_key(&key.map(|k| k.to_string())),
+                    st.scroll,
+                    move |window| {
+                        let line = build_line(window);
+                        let next = line.scroll;
+                        let hits: Vec<((usize, usize), crate::widgets::HitArea)> = line
+                            .hit
+                            .into_iter()
+                            .map(|h| ((h.byte_start, h.byte_end), h))
+                            .collect();
+                        let node = match hits.is_empty() && line.caret.is_none() {
+                            true => entry_row(&line.entry, &surface),
+                            false => row_pieces(
+                                &line.entry,
+                                slot,
+                                &surface,
+                                &hits,
+                                line.caret,
+                                Fill::ToRowEnd,
+                            ),
+                        };
+                        (node, next)
+                    },
+                )
             };
             let Some(popup) = tx::completion_popup(
                 &st.completions,
@@ -2168,6 +2211,68 @@ struct Scrolled {
     /// See [`Ctx::scrollbar_reveal`]. Carried rather than read from a context
     /// because a component builds outside the one that described it.
     reveal: Option<bool>,
+}
+
+/// **A fold the element owns**, for a builder that computes one while it
+/// renders.
+///
+/// Most of what the widget runtime kept in its instance-state map is a
+/// *derivation* — a clamp, a sanitize, a focus gate — recomputed identically on
+/// every read, so storing it only made the render walk a second writer. Those
+/// have been deleted. What is left is the other kind: a value whose own
+/// previous value is an input. "Move the window just far enough that the caret
+/// is visible" answers differently for the same caret depending on where the
+/// window already sat, so it cannot be recomputed and has to be remembered.
+///
+/// A component's state is the right home for it, and the argument is the one
+/// `fresh_ui::widgets::FieldState` already makes about a caret: it exists
+/// exactly as long as the thing is on screen. Held instead in a host-side map,
+/// the fold is written by whoever renders first at whatever width *they* were
+/// working at, and read by whoever renders second — which for a text field
+/// meant the runtime deciding the window at the width its registry recorded
+/// while the description drew it at the width layout gave.
+///
+/// `build` is handed the current value and returns its node together with the
+/// value this render chose. `seed` is used once, on mount.
+fn windowed(
+    key: Option<fresh_ui::Key>,
+    seed: u32,
+    build: impl Fn(u32) -> (Node<UiMsg>, u32) + 'static,
+) -> Node<UiMsg> {
+    struct Windowed {
+        seed: u32,
+        build: std::rc::Rc<dyn Fn(u32) -> (Node<UiMsg>, u32)>,
+    }
+    impl fresh_ui::Component<UiMsg> for Windowed {
+        type State = std::cell::Cell<u32>;
+
+        fn init(&self, _cx: &mut fresh_ui::InitCx<'_, UiMsg>) -> std::cell::Cell<u32> {
+            std::cell::Cell::new(self.seed)
+        }
+
+        /// **Written during the build, through a `Cell`.**
+        ///
+        /// `build` takes `&Self::State`, which is the right signature: a
+        /// component's state is not the reconciler's to mutate mid-build, and
+        /// nothing here asks it to. This is the component's own scratch — no
+        /// reconciliation decision reads it, and `memo` compares props — so
+        /// interior mutability is the whole mechanism, and no library change
+        /// was needed to own a fold.
+        fn build(
+            &self,
+            w: &std::cell::Cell<u32>,
+            _cx: &mut fresh_ui::BuildCx<'_, UiMsg>,
+        ) -> Node<UiMsg> {
+            let (node, next) = (self.build)(w.get());
+            w.set(next);
+            node
+        }
+    }
+    let n = fresh_ui::ComponentExt::node(Windowed {
+        seed,
+        build: std::rc::Rc::new(build),
+    });
+    keyed(n, key)
 }
 
 impl fresh_ui::Component<UiMsg> for Scrolled {
