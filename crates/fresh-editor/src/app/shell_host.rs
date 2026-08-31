@@ -1553,6 +1553,51 @@ impl Editor {
             UiFact::PaneScrollbarHover(at) => {
                 self.shell_hover = at.and_then(|(pane, row)| self.scrollbar_hover(pane, row));
             }
+            // **The bar captured the pointer, so this is its move.** Whether
+            // it means a drag is state this side holds: a bar's `Move` fires
+            // on a bare hover too, and then the vertical one's job is the
+            // highlight that follows the pointer between thumb and track.
+            //
+            // What this replaces is `chrome::pointer_grab` reading
+            // `mouse_state.dragging_scrollbar` on every event to decide whose
+            // drag it was, ranked against nine other flags.
+            UiFact::PaneScrollbarDrag { pane, axis, x, y } => {
+                let ms = &self.active_window().mouse_state;
+                let dragging = match axis {
+                    fresh_ui::Axis::Vertical => ms.dragging_scrollbar.is_some(),
+                    fresh_ui::Axis::Horizontal => ms.dragging_horizontal_scrollbar.is_some(),
+                };
+                if !dragging {
+                    if axis == fresh_ui::Axis::Vertical {
+                        self.shell_hover = self.scrollbar_hover(pane, y);
+                    }
+                    return;
+                }
+                let r = match axis {
+                    fresh_ui::Axis::Vertical => self.handle_vscrollbar_drag(x, y),
+                    fresh_ui::Axis::Horizontal => self.handle_hscrollbar_drag(x, y),
+                };
+                if let Err(e) = r {
+                    tracing::warn!("scrollbar drag failed: {e}");
+                }
+            }
+            // The finalizer the blanket clear used to run for this grab. The
+            // release is the captured bar's, so it never reaches that walk.
+            UiFact::PaneScrollbarRelease { pane: _, axis } => {
+                let ms = &mut self.active_window_mut().mouse_state;
+                match axis {
+                    fresh_ui::Axis::Vertical => {
+                        ms.dragging_scrollbar = None;
+                        ms.drag_start_row = None;
+                        ms.drag_start_top_byte = None;
+                    }
+                    fresh_ui::Axis::Horizontal => {
+                        ms.dragging_horizontal_scrollbar = None;
+                        ms.drag_start_hcol = None;
+                        ms.drag_start_left_column = None;
+                    }
+                }
+            }
             UiFact::PaneWheel { pane, x, y, delta } => {
                 // A live terminal that asked for the mouse gets the notch —
                 // the same gate the content's press asks, for the same reason.

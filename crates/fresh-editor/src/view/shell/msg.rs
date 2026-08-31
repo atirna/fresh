@@ -179,6 +179,28 @@ pub enum UiFact {
     /// The pointer is on a pane's vertical scrollbar at a row, or has left it.
     /// Thumb or track is decided from the recorded thumb extent.
     PaneScrollbarHover(Option<(LeafId, u16)>),
+    /// The pointer moved while a pane's scrollbar holds it.
+    ///
+    /// **The bar captured the pointer on its press**, so this arrives wherever
+    /// the pointer has travelled — which is the whole of what
+    /// `chrome::PointerGrab::{VScrollbar, HScrollbar}` and the ladder that
+    /// ranked them were arranging by hand. A thumb drag leaves the bar's
+    /// column on its first step, and that is why the ranking existed.
+    ///
+    /// It fires on a bare hover over the bar too, so whether a drag is in
+    /// progress is state the applier holds and the applier that decides —
+    /// exactly as `UiFact::GripDrag` does for the three grips that left.
+    PaneScrollbarDrag {
+        pane: LeafId,
+        axis: fresh_ui::Axis,
+        x: u16,
+        y: u16,
+    },
+    /// The press that started a pane scrollbar's drag has been released.
+    PaneScrollbarRelease {
+        pane: LeafId,
+        axis: fresh_ui::Axis,
+    },
     /// A wheel notch over a pane — its content, either of its bars, whichever
     /// part reported it. They all mean the same thing: move this pane's
     /// surface. Carries the pointer's cell for the plugin `mouse_wheel` hook.
