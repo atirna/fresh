@@ -110,21 +110,35 @@ pub(crate) fn any_layer_blocks_terminal_input(layers: &[Layer]) -> bool {
     layers.iter().any(|l| l.blocks_terminal_input)
 }
 
-// **The ranked ordering read is gone.** `popup_blocked_by_higher_modal` was
-// here: walk the stack down to the `Popup` entry and ask whether anything
-// above it owns the keyboard. It was the last ordering reader of this list
-// that was not `get_key_context`, and the tree answers it by containment —
-// `Ui::focus_confined`, since a layer that confines focus is one that owns
-// the keyboard, and the focused element's ancestor chain names them. See
-// `Editor::resolve_unfocused_popup_action`.
-//
-// What is left reading this list reads it as a *set*
-// (`any_layer_blocks_terminal_input`, `cursor_suppressed_by_late_overlay`),
-// where the ranks were already irrelevant, plus `resolve_focus_context` —
-// which is A.5's, and cannot become a tree read for the reason written up
-// under section A: a rung may mutate state and then decline, so a lower
-// rung's context must be re-derived against post-mutation state, and the
-// tree is rebuilt once per frame.
+/// True iff a layer ranked *above* the popup layer currently owns the
+/// keyboard. Used by the unfocused-popup key interception: while one of those
+/// owns the keyboard the popup must not intercept keys. Callers guarantee a
+/// `Popup` layer is present, so the `take_while` stops before the editor base
+/// layer.
+///
+/// **This is an ordering read, and A.4 wants it gone — but not by asking the
+/// tree.** It looks like containment: a layer that confines focus is one that
+/// owns the keyboard, and `Ui::focus_confined` answers exactly that by
+/// walking the focused element's ancestors. Substituting it is wrong, and the
+/// library says so in `a_dismissed_layer_still_confines_focus_until_the_next_frame`:
+/// a layer dismissed *by this keystroke* goes on confining focus until the app
+/// stops declaring it, because the library does not unilaterally remove an
+/// application's layer. This guard runs inside `dispatch_base_key`, which is
+/// reached precisely when a surface declined — including a surface that
+/// dismissed itself passing through — so it is one of the positions that
+/// needs *post-mutation* truth.
+///
+/// That is the same obstacle `get_key_context` has, and it is why A.4's two
+/// ordering readers are one problem rather than two: both need a stack
+/// re-derived from live state, and A.5's answer — the keymap resolved in the
+/// tree at dispatch time, with no host-side context to be stale — is what
+/// dissolves them together.
+pub(crate) fn popup_blocked_by_higher_modal(layers: &[Layer]) -> bool {
+    layers
+        .iter()
+        .take_while(|l| l.kind != LayerKind::Popup)
+        .any(|l| l.owns_keyboard)
+}
 
 impl Editor {
     /// Whether editor-pane popups (LSP completion, hover, signature help,

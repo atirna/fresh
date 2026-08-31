@@ -1404,6 +1404,56 @@ fn confining_focus_and_swallowing_keys_are_asked_separately() {
     );
 }
 
+/// **A dismissed layer goes on confining focus until the frame is rebuilt**,
+/// and that is a limit worth stating rather than a bug to fix. The library
+/// does not unilaterally remove a layer the application declared: dismissal
+/// reports itself (`on_dismiss`) and the *app* stops declaring the surface on
+/// its next frame. So between the dismissal and that frame, the element is
+/// still on the focused chain.
+///
+/// The consequence for a host with its own pipeline behind the tree: this
+/// question answers "was a surface confining focus when this frame was
+/// built", not "is one confining it right now". A host that must know the
+/// second — because a rung may mutate state and then decline the same
+/// keystroke — has to re-derive from its own live state, and that is exactly
+/// why `fresh-editor`'s `get_key_context` and its unfocused-popup guard read
+/// an app-side stack rather than asking here.
+#[test]
+fn a_dismissed_layer_still_confines_focus_until_the_next_frame() {
+    let mut ui: Ui<()> = Ui::new();
+    let mk = || -> Node<()> {
+        col().children([
+            focusable(text("behind")),
+            layer()
+                .modality(Modality::Focus)
+                .dismiss(fresh_ui::Dismiss::ESCAPE)
+                .child(focusable(text("prompt")).autofocus()),
+        ])
+    };
+    ui.frame(mk(), FRAME);
+    assert!(
+        ui.focus_confined(),
+        "the prompt confines focus while it is up"
+    );
+
+    ui.dispatch(Input::Key(KeyPress {
+        code: KeyCode::Esc,
+        mods: Mods::NONE,
+    }));
+    assert!(
+        ui.focus_confined(),
+        "and goes on doing so until the app stops declaring it"
+    );
+
+    // The app's next frame is what actually takes it away.
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(col().child(focusable(text("behind")).autofocus()), FRAME);
+    assert!(
+        !ui.focus_confined(),
+        "with the layer gone from the description, nothing confines focus"
+    );
+}
+
 /// The partner: a `Focus` layer still claims what its chain *does* act on.
 /// Declining is a node not stopping the flow, not the layer being absent.
 #[test]
