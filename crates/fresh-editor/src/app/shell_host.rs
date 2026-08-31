@@ -383,6 +383,13 @@ impl crate::view::shell::fold::HostPainter for BodyPainter<'_> {
         let region = match target {
             HostTarget::Pane(leaf) => return self.pane(leaf, rect, buf, caret),
             HostTarget::Embed(window_id) => return self.embed(window_id, rect, buf),
+            // A band of the overlay prompt's card. Nothing paints per band:
+            // `render_overlay_prompt` draws the card whole, between the two
+            // fold bands, and the tree's job there is to say where the bands
+            // are so that painter and every read-back share one set of
+            // rectangles. Reached only if the card's layer is ever folded in a
+            // hosts-painting band; today it is not.
+            HostTarget::Card(_) => return,
             HostTarget::Region(r) => r,
         };
         match region {
@@ -395,17 +402,18 @@ impl crate::view::shell::fold::HostPainter for BodyPainter<'_> {
             // The prompt's input row: cells the fold writes, at the rectangle
             // layout gave the region.
             HostRegion::PromptLine => self.editor.render_prompt_line(buf, rect, caret),
-            // **Neither paints, and they reach here for different reasons.**
+            // **Neither paints, and both reach here only when empty.**
             //
             // The dock emits a `Host` only for a column with no mounted panel
             // — an empty dock, which has nothing to draw. It used to be the
             // seam the panel painter drew the interior through; that painter
             // is deleted, and the dock's content is the tree's.
             //
-            // The status bar's rectangle is a `Host` because its *prompt
-            // states* are the one row `Editor::render` still paints outside
-            // the fold. That is 4.1's remaining work for this region, not a
-            // no-op like the dock's.
+            // The status bar emits one only when it has no items: with items
+            // it is described down to the run, and the description leaves no
+            // `Host` behind. The prompt row is not this region — it is
+            // `HostRegion::PromptLine`, painted three arms above, inside the
+            // fold and at the rectangle layout gave it.
             HostRegion::Dock | HostRegion::StatusBar => {}
         }
     }

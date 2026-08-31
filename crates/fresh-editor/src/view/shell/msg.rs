@@ -378,10 +378,15 @@ pub enum UiFact {
         x: u16,
         y: u16,
     },
-    /// A left press inside the dock column, in screen coordinates. The panel's
-    /// widgets are a plugin's `WidgetSpec` rather than nodes, so the runtime
-    /// hit-tests its own boxes and the tree reports only where — the same seam
-    /// as `CardToolbarPress`.
+    /// A left press inside the dock column, in screen coordinates.
+    ///
+    /// **Only reachable for a dock with no described panel** — an empty
+    /// column, or one whose panel the adapter could not describe. A mounted
+    /// panel's widgets are nodes now and answer their own presses, and the
+    /// column emits [`UiFact::DockFocus`] instead. This arm survives because
+    /// `handle_floating_widget_click` still hit-tests the runtime's boxes for
+    /// that case, which needs a position — the same seam as
+    /// `CardToolbarPress`.
     DockPress {
         x: u16,
         y: u16,
