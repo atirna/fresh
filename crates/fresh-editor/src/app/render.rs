@@ -8208,6 +8208,19 @@ impl Editor {
             hovered_popup_row: panel.hovered_popup_row.clone(),
             marker_gutter: panel.focus_marker,
             avail_height: self.floating_panel_inner_height(slot),
+            // **The dock's bars are overlay bars.** Every other panel draws
+            // one whenever its content overflows; the dock's appears while
+            // the pointer is over the column or a keyboard move just flashed
+            // it, and is gone otherwise — see `widgets::Ctx::scrollbar_reveal`
+            // for why that is a fact handed down rather than a rule the tree
+            // could apply itself.
+            scrollbar_reveal: matches!(panel.placement, super::PanelPlacement::LeftDock { .. })
+                .then(|| {
+                    panel.scrollbar_zone_hovered
+                        || panel
+                            .scrollbar_flash_until
+                            .is_some_and(|until| self.time_source().now() < until)
+                }),
         })
     }
 

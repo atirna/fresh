@@ -387,6 +387,19 @@ pub enum UiFact {
         x: u16,
         y: u16,
     },
+    /// The pointer entered or left the dock column.
+    ///
+    /// **What an overlay scrollbar waits for.** The dock's bar is drawn while
+    /// the pointer is over the column and hidden otherwise — see
+    /// `view::shell::widgets::Ctx::scrollbar_reveal` — and this is the tree
+    /// saying which. It replaces `chrome::Dock::on_pointer_moved`'s cell test
+    /// against `scrollbar_hover_zones`, rectangles the painter recorded on
+    /// its way past and a mouse arm compared against afterwards: the same
+    /// defect this migration removes everywhere else, in its smallest form.
+    /// The zone became the column rather than each list's own region, which
+    /// is a strictly better answer to "is the pointer here" — the bar tells
+    /// you the column scrolls as soon as you are in it.
+    DockHover(bool),
     /// A press on the dock's right-edge grip: start a width drag.
     DockResizeBegin,
     /// The pointer moved while a grip holds it.

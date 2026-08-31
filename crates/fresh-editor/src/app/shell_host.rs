@@ -1751,6 +1751,15 @@ impl Editor {
             UiFact::DockScroll { delta, x, y } => {
                 self.handle_floating_widget_panel_wheel(crate::app::PanelSlot::Dock, x, y, delta);
             }
+            // The memo the overlay scrollbar reads. It is a memo rather than
+            // a value derived where it is used because the *other* thing that
+            // reveals the bar is a deadline (`scrollbar_flash_until`), and the
+            // two have to be one answer by the time the description is built.
+            UiFact::DockHover(over) => {
+                if let Some(d) = self.dock.as_mut() {
+                    d.scrollbar_zone_hovered = over;
+                }
+            }
             UiFact::DockResizeBegin => self.dock_resizing = true,
             // **The grip captured the pointer, so this is its move.** The
             // ladder these three replace read `chrome::pointer_grab` on every

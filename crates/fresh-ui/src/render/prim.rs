@@ -1191,7 +1191,10 @@ impl RenderObject for ViewportRender {
         if self.props.selectable {
             out.push(Draw::Selectable, g);
         }
-        if !self.props.scrollbar {
+        // A revealed bar that is not being revealed draws nothing. Its
+        // gutter is still reserved (a reveal implies a stable one), so the
+        // content does not move when it appears.
+        if !self.props.scrollbar || self.props.bar_hidden {
             return;
         }
         let (offset, content) = match self.props.mode {
@@ -1227,7 +1230,11 @@ impl RenderObject for ViewportRender {
     }
 
     fn shows_scrollbar(&self) -> bool {
-        self.props.scrollbar
+        // What this answers is whether the column is grabbable, so a
+        // withheld bar answers no: `hit.rs` starts a drag from a press on the
+        // track before propagation, and an invisible track would swallow a
+        // press aimed at the row behind it.
+        self.props.scrollbar && !self.props.bar_hidden
     }
 
     fn render_name(&self) -> &'static str {

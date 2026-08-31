@@ -780,6 +780,125 @@ fn a_stable_gutter_reserves_its_column_with_no_bar_to_put_in_it() {
     assert_eq!(row_width(&short), frame.w - 1, "the gutter is not content");
 }
 
+/// **An overlay bar: there, and not drawn.**
+///
+/// A window whose bar comes and goes is answering a question the window
+/// cannot ask — is anyone looking — so the caller answers it, once per frame.
+/// What the window owes in return is that nothing else moves: the gutter is
+/// the bar's column whether or not the bar is in it, because a column that
+/// appeared under the pointer would reflow the row being reached for.
+#[test]
+fn a_revealed_bar_comes_and_goes_without_moving_the_rows() {
+    let list = |shown: bool| -> Node<Msg> {
+        List::windowed(500, fresh_ui::Key::from, |i| {
+            fresh_ui::col()
+                .theme("list.row")
+                .child(fresh_ui::text(format!("row {i}")))
+        })
+        .scrollbar_revealed(shown)
+        .node()
+    };
+    let frame = Size::new(20, 5);
+    let ui_of = |shown: bool| {
+        let mut ui: Ui<Msg> = Ui::new();
+        ui.frame(list(shown), frame);
+        ui
+    };
+    let (hidden, shown) = (ui_of(false), ui_of(true));
+
+    assert!(
+        !hidden
+            .spec()
+            .items
+            .iter()
+            .any(|i| matches!(i.draw, Draw::Scrollbar { .. })),
+        "a bar nobody is revealing is not drawn, overflow or not"
+    );
+    let bar = shown
+        .spec()
+        .items
+        .iter()
+        .find(|i| matches!(i.draw, Draw::Scrollbar { .. }))
+        .expect("revealed, the same list shows its bar");
+    assert_eq!(bar.rect.x, frame.w as i32 - 1);
+
+    let row_width = |ui: &Ui<Msg>| {
+        ui.spec()
+            .items
+            .iter()
+            .filter(|i| matches!(i.draw, Draw::Fill))
+            .map(|i| i.rect.w)
+            .max()
+            .expect("rows paint their ground")
+    };
+    assert_eq!(
+        row_width(&hidden),
+        row_width(&shown),
+        "revealing the bar must not reflow the rows under the pointer"
+    );
+    assert_eq!(row_width(&hidden), frame.w - 1, "the gutter is not content");
+}
+
+/// **A bar nobody can see is a bar nobody can catch.**
+///
+/// The track's press is answered before propagation and jumps the window to
+/// the row pressed. A withheld bar still occupies its column — a reveal keeps
+/// the gutter, so the rows do not move — and a press there must do nothing at
+/// all rather than scroll a list to a place the user cannot see they asked
+/// for.
+#[test]
+fn a_withheld_bar_does_not_take_a_press_on_the_column_it_would_have_used() {
+    let frame = Size::new(20, 5);
+    let ui_of = |shown: bool| {
+        let mut ui: Ui<Msg> = Ui::new();
+        ui.frame(
+            List::windowed(500, fresh_ui::Key::from, |i| {
+                fresh_ui::col()
+                    .theme("list.row")
+                    .child(fresh_ui::text(format!("row {i}")))
+            })
+            .scrollbar_revealed(shown)
+            .node(),
+            frame,
+        );
+        ui
+    };
+    // Which rows the window holds, by the text it draws.
+    let rows = |ui: &Ui<Msg>| -> Vec<String> {
+        ui.spec()
+            .items
+            .iter()
+            .filter_map(|i| match &i.draw {
+                Draw::Lines(l) => Some(l.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    };
+    let press = |ui: &mut Ui<Msg>| {
+        let at = Point::new(frame.w as i32 - 1, frame.h as i32 - 1);
+        ui.dispatch(Input::press(at, MouseButton::Left, Mods::NONE));
+        ui.dispatch(Input::release(at, MouseButton::Left, Mods::NONE));
+        ui.tick();
+    };
+
+    // Revealed: the bottom of the track is the end of the list.
+    let mut shown = ui_of(true);
+    let before = rows(&shown);
+    press(&mut shown);
+    assert_ne!(rows(&shown), before, "a visible track jumps the window");
+
+    // Withheld: the same cell moves nothing.
+    let mut hidden = ui_of(false);
+    let before = rows(&hidden);
+    press(&mut hidden);
+    assert_eq!(
+        rows(&hidden),
+        before,
+        "a bar that is not drawn must not be grabbable either"
+    );
+}
+
 /// **The bar's appearance is named apart from the window's.**
 ///
 /// `theme` tags a node *and its descendants*, and a region that names its

@@ -169,6 +169,7 @@ pub struct List<M> {
     autofocus: bool,
     scrollbar: bool,
     stable_gutter: bool,
+    bar_hidden: bool,
     bar_theme: Option<String>,
     #[allow(clippy::type_complexity)]
     row_theme: Option<Rc<dyn Fn(usize, RowState) -> String>>,
@@ -241,6 +242,7 @@ impl<M: 'static> List<M> {
             focusable: true,
             autofocus: false,
             scrollbar: false,
+            bar_hidden: false,
             stable_gutter: false,
             bar_theme: None,
             row_theme: None,
@@ -348,6 +350,24 @@ impl<M: 'static> List<M> {
         self.scrollbar = true;
         self.stable_gutter = true;
         self
+    }
+
+    /// An overlay bar, drawn only while the caller says to — see
+    /// [`Node::scrollbar_revealed`](crate::Node::scrollbar_revealed).
+    pub fn scrollbar_revealed(mut self, shown: bool) -> Self {
+        self.scrollbar = true;
+        self.stable_gutter = true;
+        self.bar_hidden = !shown;
+        self
+    }
+
+    /// The bar, on terms the caller carries — see
+    /// [`Node::scrollbar_when`](crate::Node::scrollbar_when).
+    pub fn scrollbar_when(self, reveal: Option<bool>) -> Self {
+        match reveal {
+            None => self.scrollbar(),
+            Some(shown) => self.scrollbar_revealed(shown),
+        }
     }
 
     /// Name the bar's appearance — see
@@ -514,7 +534,9 @@ impl<M: 'static> Component<M> for List<M> {
         if let Some(a) = anchor.clone() {
             body = body.anchor_to(a);
         }
-        if self.stable_gutter {
+        if self.bar_hidden {
+            body = body.scrollbar_revealed(false);
+        } else if self.stable_gutter {
             body = body.scrollbar_gutter();
         } else if self.scrollbar {
             body = body.scrollbar();

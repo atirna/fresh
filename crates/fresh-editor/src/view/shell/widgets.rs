@@ -35,7 +35,7 @@ use fresh_core::api::{OverlayColorSpec, OverlayOptions, WidgetSpec};
 use fresh_core::text_property::TextPropertyEntry;
 use fresh_ui::{col, row, text_runs, Node, Run, Sizing};
 
-use crate::app::shell_host::shell_theme::{Attrs, Ink, Paint};
+use crate::app::shell_host::shell_theme::{pair, Attrs, Ink, Paint};
 
 use super::msg::UiMsg;
 
@@ -102,6 +102,23 @@ pub struct Ctx<'a> {
     /// Row budget for auto-sized `List`/`Tree` widgets, when the host knows
     /// the surface's inner height.
     pub avail_height: Option<u32>,
+    /// Whether this panel's scrollbars are *overlay* bars, and if so whether
+    /// they are being revealed right now.
+    ///
+    /// `None` — a bar whenever the content overflows, which is what every
+    /// panel but the dock has. `Some(shown)` — the dock's: a bar that appears
+    /// while the pointer is over the column or a keyboard move just flashed
+    /// it, and is gone otherwise, *even while the list holds focus*. Focus is
+    /// not attention: the dock keeps the keyboard for as long as you are
+    /// working in it, and a bar that stayed for all of that would be a
+    /// permanent stripe down the column rather than an answer to "how far
+    /// through am I".
+    ///
+    /// It is a fact rather than a policy because neither half is the tree's
+    /// to know: the flash is a deadline the plugin arms through
+    /// `WidgetEffects::flash_scrollbar` and the editor ticks, and the hover
+    /// is a memo the dock's own column reports.
+    pub scrollbar_reveal: Option<bool>,
     /// The ink every row on this panel starts from.
     ///
     /// **A widget does not know what it is sitting on.** The same
@@ -140,6 +157,7 @@ impl Ctx<'static> {
             hovered_item_key: String::new(),
             hovered_popup_row: String::new(),
             avail_height: None,
+            scrollbar_reveal: None,
             surface: panel_surface(),
         }
     }
@@ -156,6 +174,19 @@ impl Ctx<'_> {
             _ => false,
         }
     }
+}
+
+/// The editor's one pair of scrollbar colours.
+///
+/// **A bar with no name of its own is a solid stripe.** The fold writes the
+/// thumb in the item's foreground and the track in its background, both as
+/// the cell's ground — so a bar that inherits the ambient ink inherits a
+/// foreground and a background that were chosen for *text*, and the two come
+/// out the same colour with no thumb to see. Named here for the same reason
+/// the overlay prompt's list names it: it is the editor's one scrollbar,
+/// wherever it appears.
+fn bar_ink() -> String {
+    pair("ui.scrollbar_thumb_fg", "ui.scrollbar_track_fg")
 }
 
 /// Whether every node of this spec is a variant this module describes.
@@ -874,7 +905,8 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             // key across every widget — so the list declines the ring and
             // keeps its mouse, which is what that flag means since #3108.
             .focusable(false)
-            .scrollbar()
+            .scrollbar_when(cx.scrollbar_reveal)
+            .scrollbar_theme(bar_ink())
             .row_theme({
                 let plain = cx.surface.clone();
                 move |_, st| row_surface(st, &plain).to_string()
@@ -1017,6 +1049,8 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             .focusable(false)
             .row_rows(item_height)
             .scrollbar_gutter()
+            .scrollbar_when(cx.scrollbar_reveal)
+            .scrollbar_theme(bar_ink())
             .row_theme({
                 let plain = cx.surface.to_string();
                 let hover = cx
@@ -1234,6 +1268,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             let node = fresh_ui::ComponentExt::node(Scrolled {
                 blocks: std::rc::Rc::new(blocks),
                 selected,
+                reveal: cx.scrollbar_reveal,
             });
             match visible_rows {
                 Some(r) => node.h(Sizing::Cells(*r as u16)),
@@ -1364,7 +1399,8 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 row_at,
             )
             .focusable(false)
-            .scrollbar()
+            .scrollbar_when(cx.scrollbar_reveal)
+            .scrollbar_theme(bar_ink())
             .row_theme({
                 let plain = cx.surface.clone();
                 move |_, st| row_surface(st, &plain).to_string()
@@ -1467,7 +1503,8 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                 }
             })
             .focusable(false)
-            .scrollbar()
+            .scrollbar_when(cx.scrollbar_reveal)
+            .scrollbar_theme(bar_ink())
             // The rows carry their own colours — a focused field paints its
             // own background band per row — so the list's row states must not
             // paint over them.
@@ -1534,6 +1571,9 @@ struct Scrolled {
     blocks: std::rc::Rc<Vec<Chunk>>,
     /// Which block is selected, if any.
     selected: Option<usize>,
+    /// See [`Ctx::scrollbar_reveal`]. Carried rather than read from a context
+    /// because a component builds outside the one that described it.
+    reveal: Option<bool>,
 }
 
 impl fresh_ui::Component<UiMsg> for Scrolled {
@@ -1568,7 +1608,9 @@ impl fresh_ui::Component<UiMsg> for Scrolled {
                     .children(b.rows.iter().map(|r| r.clone())),
             );
         }
-        let body = fresh_ui::viewport(content).scrollbar();
+        let body = fresh_ui::viewport(content)
+            .scrollbar_when(self.reveal)
+            .scrollbar_theme(bar_ink());
         match s.anchor.clone() {
             Some(a) => body.anchor_to(a),
             None => body,

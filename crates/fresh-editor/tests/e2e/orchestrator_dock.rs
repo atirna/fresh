@@ -744,9 +744,16 @@ fn dock_list_scrollbar_shows_only_on_hover() {
             .find(|&c| h.get_cell(c, 0).as_deref() == Some("│"))
             .expect("dock right-edge divider should be present on the toolbar row")
     };
-    // The dock nudges its scrollbar into the gutter, one column left of the
-    // divider (adjacent to the edge).
-    let sb_col = wall_col.saturating_sub(1);
+    // **The bar is the list's, so it sits at the list's right edge**: two
+    // columns left of the divider, not one. The dock lays its interior at the
+    // width the widget runtime lays it (`floating_panel_inner_width` takes the
+    // divider *and* a column of slack the runtime wraps against), and the
+    // list's bar takes the last column of that — leaving the slack column
+    // blank between the bar and the divider. The painter drew the bar *into*
+    // the slack, because its bar was a dock-level overlay rather than
+    // anything the list owned; that is the column that moved when the list
+    // started owning its own window.
+    let sb_col = wall_col.saturating_sub(2);
     // Styles of the scrollbar column across the list rows; the bar's presence
     // shows up as a change here (it paints background-coloured cells).
     let snapshot = |h: &EditorTestHarness| -> Vec<Option<ratatui::style::Style>> {
@@ -814,9 +821,16 @@ fn dock_scrollbar_ignores_stale_per_window_cursor_when_blurred() {
             .find(|&c| h.get_cell(c, 0).as_deref() == Some("│"))
             .expect("dock right-edge divider should be present on the toolbar row")
     };
-    // The dock nudges its scrollbar into the gutter, one column left of the
-    // divider (adjacent to the edge).
-    let sb_col = wall_col.saturating_sub(1);
+    // **The bar is the list's, so it sits at the list's right edge**: two
+    // columns left of the divider, not one. The dock lays its interior at the
+    // width the widget runtime lays it (`floating_panel_inner_width` takes the
+    // divider *and* a column of slack the runtime wraps against), and the
+    // list's bar takes the last column of that — leaving the slack column
+    // blank between the bar and the divider. The painter drew the bar *into*
+    // the slack, because its bar was a dock-level overlay rather than
+    // anything the list owned; that is the column that moved when the list
+    // started owning its own window.
+    let sb_col = wall_col.saturating_sub(2);
     let snapshot = |h: &EditorTestHarness| -> Vec<Option<ratatui::style::Style>> {
         (8u16..30).map(|y| h.get_cell_style(sb_col, y)).collect()
     };
@@ -3123,9 +3137,16 @@ fn dock_list_scrollbar_flashes_on_keyboard_nav_and_expires() {
             .find(|&c| h.get_cell(c, 0).as_deref() == Some("│"))
             .expect("dock right-edge divider should be present on the toolbar row")
     };
-    // The dock nudges its scrollbar into the gutter, one column left of the
-    // divider (adjacent to the edge).
-    let sb_col = wall_col.saturating_sub(1);
+    // **The bar is the list's, so it sits at the list's right edge**: two
+    // columns left of the divider, not one. The dock lays its interior at the
+    // width the widget runtime lays it (`floating_panel_inner_width` takes the
+    // divider *and* a column of slack the runtime wraps against), and the
+    // list's bar takes the last column of that — leaving the slack column
+    // blank between the bar and the divider. The painter drew the bar *into*
+    // the slack, because its bar was a dock-level overlay rather than
+    // anything the list owned; that is the column that moved when the list
+    // started owning its own window.
+    let sb_col = wall_col.saturating_sub(2);
     let snapshot = |h: &EditorTestHarness| -> Vec<Option<ratatui::style::Style>> {
         (8u16..30).map(|y| h.get_cell_style(sb_col, y)).collect()
     };
