@@ -316,7 +316,7 @@ fn gutter(it: &Item, band: &str) -> Node<UiMsg> {
 
 /// The cursor/modified gutter beside every field, which the control starts
 /// after. The painter called it `focus_indicator_width`.
-const GUTTER_COLS: u16 = 3;
+pub const GUTTER_COLS: u16 = 3;
 
 /// The control, through the adapter a plugin's field goes through.
 ///

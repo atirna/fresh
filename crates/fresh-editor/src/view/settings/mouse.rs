@@ -417,6 +417,7 @@ impl Editor {
         let Some(idx) = dialog.items.iter().position(|i| i.path == path) else {
             return;
         };
+        let label_width = dialog.label_column();
         if dialog.items[idx].read_only {
             return;
         }
@@ -450,16 +451,31 @@ impl Editor {
             false => None,
             true => at.and_then(|col| {
                 let item = &dialog.items[idx];
+                // **Both of these have to match what the tree drew.** The
+                // label column decides where the value starts in the row, and
+                // the width decides the window a long value slides through; a
+                // byte resolved at any other pair is not the byte under the
+                // pointer. The description passes `label_column()` and the
+                // control's own constraint, so this does too.
                 let spec = super::widget_map::setting_control_to_widget_aligned(
                     &item.path,
                     &item.control,
-                    None,
+                    label_width,
                 );
+                let w = self
+                    .panel_rect(&crate::view::shell::entry::item_key(idx))
+                    // The item row is the gutter plus the control; the control
+                    // is what is being rendered here.
+                    .map_or(0, |r| {
+                        (r.width as u32)
+                            .saturating_sub(crate::view::shell::entry::GUTTER_COLS as u32)
+                    })
+                    .max(1);
                 let out = crate::widgets::render_spec_no_autofocus(
                     &spec,
                     crate::view::shell::widgets::no_state(),
                     "",
-                    u32::MAX,
+                    w,
                 );
                 crate::widgets::WidgetTextClickGeometry::from_render_output(&out, 0)
                     .map(|g| g.value_byte_in_cell(hit.byte_start, col))
