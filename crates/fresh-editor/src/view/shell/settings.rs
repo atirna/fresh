@@ -350,13 +350,24 @@ pub fn panel_key() -> fresh_ui::Key {
 /// The category tree as a `widgets::List` in the window it scrolls in.
 ///
 /// **It is on the focus ring now.** The `focusable(false)` that used to be
-/// here said the keyboard was somewhere else — and it was, because the
-/// settings box was not the focus scope at all: the topmost keyboard-owning
-/// layer was the full-frame modal slot, and `focus_scope` retains only what
-/// is inside it, so a focusable here was unreachable and its `Intent::Up` and
-/// `Intent::Down` were dead. The box claims the keyboard itself now (see
-/// [`layer`]), which is what makes the ring worth turning on: a click on a
-/// row takes focus, and [`tree_keys`] around it answers the tree's own keys.
+/// here said the keyboard was somewhere else — and it was, in the strongest
+/// sense: the settings box was not the focus scope at all, because the
+/// topmost keyboard-owning layer was the full-frame modal slot and
+/// `focus_scope` retains only what is inside *that*. A focusable here could
+/// not be reached, so declining the ring cost nothing and said nothing. The
+/// box claims the keyboard itself now (see [`layer`]), and what the ring buys
+/// is the click: a press on a row asks for focus, so the pointer and the
+/// keyboard agree on which control is live.
+///
+/// **What it does not buy is the arrows.** The list's own `Intent::Up` and
+/// `Intent::Down` move its selection and call `on_select`, and `on_select`
+/// here is the *click's* meaning — pick this category, auto-expand it, put
+/// the body back at the top. A keyboard step is `tree_step` over the display
+/// rows, categories and sections alike, and stops on rows `on_select` would
+/// treat as a jump. So the arrows are claimed by [`tree_keys`] before they
+/// are ever resolved to an intent — raw key listeners run first, which is the
+/// mechanism that lets a host override a widget's own keyboard without
+/// forking the widget.
 ///
 /// **The rows answer their own presses and the list owns its window**, which
 /// is the whole of what the painter recorded here: `layout.categories`,
