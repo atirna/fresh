@@ -835,10 +835,18 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
                     at: None,
                 }))
             }));
-            let list = match sel >= 0 {
-                true => list.selected(sel as usize),
-                false => list,
-            };
+            // **`-1` is a controlled empty selection, not "no opinion".** A
+            // `WidgetSpec::List` says which row is selected and says `-1` when
+            // none is — the settings `[+] Add new` sentinel is a one-row list
+            // that is only selected when the arrows are on it. Leaving the
+            // element to its own selection highlighted row zero, so the
+            // sentinel looked focused whether it was or not, and on a selected
+            // card the real row highlight was the same colour as the band it
+            // sat in.
+            let list = list.selection(match sel >= 0 {
+                true => Some(sel as usize),
+                false => None,
+            });
             let node = fresh_ui::ComponentExt::node(list);
             match visible_rows {
                 Some(r) => node.h(Sizing::Cells(*r as u16)),
@@ -1299,10 +1307,9 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             // The spec's selection is an index into the *whole* array; the
             // list's is into the visible window, which is the same array with
             // the collapsed subtrees taken out.
-            let list = match visible.iter().position(|&a| a as i32 == sel_abs) {
-                Some(i) => list.selected(i),
-                None => list,
-            };
+            // A selection the window does not contain is *no* selection here,
+            // not the element's own — see the `List` arm above.
+            let list = list.selection(visible.iter().position(|&a| a as i32 == sel_abs));
             let node = fresh_ui::ComponentExt::node(list);
             match visible_rows {
                 Some(r) => node.h(Sizing::Cells(*r as u16)),
@@ -1405,10 +1412,7 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
             // "Selected" here means "where the caret is", which is what the
             // list reveals when it moves. That is the whole of the auto-clamp
             // the runtime did by hand.
-            let list = match sel {
-                Some(i) => list.selected(i),
-                None => list,
-            };
+            let list = list.selection(sel);
             let body = fresh_ui::ComponentExt::node(list).h(Sizing::Cells(*rows as u16));
             match head {
                 0 => body,

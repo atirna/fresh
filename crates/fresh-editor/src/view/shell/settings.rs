@@ -635,10 +635,12 @@ fn gutter(c: &Card, band: &str) -> Node<UiMsg> {
 fn control(c: &Card, band: &str) -> Node<UiMsg> {
     let spec = c.spec.clone();
     let focus_key = c.focus_key.clone();
-    let surface =
-        crate::app::shell_host::shell_theme::Ink::keys("ui.popup_text_fg", band.to_string());
+    use crate::app::shell_host::shell_theme::Ink;
+    let banded = Ink::keys("ui.popup_text_fg", band.to_string());
+    let ground = Ink::keys("ui.popup_text_fg", "ui.popup_bg".to_string());
     layout_reader(move |info: LayoutInfo| {
-        let cx = super::widgets::Ctx {
+        let w = info.constraints.max_w.max(1);
+        let cx = |surface: &Ink| super::widgets::Ctx {
             slot: super::widgets::Slot::Settings,
             states: super::widgets::no_state(),
             focus_key: focus_key.clone(),
@@ -648,7 +650,60 @@ fn control(c: &Card, band: &str) -> Node<UiMsg> {
             avail_height: None,
             surface: surface.clone(),
         };
-        super::widgets::node(&spec, info.constraints.max_w.max(1), &cx)
+        // **The band is a row, not a run.** `Ctx::surface` gives the
+        // control's own glyphs their ground, which stops where the text does;
+        // the painter filled the whole row first and drew over it. A themed
+        // node emits its own `Draw::Fill`, so a full-width wrapper around the
+        // banded row is that fill, said by the row that owns it.
+        //
+        // Only ever wrapped around something one row tall — the wrapper pins
+        // that height, and a `DualList` given it came out as a single row with
+        // its two columns clipped away.
+        let strip = |n: Node<UiMsg>| {
+            row()
+                .w(Sizing::Flex(1))
+                .h(Sizing::Cells(1))
+                .theme(banded.to_string())
+                .children([n, row().flex(1)])
+        };
+        use fresh_core::api::WidgetSpec as W;
+        match &spec {
+            // **The band is the label row's ground, not the whole card's.**
+            // The painter said so outright — "limited to the label row so
+            // chip / description text below stays on popup_bg and remains
+            // legible regardless of how saturated the theme's highlight bg
+            // is" — and a composite control is where it shows: a selected
+            // Detectors card came out as one solid block of the selection
+            // colour, and the *row* highlight inside its list, which is the
+            // only thing that says which entry the arrows are on, was the
+            // same colour as the block it sat in and so was invisible.
+            //
+            // Split here rather than in the widget adapter: the band belongs
+            // to the settings card, and a `Col`'s first child is its label by
+            // the same construction that builds it (`widget_map`'s composite
+            // arms all open with `raw_row("{label}:")`). Every other surface
+            // that renders a `WidgetSpec` keeps one ground for the whole of
+            // it, which is what `Ctx::surface` means everywhere else.
+            W::Col { children, .. } if children.len() > 1 => col().children(
+                children
+                    .iter()
+                    .enumerate()
+                    .map(|(i, ch)| match i {
+                        0 => strip(super::widgets::node(ch, w, &cx(&banded))),
+                        _ => super::widgets::node(ch, w, &cx(&ground)),
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            // A scalar control *is* its label row, so the band is the whole
+            // of it. The rest — a `DualList`'s two columns, a `Json` editor's
+            // box — is many rows the painter left on the dialog's ground, and
+            // there is no first child to split off, so it keeps the band it
+            // has always had rather than being pinned to one row.
+            W::Toggle { .. } | W::Text { .. } | W::Number { .. } | W::Dropdown { .. } => {
+                strip(super::widgets::node(&spec, w, &cx(&banded)))
+            }
+            _ => super::widgets::node(&spec, w, &cx(&banded)),
+        }
     })
 }
 
