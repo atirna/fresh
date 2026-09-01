@@ -1367,7 +1367,31 @@ impl Editor {
         // element boundary produces neither, which is what still keeps an idle
         // pointer from drawing a frame.
         let changed = tree_stale || !result.msgs.is_empty();
-        for msg in result.msgs {
+        self.apply_shell_messages(result.msgs, facts);
+        // **The claim's second half.** A `Modality::Focus` surface confines
+        // the keyboard without swallowing it, so whether the key was taken is
+        // its interior's answer — and the interior ran in an applier above,
+        // after `dispatch` had already reported what the *tree* claimed. The
+        // authoritative party answers last.
+        let claimed = claimed || self.shell_interior_took_key;
+        Dispatched { claimed, changed }
+    }
+
+    /// Apply what the tree produced.
+    ///
+    /// Split out of [`Self::shell_dispatch`] because a dispatch is not the
+    /// only thing that produces messages: `Ui::take_messages` carries the ones
+    /// framework-initiated activity raises — a focus change asked for
+    /// imperatively, which is how a plugin's `FocusAdvance` reaches the tree's
+    /// ring (`Editor::advance_panel_focus_in_tree`). One loop, so a fact
+    /// cannot mean one thing when a key produced it and another when the host
+    /// did.
+    pub(super) fn apply_shell_messages(
+        &mut self,
+        msgs: Vec<crate::view::shell::msg::UiMsg>,
+        facts: EventFacts,
+    ) {
+        for msg in msgs {
             match msg {
                 crate::view::shell::msg::UiMsg::Action(action) => {
                     // Straight into the pipeline that has always applied
@@ -1379,13 +1403,6 @@ impl Editor {
                 crate::view::shell::msg::UiMsg::Ui(fact) => self.apply_ui_fact(fact, facts),
             }
         }
-        // **The claim's second half.** A `Modality::Focus` surface confines
-        // the keyboard without swallowing it, so whether the key was taken is
-        // its interior's answer — and the interior ran in an applier above,
-        // after `dispatch` had already reported what the *tree* claimed. The
-        // authoritative party answers last.
-        let claimed = claimed || self.shell_interior_took_key;
-        Dispatched { claimed, changed }
     }
 
     /// Whether a wheel notch over a pane's content was taken by a live
@@ -1602,7 +1619,7 @@ impl Editor {
             }
             // The right press's second half, from a hit the node carried.
             //
-            // The re-focus is first for the same reason it is in `DockPress`
+            // The re-focus is first for the same reason it is in `DockFocus`
             // and `DockContext`: the un-blur fires a `focus` widget_event, and
             // any mirror of dock-focus state has to update before the menu the
             // press raises reads it.
@@ -2054,21 +2071,11 @@ impl Editor {
             // arm `chrome::Dock::on_pointer` ran; what is gone is the pair of
             // boxes that decided *which* arm, and the insertion-order rule
             // that put the grip above the column.
-            UiFact::DockPress { x, y } => {
-                // Re-focus first when blurred: the un-blur notifies the plugin
-                // via a `focus` widget_event, so any mirror of dock-focus
-                // state updates before the click's row-select event fires its
-                // scheduling logic.
-                if self.dock.as_ref().is_some_and(|f| !f.focused) {
-                    self.refocus_floating_panel(crate::app::PanelSlot::Dock);
-                }
-                self.handle_floating_widget_click(crate::app::PanelSlot::Dock, x, y);
-            }
-            // The described dock's dead space: focus it, and nothing else.
-            // The re-focus is first for the same reason it is in `DockPress`
-            // — the un-blur fires a `focus` widget_event, and any mirror of
-            // dock-focus state has to update before whatever the press goes
-            // on to do.
+            // A press on the column's dead space: focus it, and nothing else.
+            // The re-focus fires a `focus` widget_event, and any mirror of
+            // dock-focus state has to update before whatever the press goes on
+            // to do — which is why it was first here while `DockPress` still
+            // carried a cell into the runtime's own hit test.
             UiFact::DockFocus => {
                 if self.dock.as_ref().is_some_and(|f| !f.focused) {
                     self.refocus_floating_panel(crate::app::PanelSlot::Dock);

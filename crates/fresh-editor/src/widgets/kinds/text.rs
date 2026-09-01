@@ -1276,9 +1276,11 @@ pub(crate) fn single_line(
     }
     // A click anywhere on the input line focuses the field so a mouse user
     // can type. Text widgets previously emitted no hit area, so clicks fell
-    // through and the field stayed unfocused (#2234 item 1). Focusing is
-    // driven by the tabbable path in `handle_floating_widget_click`; the
-    // `focus` event keeps the plugin's focus mirror in step.
+    // through and the field stayed unfocused (#2234 item 1). What focuses the
+    // field is `deliver_widget_hit`, which every frontend's press goes
+    // through — the described row's node, the web's index, the text
+    // projection's byte scan; the `focus` event keeps the plugin's focus
+    // mirror in step.
     //
     // The payload carries the value-layout breadcrumbs the click
     // handler needs to reposition the cursor to the clicked column

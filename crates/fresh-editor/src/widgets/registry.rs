@@ -772,16 +772,17 @@ impl WidgetRegistry {
     /// coordinate space there is, and this scan is the right way to answer in
     /// it. `app::click_handlers` is that caller.
     ///
-    /// (`Editor::probe_floating_widget` still compiles against it for a dock
-    /// or modal whose panel the adapter could not describe. That path cannot
-    /// currently produce an answer — `render_floating_widget_panel` records
-    /// `last_inner_rect` only for a described panel or the web's no-paint
-    /// pass, and the probe's first line returns `None` without one — but
-    /// proving it dead and removing it is S7's, together with
-    /// `panel.entries`/`panel.overlays`, whose only reader it is.)
+    /// (`Editor::probe_floating_widget` compiled against it until S7, for a
+    /// dock or modal whose panel the adapter could not describe. It is gone:
+    /// `render_floating_widget_panel` records `last_inner_rect` only for a
+    /// *described* panel or the web's no-paint pass, while the two facts that
+    /// reached the probe — `DockPress`, and `ModalPointer` from the panel's
+    /// own box — were emitted only when the interior was **not** described.
+    /// No path could reach the probe with a rectangle to test against, and
+    /// the stored overlay rows it read went with it.)
     ///
-    /// Both surviving callers hold a byte in a *composed row* and rebase it by
-    /// the matched hit's `byte_start` before dispatch: `valueInnerStart` and
+    /// The caller holds a byte in a *composed row* and rebases it by the
+    /// matched hit's `byte_start` before dispatch: `valueInnerStart` and
     /// `deliver_widget_hit` are both in the widget's own row's space.
     ///
     /// The "a row is clickable across its width" invariant lives here rather

@@ -8151,6 +8151,15 @@ impl Editor {
         // an `EmbedRect` painted over them. This is the count the painter's
         // `entries.len() + 2` used, kept as the one measurement the tree needs
         // from the runtime.
+        //
+        // **Only one of the two is still read.** A described box measures its
+        // own height (`Panel::height` answers `Sizing::Auto`), so
+        // `content_rows` survives for a panel whose interior is a `Host` —
+        // which today means no panel at all. `content_cols` is live: an
+        // anchored popup hugs its content horizontally and the interior is
+        // built by a `layout_reader` that needs a width as a number, so the
+        // mirror answers for it. See `Panel::anchored_width`, which is where
+        // that exception is argued and what retires it.
         let content_rows = p.entries.len() as u16;
         let spot = match p.placement {
             super::PanelPlacement::Centered => Spot::Centered {
@@ -8172,10 +8181,13 @@ impl Editor {
             super::PanelPlacement::LeftDock { .. } => return None,
         };
         Some(Panel {
-            // Described when every variant of the spec is one the tree
-            // describes, and painted whole otherwise — a panel is one or the
-            // other. `WindowEmbed` is the variant that keeps some panels on
-            // the old path for good; it is a `Host` leaf by rule.
+            // **`None` means there is no panel mounted in the slot**, and
+            // nothing else. This used to say "described when every variant of
+            // the spec is one the tree describes, and painted whole
+            // otherwise" — the `covered` gate, which ran out of `false` arms
+            // and was deleted in 2.4. `panel_interior` asks one question, and
+            // it is the same one `panel_is_described` asks; `WindowEmbed` is
+            // described like everything else, as a `Host` leaf.
             interior: self.panel_interior(crate::app::PanelSlot::Floating),
             spot,
             title: p.title.clone(),

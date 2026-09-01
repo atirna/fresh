@@ -502,7 +502,7 @@ impl Editor {
             ),
             // Right-click: same shape the TUI's context path fires —
             // the row identity plus the click cell the plugin anchors
-            // its popup at (see `handle_floating_widget_context_click`).
+            // its popup at (see `Editor::fire_widget_context`).
             "context" => {
                 let mut p = serde_json::json!({ "index": index, "key": item_key });
                 Self::copy_context_anchor_cell(payload, &mut p);
@@ -978,8 +978,6 @@ impl Editor {
         let panel_slot = Self::slot_for_panel_buffer(buffer_id);
         let focus_cursor = out_pieces.focus_cursor;
         let entries = out_pieces.entries;
-        let overlays = out_pieces.overlays;
-        let panel_boxes = out_pieces.boxes.clone();
         let popup = out_pieces.popup;
         if self
             .widget_registry
@@ -1001,8 +999,6 @@ impl Editor {
             if let Some(fwp) = self.panel_mut(slot) {
                 if &fwp.panel_key == panel_key {
                     fwp.entries = entries;
-                    fwp.overlays = overlays;
-                    fwp.boxes = panel_boxes;
                     fwp.popup = popup;
                 }
             }
@@ -1185,7 +1181,38 @@ impl Editor {
         }
     }
 
+    /// Move this panel's focus by `delta` tab stops.
+    ///
+    /// **Two rings, and which one is authoritative is the tree's answer, not
+    /// a count taken from the runtime.** Every host-driven focus move arrives
+    /// here — the plugin's `WidgetAction::FocusAdvance`, a kind's
+    /// `KeyFx::focus_advance` (Enter committing a field), the smart-key
+    /// `Tab` / `Shift+Tab` a plugin's `defineMode` binding produces, and the
+    /// arrows on a button-only popup — so this is the one place the choice
+    /// can be made once.
+    ///
+    /// Since S2 a described panel's Tab is the *tree's*: the keyboard layer
+    /// names the interior as its focus scope, the fallback declines Tab, and
+    /// `default_for_intent` runs `Ui::move_focus`. The box arena's ring below
+    /// still exists because a panel with no described interior — an empty
+    /// dock, or one the adapter's scope has nothing focusable in — keeps the
+    /// key sink and has no tree ring at all. Advancing on the arena while the
+    /// tree holds focus writes the registry's key without moving the tree's
+    /// focus, and the next Tab then starts from the widget the user has
+    /// already left: two rings, disagreeing.
+    ///
+    /// So the tree is asked whether it is holding this panel's focus —
+    /// `has_focus_within(interior_key(slot))`, which is a fact only the tree
+    /// has — and if it is, the move is *its* `move_focus` and the registry's
+    /// key follows through the `WidgetFocus` mirror. Deliberately not a
+    /// "does this panel have focus targets" question put to the runtime: that
+    /// is the two-sources-for-one-fact shape that shipped once already
+    /// (`c89d25f`), and the runtime cannot know whether the tree's focus is
+    /// where its ring would start.
     fn handle_widget_focus_advance(&mut self, panel_key: &crate::widgets::PanelKey, delta: i32) {
+        if self.advance_panel_focus_in_tree(panel_key, delta) {
+            return;
+        }
         let panel = match self.widget_registry.get(panel_key) {
             Some(p) => p,
             None => return,
@@ -1214,6 +1241,127 @@ impl Editor {
         let new_key = ring[new_idx as usize].clone();
         self.set_panel_focus_and_notify(panel_key, new_key);
         self.rerender_widget_panel(panel_key);
+    }
+
+    /// Ask the tree to move this panel's focus along its own ring, and report
+    /// whether it was the one to answer.
+    ///
+    /// **The question is `has_focus_within`, and it is put to the tree.**
+    /// A panel is on the tree's ring when its keyboard layer named an
+    /// interior as its focus scope *and* focus is currently inside it — which
+    /// is one lookup and one containment test, both answered from the focus
+    /// tree that would do the moving. Anything the host could compute instead
+    /// (does this spec have tabbable widgets, is this panel `focused`) is a
+    /// second source for a fact the tree already holds, and would be wrong in
+    /// exactly the cases that matter: a scope with nothing focusable in it
+    /// keeps the sink, and a panel that is not the focused surface has the
+    /// tree's focus somewhere else entirely.
+    ///
+    /// `true` includes **the tree declining to move**: a scope holding one
+    /// focusable answers every direction with the element focus is already
+    /// on, and `Ui::move_focus` reports that as no move (its own doc says
+    /// why — returning `true` there would claim the key). Falling through to
+    /// the arena there is precisely the disagreement this exists to prevent:
+    /// it would write a focus key the tree's focus is not on, and the user's
+    /// next Tab would start from the widget they had already left.
+    ///
+    /// `false` means there is no tree ring for this panel — no described
+    /// interior, nothing in it to focus, a pane-mounted panel, or the panel
+    /// is not where focus is — and the box arena is the only ring there is.
+    ///
+    /// `panel::Interior::has_focus_targets` is a runtime-derived count and it
+    /// is *not* this question: it is a build input, deciding whether the
+    /// description declares a scope at all, which nothing but the runtime can
+    /// answer before the tree exists. If it were ever wrong the scope would
+    /// be declared empty, `apply_autofocus` would find nowhere to land, and
+    /// the test below would answer `false` — so a stale count degrades to the
+    /// arena rather than to a focus move nobody can see.
+    ///
+    /// **What this does not fix, stated rather than implied.** A panel that
+    /// is mounted but not focused still advances on the arena, so its
+    /// registry key (which is what the description paints the focus marker
+    /// from) can name a widget the tree's focus is not on. That is unchanged
+    /// by this and is settled the next time focus enters the panel, because
+    /// `apply_autofocus` picks the scope's own landing spot and the
+    /// `WidgetFocus` mirror follows it. Closing it properly means seeding the
+    /// tree from the registry when a panel takes focus, which is a second
+    /// direction of sync and belongs with the focus-key mirror's own step.
+    fn advance_panel_focus_in_tree(
+        &mut self,
+        panel_key: &crate::widgets::PanelKey,
+        delta: i32,
+    ) -> bool {
+        use crate::view::shell::msg::{UiFact, UiMsg};
+        use crate::view::shell::widgets::Slot;
+        let slot = match self.slot_of_panel(panel_key) {
+            Some(super::PanelSlot::Dock) => Slot::Dock,
+            Some(super::PanelSlot::Floating) => Slot::Floating,
+            // A pane-mounted panel has no keyboard layer, so it names no
+            // scope; its keys arrive by the buffer's route and the arena is
+            // its ring.
+            None => return false,
+        };
+        let Some(mut ui) = self.shell_ui.take() else {
+            return false;
+        };
+        let holds = ui
+            .find_by_key(&crate::view::shell::panel::interior_key(slot))
+            .is_some_and(|el| ui.has_focus_within(el));
+        if !holds {
+            self.shell_ui = Some(ui);
+            return false;
+        }
+        // **Take the backlog first, and drop it.** `Ui::pending_messages` is
+        // where framework-initiated activity leaves its facts, and the editor
+        // never drains it: `Ui::dispatch` returns only what handlers produced
+        // during routing, and nothing calls `take_messages`. So every focus
+        // change `apply_autofocus` settled since startup is still sitting
+        // there. Applying that backlog because a plugin asked for a focus
+        // advance would be a stale `WidgetFocus` for whatever panel was
+        // autofocused three frames ago, and worse for any other fact that
+        // lands there. Discarding it changes nothing — nothing was ever going
+        // to read it — and it leaves what follows unambiguously this move's.
+        // (That the backlog exists at all is a defect, and a separate one:
+        // the settle's focus gain is a fact the host should be told.)
+        let _backlog = ui.take_messages();
+        let dir = match delta < 0 {
+            true => fresh_ui::FocusDir::Prev,
+            false => fresh_ui::FocusDir::Next,
+        };
+        // `delta` is a count of tab stops, not a direction — the arena moves
+        // `|delta|` of them in one go, and answers a zero delta by staying
+        // put — so the tree is stepped exactly that many times.
+        // `WidgetAction::FocusAdvance`'s own doc only defines ±1, and nothing
+        // bundled sends more.
+        for _ in 0..delta.unsigned_abs() {
+            if !ui.move_focus(dir) {
+                break;
+            }
+        }
+        let msgs = ui.take_messages();
+        self.shell_ui = Some(ui);
+        // **One landing, one `focus` event.** Each step raises a
+        // `UiFact::WidgetFocus`, and applying them all would tell the plugin
+        // about tab stops it was never told about when the arena did this —
+        // and would run each intermediate kind's `on_focus_change`. Only the
+        // last names where focus ended up; the rest are the walk.
+        let last_focus = msgs
+            .iter()
+            .rposition(|m| matches!(m, UiMsg::Ui(UiFact::WidgetFocus { .. })));
+        let msgs: Vec<UiMsg> = msgs
+            .into_iter()
+            .enumerate()
+            .filter(|(i, m)| {
+                !matches!(m, UiMsg::Ui(UiFact::WidgetFocus { .. })) || Some(*i) == last_focus
+            })
+            .map(|(_, m)| m)
+            .collect();
+        // Default `EventFacts`: they describe the pointer event a message was
+        // produced *by*, and there isn't one — the host asked for this move.
+        // Nothing on this path reads them (`WidgetFocus`'s applier does not),
+        // and inventing a cell would be worse than saying there was none.
+        self.apply_shell_messages(msgs, Default::default());
+        true
     }
 
     /// Update the panel's focused widget AND fire a
@@ -2312,23 +2460,18 @@ impl Editor {
     }
 }
 
-/// Where a screen cell lands inside a floating widget panel. See
-/// [`Editor::probe_floating_widget`].
-struct FloatingWidgetProbe {
-    /// 0-indexed row within the panel's rendered entries.
-    brow: u32,
-    /// UTF-8 byte offset within that row's text (the overlay's text when
-    /// an overlay covers the row).
-    bcol: usize,
-    /// The widget under the cell, or `None` for a cell on no widget.
-    hit: Option<crate::widgets::HitArea>,
-}
-
-/// Panel pointer machinery shared by every mounted floating panel
-/// (the dock and the centered modal): probe/hover resolution, list
-/// scrollbar press/drag, dropdown pop-over clicks, wheel routing, and
-/// dismissal. Behavior owned by the panel runtime (moved from
-/// mouse_input.rs).
+/// Panel pointer machinery shared by every mounted floating panel (the dock
+/// and the centered modal): wheel routing, the text drag, and dismissal.
+/// Behavior owned by the panel runtime (moved from mouse_input.rs).
+///
+/// **What is no longer here.** The cell→widget probe, the list scrollbar's
+/// press and drag, and the dropdown pop-over's click all resolved a screen
+/// cell against rectangles the interior painter had recorded. That painter
+/// went in 2.4 and they went with it in S7 — a described panel's widgets are
+/// nodes that answer their own presses, and its list's bar is the viewport's,
+/// which captures the pointer itself. What survives here is what a *node*
+/// cannot answer: a notch aimed at the panel's own scroll, a drag through
+/// text inside a widget, and closing the panel.
 impl Editor {
     /// Forward a vertical-wheel scroll to the active floating
     /// widget panel — same plumbing the orchestrator's
@@ -2497,64 +2640,6 @@ impl Editor {
         self.extend_widget_text_selection_to(&drag, line, byte_in_line);
     }
 
-    /// Try to start a floating-panel list scrollbar drag. Returns
-    /// true if the press landed on a scrollbar track (so the caller
-    /// skips row hit-testing — the bar overlaps the list's rightmost
-    /// column). Reuses the canonical `ScrollbarMouse`/`ScrollbarState`.
-    fn try_widget_scrollbar_press(&mut self, slot: super::PanelSlot, col: u16, row: u16) -> bool {
-        use crate::view::ui::scrollbar::ScrollbarState;
-        let (panel_key, tracks) = match self.panel(slot) {
-            Some(fwp) => (fwp.panel_key.clone(), fwp.scrollbar_tracks.clone()),
-            None => return false,
-        };
-        for t in &tracks {
-            let state = ScrollbarState::new(t.total, t.visible, t.scroll);
-            let pressed = self
-                .panel_mut(slot)
-                .and_then(|fwp| fwp.scrollbar_mouse.press(state, t.rect, col, row));
-            if let Some(new_offset) = pressed {
-                if let Some(fwp) = self.panel_mut(slot) {
-                    fwp.scrollbar_drag_key = Some(t.list_key.clone());
-                }
-                self.apply_widget_scroll(&panel_key, &t.list_key, new_offset, t.visible);
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Continue an in-flight floating-panel scrollbar drag. Returns
-    /// true if a drag is active (the press captured a `list_key`).
-    pub(super) fn try_widget_scrollbar_drag(&mut self, slot: super::PanelSlot, row: u16) -> bool {
-        use crate::view::ui::scrollbar::ScrollbarState;
-        let (panel_key, key) = match self.panel(slot) {
-            Some(fwp) => match &fwp.scrollbar_drag_key {
-                Some(k) => (fwp.panel_key.clone(), k.clone()),
-                None => return false,
-            },
-            None => return false,
-        };
-        // The track geometry for the dragged list (its rect may have
-        // shifted if the panel re-rendered between events).
-        let track = self.panel(slot).and_then(|fwp| {
-            fwp.scrollbar_tracks
-                .iter()
-                .find(|t| t.list_key == key)
-                .cloned()
-        });
-        let Some(t) = track else {
-            return false;
-        };
-        let state = ScrollbarState::new(t.total, t.visible, t.scroll);
-        let new_offset = self
-            .panel_mut(slot)
-            .and_then(|fwp| fwp.scrollbar_mouse.drag(state, t.rect, row));
-        if let Some(off) = new_offset {
-            self.apply_widget_scroll(&panel_key, &key, off, t.visible);
-        }
-        true
-    }
-
     /// Try to start a drag on a scrollbar painted over a *buffer-mounted*
     /// widget panel (the review-diff sidebar, Search & Replace). Returns
     /// true when the press landed on a track, so the caller skips the
@@ -2637,17 +2722,6 @@ impl Editor {
         self.split_widget_scrollbar_drag = None;
     }
 
-    /// End any in-flight floating-panel scrollbar drag.
-    pub(super) fn release_widget_scrollbar(&mut self) {
-        for fwp in [self.dock.as_mut(), self.floating_widget_panel.as_mut()]
-            .into_iter()
-            .flatten()
-        {
-            fwp.scrollbar_mouse.release();
-            fwp.scrollbar_drag_key = None;
-        }
-    }
-
     /// Apply a host-driven scroll to a panel list (scrollbar press /
     /// drag): update the registry's instance state, re-render, and —
     /// when the list has a live selection that moved into the new
@@ -2687,11 +2761,13 @@ impl Editor {
     /// outside the inner rect return `false`.
     /// Raise a widget's context menu from a hit the caller already has.
     ///
-    /// **The half of the arm below that was never the probe's.** Deciding
-    /// *which* widget a right press belongs to is geometry; deciding what a
-    /// right press on it means is not. A described panel answers the first
-    /// itself — its widgets are nodes with rectangles — and hands the hit
-    /// here, which is the same second half the probe's answer goes through.
+    /// **The half that was never the probe's.** Deciding *which* widget a
+    /// right press belongs to is geometry; deciding what a right press on it
+    /// means is not. The panel answers the first itself — its widgets are
+    /// nodes with rectangles — and hands the hit here. There is no other
+    /// producer left: the runtime's own right-press probe over the box arena
+    /// went in 2.4 and the left-press one in S7, so this is the whole of the
+    /// second half rather than the shared end of two paths.
     pub(super) fn fire_widget_context(
         &mut self,
         slot: super::PanelSlot,
@@ -2781,212 +2857,219 @@ impl Editor {
         *self.panel_opt_mut(slot) = None;
         let _ = self.widget_registry.unmount(&panel_key);
     }
+}
 
-    /// `handle_editor_click` uses; clicks outside the rect are
-    /// swallowed without dismissing the panel.
-    /// Resolve a click against the open dropdown pop-over's screen rects
-    /// (recorded by the last draw). A click on an option row delivers the
-    /// same `dropdown_select` hit a TUI cell click on the old inline list
-    /// would; a click elsewhere inside the box (border) is swallowed so it
-    /// neither selects nor dismisses the modal. Returns true when the click
-    /// was inside the pop-over box (and thus consumed).
-    fn try_panel_popup_click(&mut self, slot: super::PanelSlot, col: u16, row: u16) -> bool {
-        let (panel_key, key, hits, popup_rect) = match self.panel(slot) {
-            Some(f) => (
-                f.panel_key.clone(),
-                f.popup.as_ref().map(|d| d.widget_key.clone()),
-                f.popup_hits.clone(),
-                f.popup_rect,
-            ),
-            None => return false,
-        };
-        let popup_rect = match popup_rect {
-            Some(r) => r,
-            None => return false,
-        };
-        let key = match key {
-            Some(k) if !k.is_empty() => k,
-            _ => return false,
-        };
-        // Option row → select that index (fires `change`) and close.
-        if let Some(hit) = hits.iter().find(|h| in_rect(col, row, h.rect)) {
-            let ev = crate::widgets::WidgetEvent {
-                row_target: false,
-                context_click: false,
-                widget_key: key,
-                widget_kind: "dropdown",
-                payload: serde_json::json!({ "index": hit.index }),
-                event_type: "dropdown_select",
-                owner_key: None,
-            };
-            self.deliver_widget_hit(&panel_key, &ev, None);
-            return true;
-        }
-        // Inside the box but not on a row (its border): consume so the
-        // modal isn't dismissed and the list stays open.
-        in_rect(col, row, popup_rect)
+#[cfg(test)]
+mod tests {
+    use super::Editor;
+    use crate::config::Config;
+    use crate::config_io::DirectoryContext;
+    use fresh_core::api::WidgetSpec;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn make_editor() -> (Editor, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let dir_context = DirectoryContext::for_testing(temp_dir.path());
+        let fs: Arc<dyn crate::model::filesystem::FileSystem + Send + Sync> =
+            Arc::new(crate::model::filesystem::StdFileSystem);
+        let editor = Editor::new(
+            Config::default(),
+            80,
+            24,
+            dir_context,
+            crate::view::color_support::ColorCapability::TrueColor,
+            fs,
+        )
+        .unwrap();
+        (editor, temp_dir)
     }
 
-    /// Resolve a screen cell against a mounted floating panel: the
-    /// panel-local row and byte column it maps to, plus the widget hit
-    /// there (`None` when the cell is over no widget).
-    ///
-    /// Returns `None` when the panel isn't mounted, hasn't been drawn yet,
-    /// or the cell is outside its inner rect — i.e. "not this panel's cell"
-    /// as distinct from "this panel's cell, no widget on it".
-    ///
-    /// Shared by the click path and the hover tracker so the two can never
-    /// disagree about what the pointer is on. They did once for left- vs
-    /// right-click (byte-exact vs row-wide resolution), and compact dock
-    /// rows silently swallowed clicks past their label for it.
-    ///
-    /// **It cannot currently answer, and the chain is worth writing down
-    /// rather than acting on.** Its one caller,
-    /// [`Self::handle_floating_widget_click`], is reached from `UiFact::
-    /// DockPress` — which `view::shell::dock::column` emits only when
-    /// `panel_interior` is `None` — and from `UiFact::ModalPointer`, which
-    /// `view::shell::panel::frame_box` produces only under the same
-    /// condition. `panel_interior` and `Editor::panel_is_described` ask one
-    /// question (a panel in the slot, mounted in the registry), and
-    /// `render_floating_widget_panel` records `last_inner_rect` only when
-    /// that question is `true` or when the web's no-paint pass runs. So the
-    /// first line here returns `None` on every path that can reach it.
-    ///
-    /// It is left standing because removing it is S7's step, not S5's: it is
-    /// the only reader of `panel.entries` and `panel.overlays`, and those go
-    /// with the collector's paint of a described surface. What S5 owes is
-    /// that the *identity* it resolves no longer travels with the geometry —
-    /// which it does not: it hands `hit.event` on, and rebases `bcol` out of
-    /// the panel row's space itself.
-    fn probe_floating_widget(
-        &self,
-        slot: super::PanelSlot,
-        col: u16,
-        row: u16,
-    ) -> Option<FloatingWidgetProbe> {
-        let inner = self.panel(slot)?.last_inner_rect?;
-        if col < inner.x || col >= inner.x + inner.width {
-            return None;
+    fn dock_panel(panel_key: crate::widgets::PanelKey) -> crate::app::FloatingWidgetState {
+        crate::app::FloatingWidgetState {
+            panel_key,
+            width_pct: 30,
+            height_pct: 100,
+            placement: crate::app::PanelPlacement::LeftDock { width_cols: 30 },
+            focused: true,
+            entries: Vec::new(),
+            last_inner_rect: None,
+            scrollbar_zone_hovered: false,
+            scrollbar_flash_until: None,
+            fullscreen: false,
+            focus_marker: false,
+            title: None,
+            closable: false,
+            hovered_widget_key: String::new(),
+            hovered_item_key: String::new(),
+            hovered_popup_row: String::new(),
+            popup: None,
         }
-        if row < inner.y || row >= inner.y + inner.height {
-            return None;
-        }
-        let brow = (row - inner.y) as u32;
-        let local_screen_col = (col - inner.x) as usize;
-        // Which surface is the pointer on? The panel's layout-box tree
-        // answers: a z>0 box — an Overlay-promoted subtree (the dock's
-        // "New Task… ▾" / "Move to Folder…" dropdowns) or the Text
-        // completion popup — covers the base rows beneath it. This used
-        // to be re-derived by scanning the painted overlay rows; the
-        // box tree is the same fact, stated structurally.
-        // Resolve the boxes through the slot's own panel key — never a
-        // `panels_for_buffer(..).first()` pick, whose HashMap order is
-        // arbitrary and could name a different panel than the one whose
-        // overlays/entries the text lookup below reads.
-        let slot_panel_key = self.panel(slot)?.panel_key.clone();
-        let on_overlay = self.widget_registry.get(&slot_panel_key).is_some_and(|p| {
-            // The covering surface is named by `pointer_opaque` on
-            // the hit path — the popup boxes (overlay promotion,
-            // completion list) carry it. z alone is not enough: a
-            // future non-opaque cover (a pass-through tooltip)
-            // must NOT capture the pointer.
-            crate::widgets::layout_box::hit_path(&p.boxes, brow, local_screen_col as u32)
-                .iter()
-                .any(|&i| p.boxes[i].pointer_opaque && p.boxes[i].z > 0)
-        });
-        // The column maps to a byte offset through the text of the
-        // surface the pointer is on — a covered row is DRAWN from the
-        // overlay's text, and the overlay's hit areas were measured
-        // against it. Mapping through the row underneath yields a byte
-        // offset in a different string, which is why the dropdown
-        // options were once unclickable.
-        let panel = self.panel(slot)?;
-        let row_text = if on_overlay {
-            panel
-                .overlays
-                .iter()
-                .find(|o| o.buffer_row == brow)
-                .map(|o| o.entry.text.as_str())?
-        } else {
-            panel.entries.get(brow as usize).map(|e| e.text.as_str())?
-        };
-        let bcol = crate::primitives::display_width::grapheme_byte_at_visual_column(
-            row_text,
-            local_screen_col,
-        );
-        // Row-aware resolution on the base surface (a click past a
-        // compact row's text still lands on the row); opaque popup
-        // semantics on the overlay surface (only its own hits are
-        // reachable, misses swallowed) — both inside
-        // `hit_test_row_aware`, keyed by the surface parameter.
-        let hit = self.widget_registry.hit_test_row_aware(
-            slot.buffer_id(),
-            brow,
-            bcol as u32,
-            on_overlay,
-        );
-        Some(FloatingWidgetProbe {
-            brow,
-            bcol,
-            hit: hit.map(|(_, h)| h.clone()),
-        })
     }
 
-    pub(super) fn handle_floating_widget_click(
-        &mut self,
-        slot: super::PanelSlot,
-        col: u16,
-        row: u16,
-    ) {
-        // An open dropdown's option list floats as a screen-level pop-over
-        // that extends PAST the panel/modal border, so a click on one of
-        // its option rows lands outside the panel's inner rect and would be
-        // dropped by the gate below. Resolve it first, against the screen
-        // rects recorded at draw time.
-        if self.try_panel_popup_click(slot, col, row) {
-            return;
-        }
-        // Scrollbar press wins over row hit-testing (the bar overlaps
-        // the list's rightmost column).
-        if self.try_widget_scrollbar_press(slot, col, row) {
-            return;
-        }
-        let panel_key = match self.panel(slot) {
-            Some(fwp) => fwp.panel_key.clone(),
-            None => return,
-        };
-        let probe = match self.probe_floating_widget(slot, col, row) {
-            Some(p) => p,
-            None => return,
-        };
-        let (brow, bcol) = (probe.brow, probe.bcol);
-        let Some(hit) = probe.hit else {
-            tracing::debug!(
-                target: "fresh::dock",
-                ?slot, col, row, brow, bcol,
-                "handle_floating_widget_click: hit_test found no widget"
-            );
-            return;
-        };
-        tracing::debug!(
-            target: "fresh::dock",
-            hit_key = %hit.event.widget_key,
-            hit_kind = hit.event.widget_kind,
-            hit_event = %hit.event.event_type,
-            "handle_floating_widget_click: hit"
+    /// One frame of the shell's tree, without a terminal: the same two calls
+    /// `Editor::render` makes around it.
+    fn frame_the_shell(editor: &mut Editor) {
+        use ratatui::layout::Rect;
+        let dock = Rect::new(0, 0, 30, 24);
+        let chrome = Rect::new(30, 0, 50, 24);
+        let shell = editor.shell_frame((Some(dock), chrome));
+        let mut ui = editor.shell_ui.take().expect("the shell tree");
+        ui.frame(
+            crate::view::shell::frame::frame_tree(shell),
+            fresh_ui::Size::new(80, 24),
         );
-        // The shared pointer dispatch — identical to a buffer-cell or
-        // native-frontend click: focus the event's owner, run the kind's
-        // own `on_pointer`, place a text caret from the clicked byte,
-        // fire the event unless consumed. This TUI-native path used to
-        // hand-copy a subset of that ladder and drifted (no list-selection
-        // sync, no dual-list cursor move); delegating is what keeps the three
-        // frontends behaving identically.
-        //
-        // `bcol` is a byte in the panel *row*; the dispatch wants one in the
-        // widget's own row, which is the same rebase `click_handlers` makes
-        // for the same reason.
-        let byte_in_field = bcol.saturating_sub(hit.byte_start);
-        self.deliver_widget_hit(&panel_key, &hit.event, Some(byte_in_field));
+        editor.shell_ui = Some(ui);
+    }
+
+    fn button(key: &str) -> WidgetSpec {
+        WidgetSpec::Button {
+            label: key.into(),
+            focused: false,
+            intent: Default::default(),
+            key: Some(key.into()),
+            disabled: false,
+            focusable: true,
+            bare: false,
+            full_width: false,
+            hover_style: None,
+        }
+    }
+
+    /// **Where the tree has no ring, the arena is still the one that works.**
+    ///
+    /// This is the half of S6 that is *not* available to be deleted. A panel
+    /// whose interior the tree does not describe — or describes with nothing
+    /// focusable in it — keeps `panel::keys_layer`'s sink, and the sink is
+    /// outside every scope: `Ui::move_focus` there has nowhere to go. The box
+    /// arena is the only ring such a panel has, and every host-driven advance
+    /// (`WidgetAction::FocusAdvance`, `KeyFx::focus_advance`, the smart-key
+    /// `Tab`) has to keep landing on it.
+    ///
+    /// The editor here has never had a frame, so its tree carries no
+    /// interior scope at all — which is exactly the shape
+    /// `advance_panel_focus_in_tree` must decline, and it declines it by
+    /// asking the tree rather than by asking the runtime how many tabbables
+    /// the spec has.
+    #[test]
+    fn a_panel_the_tree_does_not_hold_advances_on_the_arena() {
+        let (mut editor, _t) = make_editor();
+        let panel_key = crate::widgets::PanelKey::new("test-plugin", 1);
+        let spec = WidgetSpec::Col {
+            children: vec![button("one"), button("two")],
+            key: None,
+        };
+        let out = super::render_floating_spec(
+            false,
+            &spec,
+            &Default::default(),
+            "",
+            40,
+            None,
+            "",
+            "",
+            "",
+            None,
+        );
+        assert_eq!(
+            out.tabbable,
+            vec!["one".to_string(), "two".to_string()],
+            "the arena's ring, from the same `box_meta` the tree's is built from"
+        );
+        editor.widget_registry.mount(
+            panel_key.clone(),
+            crate::app::PanelSlot::Dock.buffer_id(),
+            spec,
+            out.hits,
+            out.instance_states,
+            out.focus_key,
+            out.tabbable,
+            out.effective_rows,
+            out.boxes,
+        );
+        assert_eq!(
+            editor.widget_registry.focus_key(&panel_key),
+            Some("one"),
+            "the render clamps focus onto the first tabbable"
+        );
+        // In the dock's slot, so the routing resolves a slot and asks the
+        // tree — and the tree, never having been framed, carries no interior
+        // scope to answer with.
+        editor.dock = Some(dock_panel(panel_key.clone()));
+
+        editor.handle_widget_focus_advance(&panel_key, 1);
+        assert_eq!(
+            editor.widget_registry.focus_key(&panel_key),
+            Some("two"),
+            "the arena advanced it"
+        );
+        editor.handle_widget_focus_advance(&panel_key, -1);
+        assert_eq!(
+            editor.widget_registry.focus_key(&panel_key),
+            Some("one"),
+            "and back"
+        );
+    }
+
+    /// **And where the tree does hold it, the tree is the one that moves.**
+    ///
+    /// The same panel, mounted in the dock slot and given a frame, so the
+    /// keyboard layer names its interior and focus settles on a widget inside
+    /// it. A plugin's `FocusAdvance` now moves *the tree's* focus and the
+    /// registry's key follows as the mirror it is meant to be — where before,
+    /// the arena wrote the key and the tree's focus stayed where it was, so
+    /// the user's next Tab started from the widget they had already left.
+    #[test]
+    fn a_panel_the_tree_holds_advances_on_the_trees_ring() {
+        let (mut editor, _t) = make_editor();
+        let panel_key = crate::widgets::PanelKey::new("test-plugin", 1);
+        let spec = WidgetSpec::Col {
+            children: vec![button("one"), button("two")],
+            key: None,
+        };
+        let out = super::render_floating_spec(
+            false,
+            &spec,
+            &Default::default(),
+            "",
+            30,
+            None,
+            "",
+            "",
+            "",
+            None,
+        );
+        editor.widget_registry.mount(
+            panel_key.clone(),
+            crate::app::PanelSlot::Dock.buffer_id(),
+            spec,
+            out.hits,
+            out.instance_states,
+            out.focus_key,
+            out.tabbable,
+            out.effective_rows,
+            out.boxes,
+        );
+        editor.dock = Some(dock_panel(panel_key.clone()));
+        frame_the_shell(&mut editor);
+
+        let scope =
+            crate::view::shell::panel::interior_key(crate::view::shell::widgets::Slot::Dock);
+        let ui = editor.shell_ui.as_ref().expect("the tree");
+        let el = ui
+            .find_by_key(&scope)
+            .expect("the interior names the scope");
+        assert!(ui.has_focus_within(el), "and the frame settled focus in it");
+        let before = ui.focused();
+
+        editor.handle_widget_focus_advance(&panel_key, 1);
+
+        let ui = editor.shell_ui.as_ref().expect("the tree");
+        assert_ne!(ui.focused(), before, "the tree's focus is what moved");
+        assert_eq!(
+            editor.widget_registry.focus_key(&panel_key),
+            Some("two"),
+            "and the registry's key mirrors it"
+        );
     }
 }

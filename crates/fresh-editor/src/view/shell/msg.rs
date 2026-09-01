@@ -420,31 +420,20 @@ pub enum UiFact {
         x: u16,
         y: u16,
     },
-    /// A left press inside the dock column, in screen coordinates.
-    ///
-    /// **Only reachable for a dock with no described panel** — an empty
-    /// column, or one whose panel the adapter could not describe. A mounted
-    /// panel's widgets are nodes now and answer their own presses, and the
-    /// column emits [`UiFact::DockFocus`] instead. This arm survives because
-    /// `handle_floating_widget_click` still hit-tests the runtime's boxes for
-    /// that case, which needs a position — the same seam as
-    /// `CardToolbarPress`.
-    DockPress {
-        x: u16,
-        y: u16,
-    },
-    /// A right press inside the dock column: the plugin raises a per-session
-    /// context menu from it.
     /// A left press landed on the dock's column and nothing in it answered.
     ///
-    /// **The half of `DockPress` that was never about geometry.** While the
-    /// interior is a painter the press has to say *where*, so the runtime can
-    /// hit-test its own boxes; once it is described the widgets answer their
-    /// own and what reaches the column is dead space. Focusing the dock is
-    /// what is left, and it is what `DockPress` did before its cell was used
-    /// for anything — `handle_floating_widget_click` returns without acting
-    /// when its probe finds no widget.
+    /// **A press on the column carries no cell, and there is nothing left to
+    /// carry one for.** `DockPress { x, y }` stood beside this until S7: a
+    /// column whose interior was a painter reported *where*, so the runtime
+    /// could hit-test its own boxes. `panel_interior` answers `None` only for
+    /// a column with no panel mounted, which has no boxes to hit-test, and
+    /// the probe that read them is deleted — so both sides of that seam mean
+    /// the same thing and say it with one fact. A mounted panel's widgets are
+    /// nodes and answer their own presses; what reaches the column is dead
+    /// space, and focusing the dock is the whole of it.
     DockFocus,
+    /// A right press inside the dock column: the plugin raises a per-session
+    /// context menu from it.
     DockContext {
         x: u16,
         y: u16,
