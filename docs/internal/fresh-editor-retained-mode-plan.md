@@ -745,6 +745,135 @@ columns, which is worse than always-zero because it looks tested.
 
 ---
 
+## 6d. The web's plugin panels, deleted — and what bringing them back costs
+
+**Deliberate, and authorised.** The web frontend's plugin-panel support was
+removed so the retained side could stop having a second consumer of the
+immediate-mode collector's output. It will be brought back once the retained
+work is finished, and it must be brought back *differently*. This section exists
+so that is a decision someone makes rather than a gap someone rediscovers.
+
+### What was deleted
+
+| where | what it was |
+|---|---|
+| `view/scene.rs` | `WidgetSurfaceView`, `WidgetInstanceView`, `WidgetHitView`, `Editor::widgets_view` — the dock's and the floating panel's `WidgetSpec`, the registry's instance-state map, the recorded hit list's *identity* half, the focused key and the panel's screen rect, one entry per mounted surface |
+| `webui/mod.rs` | the `regions.widgets` key of the scene payload, and `apply_widget`'s `"panel"` arm |
+| `app/widget_runtime.rs` | `deliver_widget_hit_by_index`, `deliver_widget_hit_semantic`, `synthesize_list_hit`, `synthesize_tree_hit`, `synthesize_control_hit`, `copy_context_anchor_cell`, `set_widget_text_cursor` |
+
+`web-ui/js/65-widgets.js` is **not** deleted: `widgetEl` and its routing are
+shared with the settings dialog, the keybinding editor, the aux modals and the
+overlay prompt toolbar, all of which still ship. What is dead there is
+`widgetSurfaceEls` and the two dock-overlay helpers below it; the region's
+readers elsewhere in the JS all guard on `regions.widgets || []` and degrade to
+"no dock" without a change. The dead functions are marked at their definitions.
+
+### What it did, precisely
+
+The web never received geometry for a plugin panel. It received the spec, laid
+it out itself in DOM, and echoed a click back as an *identity* (`widgetKey` +
+`eventType` + `payload`) with the recorded hit's index as a tiebreaker. The
+index existed because the recorded list is windowed to the TUI's visible rows
+while the browser renders the whole list, so a click on a row outside the TUI's
+window matched no recorded hit — which is why the three `synthesize_*_hit`
+functions existed, rebuilding the `HitArea` the renderer *would* have emitted
+from the spec and the instance state.
+
+**Those synthesizers were the most valuable thing in the deleted set**, and it
+is worth being explicit about why: they are the only written instance of the
+derivation §4.1 of `fresh-editor-plugin-widgets-end-state.md` wants everything to
+use — `HitArea`'s identity half as a pure function of `(spec, instance state)`.
+Restoring the web should re-derive, not restore them from git.
+
+### Why it had to go
+
+`WidgetPanelState::hits` had two classes of reader. One reads its *geometry*:
+`hit_test_row_aware`, for a pane-mounted panel that rides the buffer's scroll,
+where the recorded rows really are the rows on screen. That one is correct and
+stays. The other read its *identity* half, and every member of that class was
+the web. While it existed, the immediate-mode collector had to run in full for a
+panel the tree had already laid out, purely so a list nobody in the TUI reads
+could be shipped to a frontend. Deleting it is what makes "the display list is
+the output" reachable at all.
+
+### What the replacement is
+
+**The web should consume the display list**, the way it already consumes the
+status bar, the file browser, the settings dialog and every pane rectangle. A
+described plugin panel is nodes in the same tree those come from; there is no
+plugin-specific projection to write. Concretely:
+
+1. The fold already resolves every item's rect, clip, style and key. A panel's
+   subtree is addressable by the keys the adapter already applies
+   (`widget_focus:<key>`, `panel_interior`, `panel_frame`, `panel_body`).
+2. A click comes back as a *cell*, and is dispatched through the same
+   `fresh_ui` hit path the TUI uses — which means the web stops needing a hit
+   list, an index, an ordering, or a synthesizer.
+3. Text-caret placement comes back as a byte through the same route S0
+   (`Event::text_byte`) gives the TUI, rather than through
+   `set_widget_text_cursor`.
+
+The obligation the deleted code met is real; the *storage* it met it with was
+not, which is exactly what §7.2 of the end-state doc concluded before this was
+authorised.
+
+### Tests knowingly broken
+
+The playwright web-UI suite's dock and plugin-widget coverage now fails: the
+scene ships no `regions.widgets`, so nothing renders and no `/widget` panel
+click is accepted. Those tests are **left failing on purpose** — not deleted,
+not weakened — because a green suite over a deleted feature is worse than a red
+one. They are the specification of what the display-list replacement has to
+satisfy.
+
+---
+
+## 6e. Why the immediate-mode collector still runs for a described panel
+
+The stated target was that it stop entirely. It cannot yet, and the reason is
+four live outputs rather than an oversight. For a **described dock or floating
+panel** — after the web deletion — `render_floating_spec`'s outputs stand as:
+
+| output | live consumer for a described panel |
+|---|---|
+| `entries` | an *anchored* popup's `content_cols` (`Panel::anchored_width`, §6.6 of the end-state doc). Nothing else: `content_rows` is read only for a `Host` interior, which means no panel at all |
+| `hits` | **none** |
+| `focus_cursor`, `overlays`, `embeds` | **none** — the slot arm returns before the buffer write |
+| `instance_states` | **live.** The collector is the seeder and sanitizer of the state a plugin's re-emitted spec must not lose |
+| `focus_key` | **live** (the clamp onto a key that exists in the spec) |
+| `effective_rows` | **live** — `List`/`Tree`'s `on_key`/`on_wheel` page and bound arithmetic |
+| `boxes`, `tabbable` | **live, narrowly**: `handle_widget_focus_advance`'s arena ring, for a panel that is mounted but does not hold the tree's focus |
+| `popup` | **live** — `UiFact::WidgetPopupDismiss` reads `fwp.popup.widget_key` to find the open dropdown |
+
+Stopping the render therefore needs, in order of size:
+
+1. **`resolve` split out of `collect`** (end-state doc R2 / S7). Not mechanical:
+   `List`'s state resolution runs through `plan_list_layout`, which needs the
+   panel width *and* measures card items to get `item_height`, so the state
+   writer is entangled with the layout. This is the real blocker.
+2. **`effective_rows` delivered rather than stored** (§4.5) — the row window is
+   the viewport's, and the key event must carry it.
+3. `popup` and `focus_key` become derivations over `(spec, instance state)`;
+   both are small once (1) exists.
+4. `entries` stops being read once `rule()` retires `node()`'s width parameter
+   and `anchored_width` becomes `Sizing::Auto` (§6.6).
+
+**What is *already* true and was not before:** for a described panel the
+collector's *pointer and focus* outputs are no longer authoritative anywhere.
+`hits` has no reader, the box arena answers no wheel (`handle_widget_panel_wheel_at`
+declines a described panel outright, and says why), and
+`Interior::has_focus_targets` derives from the spec through the same predicate
+the tree's ring admits by instead of reading the recorded `tabbable`.
+
+**And the per-frame double render is down to one arm.** `render_collected` is
+called inside a description build in exactly one place now
+(`view/shell/widgets.rs`, the markdown text-area's reflow) — S8's markdown half,
+whose replacement is a wrapped viewport with `cursor_byte`. The card-list arm has
+crossed. So "two full rendering pipelines run for every plugin panel" is now true
+only of a panel containing a markdown document view.
+
+---
+
 ## 7. Merge posture for the current branch
 
 The branch is a large net improvement and should land — but not as-is. Phase 1 is

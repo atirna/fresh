@@ -493,9 +493,8 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
 /// it walks the spec through [`crate::widgets::kinds::focusable_key`] rather
 /// than reading a list somebody else collected. It replaces the read of
 /// `WidgetPanelState::tabbable`, which was the runtime's `collect_tabbable`
-/// output recorded at whatever render ran last: a second authority for one
-/// fact, stale whenever the spec moved without a re-render, and admitting the
-/// empty-string keys this rule rejects.
+/// output recorded at whatever render ran last — the same rule computed
+/// somewhere else and then allowed to go stale against the spec it describes.
 ///
 /// **What it does not see, stated rather than implied.** The walk is
 /// `spec.children()`, which yields the container kinds' children only — a
@@ -6547,18 +6546,29 @@ mod tests {
             );
         }
 
-        // And the divergence, stated rather than discovered: `collect_tabbable`
-        // pushes an empty key, `kinds::focusable_key` rejects it, and the tree
-        // is right — a focusable the ring cannot name is one `apply_autofocus`
-        // would land on and nothing could ever move off.
-        let nameless = btn(Some(""), false, true);
+        // **Staleness is the whole of the difference, so it is the thing to
+        // pin.** The two rules agree above on every shape; what the swap buys
+        // is that the answer is taken from *this* spec rather than from the
+        // ring some earlier render recorded. Here the recorded ring is empty
+        // and the spec has a button in it — the shape a panel is in between a
+        // spec update and the re-render that would refresh the ring.
+        let spec = std::rc::Rc::new(btn(Some("ok"), false, true));
+        let interior = super::super::panel::Interior {
+            spec: spec.clone(),
+            states: Default::default(),
+            focus_key: String::new(),
+            hovered_key: None,
+            hovered_item_key: String::new(),
+            hovered_popup_row: String::new(),
+            marker_gutter: false,
+            avail_height: None,
+            scrollbar_reveal: None,
+            claims_tab: false,
+        };
         assert!(
-            !crate::widgets::render_spec(&nameless, &Default::default(), "", WIDTH as u32)
-                .tabbable
-                .is_empty(),
-            "the collector admits an empty key"
+            interior.has_focus_targets(),
+            "the interior answers from the spec it is about to describe"
         );
-        assert!(!any_on_the_ring(&nameless), "and the tree's ring does not");
     }
 
     /// **A multi-line field takes the rows it asked for and no more**, however

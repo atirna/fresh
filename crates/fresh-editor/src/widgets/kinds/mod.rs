@@ -310,10 +310,15 @@ pub(crate) trait WidgetImpl: Sync {
 ///
 /// **The admission rule for every focus ring, stated once.** A kind answers
 /// "am I focusable" and "what is my key" in its own [`WidgetImpl::box_meta`];
-/// a focusable with no key — or with an empty one — is not addressable, so it
-/// is not on any ring. Restating that anywhere else is another copy of a rule
-/// that has already been copied enough (`BoxMeta::focusable`'s own doc records
-/// the last time two copies had to be kept in step).
+/// a focusable with no key is not addressable, so it is not on any ring.
+/// Restating that anywhere else is another copy of a rule that has already
+/// been copied enough (`BoxMeta::focusable`'s own doc records the last time two
+/// copies had to be kept in step).
+///
+/// The empty-key filter is defence in depth, not a correction: every kind that
+/// can be focusable already declines an empty key inside its own `box_meta`,
+/// so the two agree today. It is here so that "on a ring" and "has a name a
+/// ring can move to" stay the same statement whatever a kind does next.
 ///
 /// Three callers, and the point is that they cannot disagree:
 /// `view::shell::widgets::on_the_ring`, which puts the node on the tree's

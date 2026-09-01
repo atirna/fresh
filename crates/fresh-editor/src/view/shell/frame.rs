@@ -629,10 +629,11 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
         Some(id) => fresh_ui::scope(window_scope(id), chrome),
         None => chrome,
     };
-    // Native around a `Host` content leaf: the column answers its own pointer
-    // and carries its width grip, while the panel's widgets stay the widget
-    // runtime's until `WidgetSpec` becomes a `Node`. A hidden dock is still in
-    // the tree at zero width, like every other region.
+    // Native all the way down when a panel is mounted: the column answers its
+    // own pointer and carries its width grip, and `dock_interior` — passed on
+    // the next line — is the panel's spec as nodes. The `Host` leaf is what an
+    // *empty* dock falls back to, not what its widgets are. A hidden dock is
+    // still in the tree at zero width, like every other region.
     //
     // **Outside the window scope, deliberately.** The dock is editor-global —
     // its state is `Editor.dock`, it lists and switches between *all* windows,

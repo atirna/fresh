@@ -7369,9 +7369,14 @@ impl Editor {
             },
         };
 
-        // Web renders this panel natively from `widgets_view`; compute geometry
-        // (incl. `last_inner_rect` for click routing) but paint no cells. TUI
-        // passes draw=true so its rendering is unchanged.
+        // **Geometry without cells, and the reason is no longer the web.** A
+        // frontend that suppresses chrome cells still needs this pass to run
+        // for `last_inner_rect`, which the wheel routing and the anchored
+        // popup's dismissal gate read. It used to be the web's plugin-panel
+        // projection that made the distinction worth having; that projection
+        // is deleted, and what remains is a headless frame computing the same
+        // rectangles without painting them. TUI passes draw=true so its
+        // rendering is unchanged.
         let draw = !self.suppress_chrome_cells;
         // Only the centered modal dims the background; the dock and the
         // anchored context-menu popup paint over the editor without it.

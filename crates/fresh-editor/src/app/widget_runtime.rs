@@ -163,7 +163,7 @@ pub(super) fn translate_plugin_animation_kind(
 
 impl Editor {
     /// Process a resolved widget press (from a TUI cell click, a floating
-    /// panel click, or a native-frontend click): move focus to the event's
+    /// panel click, or a plugin's own `WidgetAction`): move focus to the event's
     /// OWNING widget, run the owner kind's own pointer handler
     /// ([`crate::widgets::kinds::WidgetImpl::on_pointer`] — tree
     /// expansion, list/tree selection, dropdown open/commit, dual-list
@@ -1816,9 +1816,28 @@ impl Editor {
     /// Height sibling of [`Self::floating_panel_inner_width`]: the row
     /// budget auto-sized (`visible_rows: None`) lists/trees inside this
     /// panel size themselves to. A left dock spans the terminal height;
-    /// a centered modal takes its `height_pct` share. 2 rows are
-    /// reserved for the panel frame, mirroring the width helper's
-    /// 2-column reservation.
+    /// a centered modal takes its `height_pct` share.
+    ///
+    /// **Two rows come off, and only one arm has a frame to justify them.**
+    /// For the centred and anchored panel the reservation is the box's own
+    /// border, and the number is not in competition with layout: the box is
+    /// `Sizing::Auto` (`view::shell::panel::Panel::height`), so the budget
+    /// decides the content's height and `Auto` measures around it — one
+    /// authority with the layout following, not two answers.
+    ///
+    /// The dock is the arm where that argument does not hold. Its rectangle is
+    /// the full terminal height (`Editor::compute_dock_split`) and its column
+    /// has no border — the divider is a *column*, which
+    /// `floating_panel_inner_width` accounts for separately — so nothing in
+    /// the dock's geometry spends these two rows. What does spend them is the
+    /// orchestrator's own layout: it pads below its tree so its hint bar lands
+    /// on the column's last two rows. That makes the number a plugin's
+    /// convention wearing a frame's name, and the honest replacement is the
+    /// one `splits::panel_content` already uses for a pane — take the budget
+    /// from `LayoutInfo::constraints.max_h` inside `dock::column`'s existing
+    /// `layout_reader`, which is the height the column really has. It is not
+    /// done here because the two are not equal and the difference is the dock
+    /// e2e suite's to adjudicate, not a reader's.
     pub(super) fn floating_panel_inner_height(&self, slot: super::PanelSlot) -> Option<u32> {
         let term_h = (self.terminal_height.max(1)) as u32;
         let panel = self.panel(slot)?;

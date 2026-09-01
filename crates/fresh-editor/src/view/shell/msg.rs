@@ -702,8 +702,8 @@ pub enum UiFact {
     /// for focus, traversal moves it — and this fact demotes the registry's
     /// string to a *mirror*: written only from here, read by everything that
     /// already reads it (the plugin's `focus` event, the kinds' key handlers,
-    /// the web projection). One authority, which is the same move Phase 2.1
-    /// made for the scroll folds.
+    /// `router::WidgetPanelView::focus_key`). One authority, which is the same
+    /// move Phase 2.1 made for the scroll folds.
     ///
     /// Only a *gain* is reported. Focus is never nowhere while a panel is up —
     /// it moves from one control to the next — so a loss paired with a gain

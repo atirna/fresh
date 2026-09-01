@@ -1588,9 +1588,11 @@ impl Editor {
             // It was the authority: the runtime resolved one focused key
             // across a panel's whole spec, the description read it back, and
             // the tree's own ring was declined. Now the ring is the tree's and
-            // this writes what it decided — so the plugin's `focus` event, the
-            // kinds' key handlers and the web projection all keep reading the
-            // field they already read, and it has one writer.
+            // this writes what it decided — so the plugin's `focus` event and
+            // the kinds' key handlers keep reading the field they already
+            // read, and it has one writer. (The web projection was the third
+            // reader; it is deleted, and `router::WidgetPanelView::focus_key`
+            // is the one left that genuinely needs a string.)
             //
             // The plugin is told, exactly as `deliver_widget_hit`'s
             // click-to-focus told it, because a plugin that mirrors focus
