@@ -1090,6 +1090,21 @@ pub struct ViewportRender {
     /// Whether the description's initial offset has been applied. It is the
     /// initial value only: after that the offset is framework-owned.
     placed: bool,
+    /// Whether the last layout gave the bar a gutter. Read only by a measured
+    /// band, as the assumption its first measurement starts from.
+    gutter: bool,
+    /// The last measured band, and what it was measured against:
+    /// `(width, count, cells)`. Only
+    /// [`ItemHeight::Measured`](crate::desc::ItemHeight::Measured) fills it.
+    ///
+    /// **This is what keeps the invariant.** An index-scrolled window answers
+    /// "which items am I holding" by dividing, and the divisor has to be there
+    /// before the builder runs — so if it were recomputed whenever it was
+    /// needed, it would be recomputed on every scroll, and a measured band
+    /// would cost O(count) per wheel notch. Cached against the width, the
+    /// measurement is paid where the answer can actually differ: the width, and
+    /// (through [`ViewportRender::set_props`]) a new description of the items.
+    band: Option<(u16, u32, u16)>,
 }
 
 impl ViewportRender {
@@ -1100,7 +1115,60 @@ impl ViewportRender {
             content: Size::ZERO,
             items: 0,
             placed: false,
+            gutter: false,
+            band: None,
         }
+    }
+
+    /// Take a new description, and with it drop any measured band — see the
+    /// comment at the `Desc::Viewport` arm of `sync_render` for why the arrival
+    /// of a description is the signal that the items may have changed.
+    pub fn set_props(&mut self, props: ViewportProps) {
+        self.props = props;
+        self.band = None;
+    }
+
+    /// One item's height at this width, asked of the child.
+    ///
+    /// The ask is published the same way the window is, so the builder below is
+    /// invalidated by it and runs again — which is what makes this and the
+    /// statement that follows it two different questions at the same
+    /// constraints rather than one cached answer. Whatever the child measures
+    /// to is the band; nothing built to answer is placed, painted or kept, and
+    /// the statement below replaces it before the pass ends.
+    ///
+    /// The height offered is unbounded rather than the window's: an item taller
+    /// than the window still sets the band, because the band is a fact about
+    /// the item.
+    fn ask_band(&mut self, cx: &mut dyn LayoutCx, w: u16, count: u32) -> u16 {
+        if let Some((cw, cn, cells)) = self.band {
+            if cw == w && cn == count {
+                return cells;
+            }
+        }
+        // The window is left exactly where it was, because the question is
+        // about the items and not about which of them are on screen — and
+        // because a builder that keeps its window filled while it answers keeps
+        // the elements in it. Widening the window to "every item" for the
+        // duration of the ask would mount every row, twice over: once as the
+        // thing being measured and once as a window onto everything.
+        cx.set_scroll(crate::render::object::ScrollInfo {
+            window: self.window,
+            content: Size::new(self.window.w, self.window.h),
+            max: Point::new(0, count.saturating_sub(self.window.h as u32) as i32),
+            translate: false,
+            band: Some(crate::render::object::Band::Measuring),
+        });
+        let probe = Constraints::new(w, w, 0, u16::MAX);
+        let mut cells = 0u16;
+        for k in cx.children() {
+            cells = cells.max(cx.measure(k, probe).h);
+        }
+        // A band of zero cells would make the window infinite and the index
+        // meaningless; an item that measures nothing still occupies its row.
+        let cells = cells.max(1);
+        self.band = Some((w, count, cells));
+        cells
     }
 
     /// The height this viewport is willing to take, which is what the
@@ -1146,6 +1214,8 @@ impl RenderObject for ViewportRender {
                         self.content.h.saturating_sub(own.h) as i32,
                     ),
                     translate: true,
+                    // An offset in cells has no items, so no band.
+                    band: None,
                 });
                 let inner = if c.min_w == c.max_w {
                     Constraints::new(w, w, 0, u16::MAX)
@@ -1201,9 +1271,16 @@ impl RenderObject for ViewportRender {
                         content.h.saturating_sub(own.h) as i32,
                     ),
                     translate: true,
+                    // An offset in cells has no items, so no band.
+                    band: None,
                 });
             }
-            ScrollMode::Items { count: n, height } => {
+            ScrollMode::Items {
+                count: n,
+                height: item_h,
+            } => {
+                use crate::desc::ItemHeight;
+                let measured = matches!(item_h, ItemHeight::Measured);
                 // The child renders only the window, so nothing is translated
                 // and the offset is an index. A cell extent over a million rows
                 // would not fit a coordinate; an index does.
@@ -1211,6 +1288,12 @@ impl RenderObject for ViewportRender {
                 // A loose width is resolved the intrinsic way: measure the
                 // window once to learn how wide its rows are, then again at
                 // that width. The framework counts the second look.
+                //
+                // A measured band does not change that: the width is settled
+                // from the window the child is already showing, and only then
+                // is the band measured against it. Asking about every item here
+                // instead would be a second O(count) look, at a width that is
+                // about to change.
                 if c.min_w != c.max_w {
                     let probe = Constraints::new(0, c.max_w, 0, own.h);
                     let mut natural = 0u16;
@@ -1219,25 +1302,60 @@ impl RenderObject for ViewportRender {
                     }
                     own.w = c.constrain(Size::new(natural, own.h)).w;
                 }
-                // Given a loose height, the viewport is as tall as its items —
-                // which is `count * height` cells, not `count` rows.
-                let want = (n.saturating_mul(height as u32)).min(u16::MAX as u32) as u16;
-                own = c.constrain(Size::new(own.w, want));
-                // The window is stated in *items*, because that is what the
-                // offset counts and what the builder inside it asks for. Cells
-                // enter only here, dividing.
-                let rows = (own.h / height) as u32;
+                // The band, and with it the bar's column.
+                //
+                // **A conditional bar and a measured band each depend on the
+                // other.** The gutter narrows the items, narrower items can be
+                // taller, taller items mean fewer fit, and fewer fitting is
+                // what asks for the bar. The knot is cut by measuring against
+                // an assumed gutter and measuring once more if the assumption
+                // was wrong — starting from last frame's answer, which is
+                // right on every frame but the one where it changes, so the
+                // steady state is one measurement against one width rather
+                // than two against two. A second flip would be the start of a
+                // loop, so the second answer stands.
+                //
+                // A stated band has none of this: the number does not depend
+                // on the width, so the gutter is decided once, from the rows,
+                // exactly as it always was.
+                let bar = self.props.scrollbar && !self.props.overlay;
+                let mut gutter =
+                    u16::from(bar && (self.props.stable_gutter || (measured && self.gutter)));
+                let mut height;
+                let mut rows;
+                let mut pass = 0;
+                loop {
+                    height = match item_h {
+                        ItemHeight::Cells(h) => h.max(1),
+                        ItemHeight::Measured => self.ask_band(cx, own.w.saturating_sub(gutter), n),
+                    };
+                    // Given a loose height, the viewport is as tall as its
+                    // items — which is `count * height` cells, not `count`
+                    // rows.
+                    let want = (n.saturating_mul(height as u32)).min(u16::MAX as u32) as u16;
+                    own = c.constrain(Size::new(own.w, want));
+                    // The window is stated in *items*, because that is what the
+                    // offset counts and what the builder inside it asks for.
+                    // Cells enter only here, dividing.
+                    rows = (own.h / height) as u32;
+                    // When the content overflows and a scrollbar is asked for,
+                    // the last column is a gutter the scrollbar owns, so the
+                    // rows are not laid out under it. A stable gutter reserves
+                    // it either way; an overlay bar asks for none and floats
+                    // over the rows instead — see [`RenderObject::paint_over`].
+                    let need = u16::from(bar && (self.props.stable_gutter || n > rows));
+                    if !measured {
+                        gutter = need;
+                        break;
+                    }
+                    pass += 1;
+                    if need == gutter || pass == 2 {
+                        break;
+                    }
+                    gutter = need;
+                }
+                self.gutter = gutter == 1;
                 self.items = n;
-                // When the content overflows and a scrollbar is asked for, the
-                // last column is a gutter the scrollbar owns, so the rows are
-                // not laid out under it. A stable gutter reserves it either
-                // way; an overlay bar asks for none and floats over the rows
-                // instead — see [`RenderObject::paint_over`].
-                let gutter = u16::from(
-                    self.props.scrollbar
-                        && !self.props.overlay
-                        && (self.props.stable_gutter || n > rows),
-                );
                 let inner_w = own.w.saturating_sub(gutter);
                 self.window = Rect::new(0, scroll.y, inner_w, rows.min(u16::MAX as u32) as u16);
                 cx.set_scroll(ScrollInfo {
@@ -1245,6 +1363,11 @@ impl RenderObject for ViewportRender {
                     content: Size::new(inner_w, rows.min(u16::MAX as u32) as u16),
                     max: Point::new(0, n.saturating_sub(rows) as i32),
                     translate: false,
+                    // The band the rows are about to be built against. Telling
+                    // the builder is the other half of asking it: a measured
+                    // band is known only here, and a row built at the wrong
+                    // height puts every index below it on the wrong cell.
+                    band: Some(crate::render::object::Band::Cells(height)),
                 });
                 let inner = Constraints::new(inner_w, inner_w, 0, own.h);
                 for k in cx.children() {
@@ -1464,6 +1587,7 @@ impl RenderObject for ReaderRender {
         let info = LayoutInfo {
             constraints: c,
             scroll_window: None,
+            band: None,
         };
         let info = cx.enclosing_window(info);
         if self.last != Some(info) {

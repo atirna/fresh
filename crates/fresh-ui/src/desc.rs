@@ -308,6 +308,33 @@ impl TextProps {
     }
 }
 
+/// How tall one item of an item-scrolled viewport is.
+///
+/// **Uniform either way; the question is only who counts.** Uniformity is what
+/// makes the window index-addressable — item `i` starts at cell `i * height`,
+/// so a scroll answers by arithmetic and nothing is measured to serve it. That
+/// invariant is the same whichever variant is chosen. What differs is whether
+/// the number can be stated up front.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ItemHeight {
+    /// The caller states it. The viewport describes nothing to find the number
+    /// out and measures nothing to use it: this is the million-item case.
+    Cells(u16),
+    /// Measured. The viewport asks its child, during layout, for the height of
+    /// one item, and takes the answer as the band — see
+    /// [`Band`](crate::render::object::Band) for the protocol.
+    ///
+    /// For content whose height is a function of the width: a list of cards,
+    /// where the tallest card sets the band and shorter ones pad. The number
+    /// does not exist before layout, so it cannot be stated, and a caller that
+    /// computes it anyway is running a second layout engine over its own
+    /// content.
+    ///
+    /// Measurement is not free — see [`Node::item_rows_measured`] for when it
+    /// is paid — but it is never paid to *scroll*.
+    Measured,
+}
+
 /// What a viewport's scroll offset counts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ScrollMode {
@@ -319,11 +346,12 @@ pub enum ScrollMode {
     /// at all: a cell extent that large does not fit a coordinate.
     ///
     /// `height` is how many cells one item occupies, and it is uniform because
-    /// that is what makes an index answerable without measuring: a window that
-    /// has to measure every row to know which ones it holds is not a window
-    /// onto a million rows. A card list — items that are little blocks rather
-    /// than lines — is the case it exists for.
-    Items { count: u32, height: u16 },
+    /// that is what makes an index answerable without measuring *at scroll
+    /// time*: a window that has to measure every row to know which ones it
+    /// holds is not a window onto a million rows. Whether the number is stated
+    /// or measured is [`ItemHeight`]'s question, and a card list — items that
+    /// are little blocks rather than lines — is why both answers exist.
+    Items { count: u32, height: ItemHeight },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -1324,7 +1352,12 @@ impl<M> Node<M> {
     /// tall. See [`Node::item_rows`] for taller ones.
     pub fn items(mut self, count: u32) -> Self {
         match &mut self.desc {
-            Desc::Viewport(p) => p.mode = ScrollMode::Items { count, height: 1 },
+            Desc::Viewport(p) => {
+                p.mode = ScrollMode::Items {
+                    count,
+                    height: ItemHeight::Cells(1),
+                }
+            }
             _ => panic!("items() applies to Viewport nodes only"),
         }
         self
@@ -1332,18 +1365,37 @@ impl<M> Node<M> {
 
     /// How many cells one item occupies. Applies after [`Node::items`], which
     /// sets the count; uniform, and at least one.
-    pub fn item_rows(mut self, height: u16) -> Self {
+    pub fn item_rows(self, height: u16) -> Self {
+        self.item_height(ItemHeight::Cells(height.max(1)))
+    }
+
+    /// The same, for items whose height only layout knows: every item is laid
+    /// out at the current width and the tallest sets the band.
+    ///
+    /// **What it costs, and when.** The measurement is O(count): every item is
+    /// described and laid out, including the ones off screen, because "the
+    /// tallest" is not a question the visible ones can answer. It is paid on
+    /// the frames where the answer could have changed — when the window's
+    /// width changes, and when this viewport's description is reconciled,
+    /// which is to say whenever whatever builds the items rebuilt. It is
+    /// **not** paid to scroll: the offset is an index and the band is cached
+    /// against the width, so a wheel, a key or a reveal moves the window
+    /// without describing anything off screen. Nor is it paid on a frame that
+    /// only paints.
+    ///
+    /// A caller that can state the number should: see [`Node::item_rows`],
+    /// which measures nothing at all.
+    pub fn item_rows_measured(self) -> Self {
+        self.item_height(ItemHeight::Measured)
+    }
+
+    fn item_height(mut self, height: ItemHeight) -> Self {
         match &mut self.desc {
             Desc::Viewport(p) => match p.mode {
-                ScrollMode::Items { count, .. } => {
-                    p.mode = ScrollMode::Items {
-                        count,
-                        height: height.max(1),
-                    }
-                }
-                ScrollMode::Cells => panic!("item_rows() applies after items()"),
+                ScrollMode::Items { count, .. } => p.mode = ScrollMode::Items { count, height },
+                ScrollMode::Cells => panic!("an item height applies after items()"),
             },
-            _ => panic!("item_rows() applies to Viewport nodes only"),
+            _ => panic!("an item height applies to Viewport nodes only"),
         }
         self
     }
@@ -1831,10 +1883,20 @@ impl<M: 'static> Desc<M> {
                     }
                 },
             ),
+            // **A new description may describe new items, and a measured band
+            // is a measurement of the items.** The band is cached against the
+            // width, which catches a resize; nothing about the width catches a
+            // card whose text grew a line. What does is this: a description
+            // arriving at all means whatever builds the items ran again, so the
+            // measurement it produced is no longer known to hold. Dropping it
+            // here is conservative — a rebuild that changed only which row is
+            // hovered pays for a measurement that returns the same number — and
+            // it is the only signal at this level that never misses a change.
+            // The `Cells` path has no band and reads none of this.
             Desc::Viewport(p) => sync(
                 obj,
                 || ViewportRender::new(p.clone()),
-                |o| o.props = p.clone(),
+                |o| o.set_props(p.clone()),
             ),
             // A gesture is a pointer region and a listener list; whether it
             // absorbs a hit is `Node::pointer`, which any node carries.
