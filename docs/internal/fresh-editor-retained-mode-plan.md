@@ -623,6 +623,51 @@ explanation.
 
 ---
 
+## 6b. The web-UI Escape failure is master's, not this branch's
+
+Recorded because I spent hours treating it as a regression from this work, and
+it is not. The correction matters more than the finding.
+
+**The symptom.** The web-UI suite aborts: the New Workspace dialog does not
+close on Escape, and the scrim it raised then intercepts the click the next
+test aims at the View menu, so the run dies on a `TimeoutError` without ever
+printing its `==== N passed, M failed ====` line. The missing summary is what
+made this look worse than it is — a crash hides every other result.
+
+**The cause, from a traced local run.** The dialog is mounted, is focused, and
+Escape *does* reach `dispatch_floating_widget_key` with `slot=Floating`. The
+router returns `FallThrough` — and the very next Escape, with the same focus
+key, returns `CancelAndUnmount`. The difference is `WidgetPanelView::
+editor_mode`: `router::widget_panel_key`'s `mode_has_binding` gives a plugin's
+`defineMode` binding precedence over the panel's own smart-key behaviour, so
+the first Escape runs the mode's binding (leaving the mode, not closing the
+dialog) and only the second closes it. **The dialog has always taken two
+Escapes; the test presses one.**
+
+**Why it is not this branch's.** Nothing here touches `defineMode`, the router's
+mode precedence, or the plugin. And master's own Web UI workflow has failed on
+every run since 2026-08-10 — three consecutive failures — ending in the same
+`TimeoutError` crash with no summary line.
+
+**What I got wrong, and the rule that would have caught it.** Seven mechanisms
+were proposed and killed against the source before the real one was found by
+instrumenting the binary: an `e.stop()` swallowing an Escape intent, keyless
+widgets diverging from `tabbable`, the empty-scope focus drop, the scrim
+outliving its modal, `focused_widget_is_text` steering Escape, the panel's
+keyboard layer losing rank to the dock's, and the panel opening unfocused. Each
+was plausible from reading and false in fact. §5 already says "compare against
+`master`, not against intent" and records that twice a "regression" turned out
+to be master's behaviour. This is the third. **Check the base branch's CI before
+forming a theory, not after seven of them.**
+
+One real defect *was* found while chasing it, and it is fixed rather than
+speculative: an empty focus scope dropped focus entirely, so a modal's keys
+leaked to whatever was behind it (`c89d25f`). It is a genuine latent bug with a
+decisive test, and it is not this failure — claiming it as the fix was itself
+one of the seven errors.
+
+---
+
 ## 7. Merge posture for the current branch
 
 The branch is a large net improvement and should land — but not as-is. Phase 1 is
