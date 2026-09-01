@@ -7999,7 +7999,6 @@ impl Editor {
             scrollbar_reveal: None,
             // A pane-mounted panel has no keyboard layer of its own, so
             // neither field is read for it; see `panel::Interior`.
-            has_focus_targets: false,
             claims_tab: false,
         })
     }
@@ -8109,11 +8108,6 @@ impl Editor {
                             .scrollbar_flash_until
                             .is_some_and(|until| self.time_source().now() < until)
                 }),
-            // The runtime's own answer to "is there anything here to focus".
-            has_focus_targets: self
-                .widget_registry
-                .get(&key)
-                .is_some_and(|p| !p.tabbable.is_empty()),
             claims_tab: self.panel_mode_binds_tab(),
         })
     }

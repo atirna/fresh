@@ -540,7 +540,7 @@ pub fn frame_tree(f: Frame) -> Node<UiMsg> {
     // the layer's own sink, which is what every panel had before. See
     // `panel::keys_layer`.
     let scope_of = |i: Option<&super::panel::Interior>, slot| {
-        i.filter(|i| i.has_focus_targets)
+        i.filter(|i| i.has_focus_targets())
             .map(|_| super::panel::interior_key(slot))
     };
     let chrome = match f.dock_keys {
@@ -1116,7 +1116,6 @@ mod tests {
             marker_gutter: false,
             avail_height: None,
             scrollbar_reveal: None,
-            has_focus_targets: true,
             claims_tab: false,
         });
         let mut ui: Ui<UiMsg> = Ui::new();

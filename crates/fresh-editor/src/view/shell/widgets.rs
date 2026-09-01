@@ -479,9 +479,42 @@ fn node_in(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<UiMs
 /// ring holding only buttons would let Tab cycle buttons and step over the
 /// fields between them, which is worse than a ring the tree does not own: the
 /// unit of this change is a panel, not a widget kind.
+/// Whether describing `spec` would put anything on the tree's ring.
+///
+/// **A build input, and the only one that has to be answered before the build.**
+/// `panel::keys_layer` names the interior as its focus scope only when there is
+/// something in it to focus; a scope with nothing in it makes `apply_autofocus`
+/// drop focus, and with focus nowhere the containment questions report no
+/// keyboard layer and the panel's keys leak to the buffer behind it
+/// (`panel::Interior::has_focus_targets`).
+///
+/// So this is the one question about the tree that cannot be put to the tree,
+/// and the answer has to be the *same rule* the tree will apply — which is why
+/// it walks the spec through [`crate::widgets::kinds::focusable_key`] rather
+/// than reading a list somebody else collected. It replaces the read of
+/// `WidgetPanelState::tabbable`, which was the runtime's `collect_tabbable`
+/// output recorded at whatever render ran last: a second authority for one
+/// fact, stale whenever the spec moved without a re-render, and admitting the
+/// empty-string keys this rule rejects.
+///
+/// **What it does not see, stated rather than implied.** The walk is
+/// `spec.children()`, which yields the container kinds' children only — a
+/// card list's `item_specs` are not children, and a closed `Popup`'s child
+/// is. So a panel whose only focusable lives inside a card, or inside a
+/// pop-over that is shut, is answered wrongly in one direction each: `false`
+/// for the card (the panel keeps its sink, which is what it had before any of
+/// this), `true` for the shut pop-over (the scope is declared and
+/// `apply_autofocus` finds nowhere to land). Both are exactly what
+/// `collect_tabbable` answered, because it walks the same accessor — this
+/// changes the *authority*, not the reach. Closing the second one means
+/// asking the built tree instead, and the answer is needed before the tree
+/// exists.
+pub fn any_on_the_ring(spec: &WidgetSpec) -> bool {
+    crate::widgets::kinds::focusable_key(spec).is_some() || spec.children().any(any_on_the_ring)
+}
+
 fn on_the_ring(spec: &WidgetSpec, cx: &Ctx<'_>, n: Node<UiMsg>) -> Node<UiMsg> {
-    let meta = crate::widgets::kinds::behavior(spec).box_meta(spec);
-    let Some(k) = meta.key.filter(|k| !k.is_empty() && meta.focusable) else {
+    let Some(k) = crate::widgets::kinds::focusable_key(spec) else {
         return n;
     };
     let (slot, widget) = (cx.slot, k.clone());
@@ -6443,6 +6476,89 @@ mod tests {
                 .is_none()),
             "a decorative widget stays off the ring"
         );
+    }
+
+    /// **`any_on_the_ring` and the collector's ring answer the same question**,
+    /// for every shape the two could plausibly split on.
+    ///
+    /// This is the parity assertion that makes the swap safe.
+    /// `panel::Interior::has_focus_targets` used to be
+    /// `!WidgetPanelState::tabbable.is_empty()` — the collector's
+    /// `collect_tabbable`, recorded at whatever render ran last. It is now this
+    /// walk, which is the *tree's* own admission rule
+    /// (`kinds::focusable_key`) applied to the spec in hand. The two are pinned
+    /// against each other here while the collector still exists, because the
+    /// consequence of a silent disagreement is not cosmetic: `false` when the
+    /// tree has focusables means `keys_layer` keeps its sink instead of naming
+    /// a scope, and `true` when it has none means `apply_autofocus` drops focus
+    /// and the panel's keys leak to the buffer behind it.
+    ///
+    /// The one deliberate divergence is the last case: an empty key is a key
+    /// the collector's ring admits and the tree's cannot address.
+    #[test]
+    fn the_derived_ring_and_the_collectors_agree_on_whether_there_is_one() {
+        let raw = WidgetSpec::Raw {
+            entries: vec![fresh_core::text_property::TextPropertyEntry::text("x")],
+            key: None,
+        };
+        let btn = |key: Option<&str>, disabled: bool, focusable: bool| WidgetSpec::Button {
+            label: "b".into(),
+            focused: false,
+            intent: Default::default(),
+            key: key.map(Into::into),
+            disabled,
+            focusable,
+            bare: false,
+            full_width: false,
+            hover_style: None,
+        };
+        let col = |children: Vec<WidgetSpec>| WidgetSpec::Col {
+            children,
+            key: None,
+        };
+        let cases: Vec<(&str, WidgetSpec)> = vec![
+            ("nothing at all", raw.clone()),
+            ("a bare button", btn(Some("b"), false, true)),
+            ("a button with no key", btn(None, false, true)),
+            ("a disabled button", btn(Some("b"), true, true)),
+            ("a button that opted out", btn(Some("b"), false, false)),
+            (
+                "one focusable buried under decoration",
+                col(vec![
+                    raw.clone(),
+                    col(vec![raw.clone(), btn(Some("deep"), false, true)]),
+                ]),
+            ),
+            (
+                "nothing focusable, several levels of it",
+                col(vec![
+                    raw.clone(),
+                    col(vec![raw.clone(), btn(None, false, true)]),
+                ]),
+            ),
+        ];
+        for (what, spec) in cases {
+            let collected =
+                crate::widgets::render_spec(&spec, &Default::default(), "", WIDTH as u32);
+            assert_eq!(
+                any_on_the_ring(&spec),
+                !collected.tabbable.is_empty(),
+                "{what}: the derived answer and the collector's ring disagree"
+            );
+        }
+
+        // And the divergence, stated rather than discovered: `collect_tabbable`
+        // pushes an empty key, `kinds::focusable_key` rejects it, and the tree
+        // is right — a focusable the ring cannot name is one `apply_autofocus`
+        // would land on and nothing could ever move off.
+        let nameless = btn(Some(""), false, true);
+        assert!(
+            !crate::widgets::render_spec(&nameless, &Default::default(), "", WIDTH as u32)
+                .tabbable
+                .is_empty(),
+            "the collector admits an empty key"
+        );
+        assert!(!any_on_the_ring(&nameless), "and the tree's ring does not");
     }
 
     /// **A multi-line field takes the rows it asked for and no more**, however

@@ -1334,6 +1334,29 @@ impl Editor {
         // stale `true` from the previous keystroke would claim this one.
         self.shell_interior_took_key = None;
         let result = ui.dispatch(input);
+        // **The settle's own messages, drained here and nowhere else.**
+        //
+        // `dispatch` returns what handlers produced while routing. What
+        // `apply_autofocus` decides when it *settles* focus — a scope opening,
+        // a focused element going away — goes into `Ui::pending_messages`
+        // instead, and until now nothing in the editor ever took it. Two costs,
+        // both live:
+        //
+        // 1. A focus change the tree decided never reached the host, so the
+        //    plugin's `focus` event did not fire for it and the registry's
+        //    focus key silently diverged from the tree's.
+        // 2. `needs_frame()` is `true` while that queue is non-empty
+        //    (`fresh-ui/src/schedule.rs`), and `tree_stale` below reads it. So
+        //    one settle left the editor reporting "changed" for every input
+        //    event thereafter — repainting unconditionally, forever, which is
+        //    exactly what the comment below sets out to avoid. Anything
+        //    waiting for the frame to go quiet waited for good;
+        //    `dock_pointer_at_rest_requests_no_frame` is that test.
+        //
+        // Drained before `needs_frame` is asked, and applied with the routed
+        // messages below rather than dropped, because these are facts the host
+        // is supposed to act on.
+        let settled = ui.take_messages();
         // **A change is not always a message.** A widget that keeps its own
         // hover — every `List` and `Tree` — writes `hovered` through an
         // updater and produces nothing, precisely so the host is not bothered
@@ -1367,7 +1390,9 @@ impl Editor {
         // element boundary produces neither, which is what still keeps an idle
         // pointer from drawing a frame.
         let changed = tree_stale || !result.msgs.is_empty();
-        self.apply_shell_messages(result.msgs, facts);
+        let mut msgs = result.msgs;
+        msgs.extend(settled);
+        self.apply_shell_messages(msgs, facts);
         // **The claim's second half, and the interior really does answer last.**
         // A `Modality::Focus` surface confines the keyboard without swallowing
         // it, so whether the key was taken is its interior's answer — and the
