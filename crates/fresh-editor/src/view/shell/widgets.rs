@@ -1823,10 +1823,46 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
         // window, and handing it one as tall as the text makes it emit every
         // line and clamp its own scroll to zero, after which `List::windowed`
         // windows the result. **That is a full immediate-mode render per
-        // frame**, and it is the last one on this path. Closing it means
-        // factoring the reflow out the way `text_area_geom` was factored out
-        // of `render_text_area`, and giving the shadow editor an owner —
-        // element state, since it is a fold over the reflowed text.
+        // frame**, and it is the last one on this path.
+        //
+        // **`fresh-ui` now has the two pieces the end-state document §6.2
+        // named, and they are not enough.** A wrapped run answers a press with
+        // a byte of its logical string (`Event::text_byte`) and places a caret
+        // stated as one (`Node::cursor_byte`); both read one mapping, the
+        // `src` range each wrapped row carries. Three things still stand
+        // between that and `viewport(text_runs(parsed).wrap(Word))` here, and
+        // none is a missing line of glue:
+        //
+        // 1. **The caret this view wants is not a hardware cursor**, which is
+        //    what `cursor_byte` places — see `caret_row` below for why. Its
+        //    block caret and its selection band are *styling by logical byte*,
+        //    which `text_runs` already does: split the runs at the caret and
+        //    at the selection ends, before the wrap, and the wrap cuts across
+        //    them. So `cursor_byte` is not the piece this arm was missing.
+        //
+        // 2. **`Up`/`Down`/`Home`/`End`/`S-Down` here mean *rendered* rows**,
+        //    not source lines — that is the whole reason the shadow editor
+        //    holds the reflowed text: the key path (`kinds::text::text_key`)
+        //    has a `WidgetPanelState` and no width, and the reflowed text is
+        //    how render-time knowledge reaches it. `text_byte` answers at
+        //    press time and `cursor_byte` at paint time; neither answers
+        //    "which byte is one rendered row below this one" from a key
+        //    handler. Closing this needs a third thing — the row mapping
+        //    reachable as state, at a width the *layout* settled, not the
+        //    `width` this function is handed (which §6.6 is separately
+        //    retiring).
+        //
+        // 3. **This text is deliberately not text `fresh-ui` may wrap.**
+        //    `parse_markdown` preserves leading whitespace as NBSP so the
+        //    markdown parser does not read an indented line as a code block
+        //    (`view/markdown.rs`, "Preserve leading whitespace (as NBSP)"),
+        //    and `wrap_styled_lines` then treats NBSP as space-like for both
+        //    breaking and the hanging indent. `fresh-ui`'s wrap breaks on
+        //    `' '` only — correctly, since NBSP exists to *prevent* a break —
+        //    so handing it this text would lose every list continuation's
+        //    indent and turn indented items into unbreakable words. Teaching
+        //    the library to break at NBSP would be wrong for every other
+        //    wrapped surface in the editor.
         //
         // Among the bundled plugins only `code-tour.ts` (the step body) asks
         // for it, so the cost is real but narrow.
@@ -1871,8 +1907,29 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                 width as u32,
             );
             let head = usize::from(!label.is_empty());
-            let caret = out.focus_cursor.map(|c| c.byte_in_row as usize);
-            let caret_row = out.focus_cursor.map(|c| c.buffer_row as usize);
+            // **Where the caret is, from the shadow editor rather than from
+            // `focus_cursor`.** A markdown document deliberately publishes no
+            // `focus_cursor` — a hardware cursor here moves the panel
+            // *buffer's* real cursor, and the buffer viewport following it
+            // scrolled the whole panel out from under the document
+            // (`render.rs::markdown_text_caret_follows_focus_and_paints_block_caret`
+            // pins that). Its caret paints as a reversed cell in the row
+            // instead. So the row the caret is on comes from the shadow editor
+            // the render above just wrote into `scratch`, whose lines *are*
+            // the reflowed rows; reading `focus_cursor` here only ever
+            // produced `None`, and with it a list that never followed its
+            // caret.
+            let caret_row = key
+                .as_deref()
+                .filter(|k| !k.is_empty())
+                .filter(|k| cx.is_focused(Some(k)))
+                .and_then(|k| scratch.get(k))
+                .and_then(|st| match st {
+                    crate::widgets::WidgetInstanceState::Text { editor, .. } => {
+                        Some(editor.cursor_row)
+                    }
+                    _ => None,
+                });
             // **The rows are formatted once and built for the window only.**
             // Formatting the whole document is what asking the collector for
             // it costs, and it is padding and overlay arithmetic per line;
@@ -1894,11 +1951,15 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                         .filter(|h| h.buffer_row as usize == i + head)
                         .map(|h| ((h.byte_start, h.byte_end), h.clone()))
                         .collect();
-                    let at = caret.filter(|_| sel == Some(i));
-                    match mine.is_empty() && at.is_none() {
+                    // No caret marker: the zero-width node `row_pieces`
+                    // places one at is what a non-modal surface's *hardware*
+                    // cursor follows, and this surface must not have one —
+                    // see `caret_row` above. The block caret is already an
+                    // inline overlay on the row.
+                    match mine.is_empty() {
                         true => entry_row(&rows_src[i], &surface),
                         false => {
-                            row_pieces(&rows_src[i], slot, &surface, &mine, at, Fill::ToRowEnd)
+                            row_pieces(&rows_src[i], slot, &surface, &mine, None, Fill::ToRowEnd)
                         }
                     }
                 }
@@ -1913,9 +1974,13 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                 let plain = cx.surface.to_string();
                 move |_, _| plain.clone()
             });
-            // "Selected" here means "where the caret is", which is what the
-            // list reveals when it moves. That is the whole of the auto-clamp
-            // the runtime did by hand.
+            // "Selected" here means "the rendered row the caret is on", which
+            // is what the list reveals when it *moves* — a wheel is a
+            // statement about the window and does not fight it. That is the
+            // whole of the runtime's follow-the-caret and its `user_scrolled`
+            // flag, which the collector cannot do here anyway: it is asked for
+            // the document at its full height, so its own scroll clamps to
+            // zero and the window is entirely this list's.
             let list = list.selection(sel);
             let body = keyed(fresh_ui::ComponentExt::node(list), spec_state_key(spec))
                 .h(Sizing::Cells(*rows as u16));
