@@ -701,7 +701,13 @@ chrome one.
 
 ## 6c. Open defects found while finishing, not fixed here
 
-**`Ui::pending_messages` is never drained by the editor.** `apply_autofocus`
+**`Ui::pending_messages` is never drained by the editor — and it poisons
+repaint, not just focus.** `needs_frame()` returns true forever once anything
+lands there (`fresh-ui/src/schedule.rs:673`), `shell_dispatch` reads it as
+`tree_stale` and folds it into `changed`, so after the first autofocus settle
+the editor reports "changed" for every input event and repaints unconditionally
+— defeating the optimisation the comment above it introduces. The Vec also
+grows for the life of the process. `apply_autofocus`
 settles focus after a frame and leaves the resulting `FocusGained` there;
 `Ui::dispatch` returns only what handlers produced during routing, and nothing
 calls `take_messages`. So a focus change the *tree* settled has never reached
@@ -721,11 +727,21 @@ mirror's own step.
 the same dead-payload shape as `DockPress`, which collapsed into `DockFocus`,
 but a fact's shape rather than a dead path, so it wants its own decision.
 
-**A settings entry-dialog `[x]` is unreachable by mouse.** The described `List`
-arm reports `at: None` and `entry_text_list_press` reads it as
-`at.unwrap_or(0)`, so `text_list_target` always answers `Cell`. Pre-existing and
-uncovered; `at` is piece-relative by construction, so fixing it is a contract
-change to that arm.
+**A settings entry-dialog `[x]` is unreachable by mouse. A regression, not
+pre-existing — this entry said "pre-existing" and was wrong.** The described
+`List` arm reports `at: None` (`view/shell/widgets.rs:1105`, `:1289`) and
+`entry_text_list_press` reads it as `at.unwrap_or(0)`
+(`view/settings/mouse.rs:445`), so `text_list_target` never answers `Button`.
+Master resolved it from a real column: `handle_text_list_click(idx, sub_row,
+col, layout)` hit-tested the trailing button
+(`origin/master:crates/fresh-editor/src/view/settings/mouse.rs:1026`,
+`:1113-1115`). Clicking `[x]` on a committed row focuses it instead of removing
+it. Uncovered by any test — a click on that column would have failed on the
+first frame.
+
+Do **not** fix it by sending the piece-local `x` the way `row_pieces` does: a
+piece's column cannot be rebased to a row's, so that produces wrong-but-plausible
+columns, which is worse than always-zero because it looks tested.
 
 ---
 

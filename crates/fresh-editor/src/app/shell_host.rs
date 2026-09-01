@@ -1332,7 +1332,7 @@ impl Editor {
         };
         // Cleared before the interiors run, never by whoever reads it: a
         // stale `true` from the previous keystroke would claim this one.
-        self.shell_interior_took_key = false;
+        self.shell_interior_took_key = None;
         let result = ui.dispatch(input);
         // **A change is not always a message.** A widget that keeps its own
         // hover — every `List` and `Tree` — writes `hovered` through an
@@ -1368,12 +1368,23 @@ impl Editor {
         // pointer from drawing a frame.
         let changed = tree_stale || !result.msgs.is_empty();
         self.apply_shell_messages(result.msgs, facts);
-        // **The claim's second half.** A `Modality::Focus` surface confines
-        // the keyboard without swallowing it, so whether the key was taken is
-        // its interior's answer — and the interior ran in an applier above,
-        // after `dispatch` had already reported what the *tree* claimed. The
-        // authoritative party answers last.
-        let claimed = claimed || self.shell_interior_took_key;
+        // **The claim's second half, and the interior really does answer last.**
+        // A `Modality::Focus` surface confines the keyboard without swallowing
+        // it, so whether the key was taken is its interior's answer — and the
+        // interior ran in an applier above, after `dispatch` had already
+        // reported what the *tree* claimed.
+        //
+        // This was `claimed || took`, which cannot express a decline: `||` only
+        // ever adds, so the tree's claim won whenever it said `true` and the
+        // host's `false` was unreachable. The panel's fallback `stop()`s every
+        // non-Tab key as it emits `PanelKey` (`panel::interior`), which sets
+        // `Dispatch.claimed` — so `dispatch_base_key` was skipped and a
+        // plugin's `defineMode` binding never ran. Escape stopped closing a
+        // plugin's floating panel; the same line also cost a dock chord its
+        // first press and the New-Session form its Enter.
+        //
+        // `None` means no interior answered, so the tree's word stands.
+        let claimed = self.shell_interior_took_key.unwrap_or(claimed);
         Dispatched { claimed, changed }
     }
 
@@ -2442,8 +2453,12 @@ impl Editor {
                 let Some(ev) = self.shell_key_event else {
                     return;
                 };
+                // Only a take is recorded here, deliberately: the prompt's
+                // seam does not `stop()` (see `prompt::keys_layer`), so the
+                // tree never claims for it and a decline has nothing to undo.
+                // The panel's seam is the one that needed a decline to travel.
                 if self.dispatch_prompt_key(&ev).is_some() {
-                    self.shell_interior_took_key = true;
+                    self.shell_interior_took_key = Some(true);
                 }
             }
             // **A focused plugin panel: the same declining seam.** Its
@@ -2484,13 +2499,17 @@ impl Editor {
                         {
                             tracing::warn!("dock focus toggle failed: {e}");
                         }
-                        self.shell_interior_took_key = true;
+                        self.shell_interior_took_key = Some(true);
                         return;
                     }
                 }
-                if self.dispatch_floating_widget_key(slot, ev.code, ev.modifiers) {
-                    self.shell_interior_took_key = true;
-                }
+                // **Recorded either way.** A `false` here is the interior
+                // declining — `FallThrough` or `BlurUnconsumed` from the
+                // router — and it has to reach the fold above, or the key dies
+                // on the tree's claim instead of continuing to the mode
+                // bindings the plugin declared.
+                let took = self.dispatch_floating_widget_key(slot, ev.code, ev.modifiers);
+                self.shell_interior_took_key = Some(took);
             }
             UiFact::ModalPointer(slot) => {
                 use crate::view::shell::modal::Slot;

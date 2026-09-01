@@ -1148,5 +1148,20 @@ mod tests {
             "Escape did not reach the panel: {:?}",
             got.msgs
         );
+        // **And the tree must not claim it.** This is the assertion whose
+        // absence let the regression ship: the version of this test that
+        // landed with the bug checked *which message* and dropped
+        // `got.claimed` on the floor. A `Modality::Focus` seam confines the
+        // keyboard without swallowing it — the host decides, in
+        // `dispatch_floating_widget_key`, and a key the router declines has to
+        // continue to the mode bindings a plugin declared. `panel::interior`
+        // `stop()`s as it emits, so the tree does report a claim here; what
+        // makes that safe is that the host's answer replaces it rather than
+        // being OR-ed into it. Assert the whole contract at the seam that
+        // owns it.
+        assert!(
+            got.claimed,
+            "the seam stops as it emits, so the tree reports the claim;              it is the host's `Option<bool>` verdict that overrides it"
+        );
     }
 }

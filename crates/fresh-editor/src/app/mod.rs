@@ -1226,7 +1226,15 @@ pub struct Editor {
     ///
     /// Reset at the top of every dispatch rather than cleared by its reader,
     /// so a stale `true` cannot survive into the next keystroke.
-    pub(crate) shell_interior_took_key: bool,
+    /// The interior's own verdict on the key, when an interior ran.
+    ///
+    /// **`None` is not `false`.** `None` means no `Modality::Focus` interior
+    /// answered this key at all, so the tree's `claimed` stands; `Some(b)` is
+    /// the interior's answer and *replaces* it. Folding these with `||` let the
+    /// tree's claim win whenever it said `true`, so a surface that declines a
+    /// key could never hand it back — which is what stopped Escape closing a
+    /// plugin's floating panel.
+    pub(crate) shell_interior_took_key: Option<bool>,
 
     /// Request the event loop to suspend the process (SIGTSTP on Unix).
     /// Consumed by the outer event loop after the current action returns.
