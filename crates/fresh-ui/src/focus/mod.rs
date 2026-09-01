@@ -561,10 +561,31 @@ impl<M: 'static> Ui<M> {
             // A scope with nothing marked still needs somewhere for traversal
             // to start, or Tab inside a modal would do nothing.
             .or_else(|| modal.and(scope.nodes.first()));
+        // **A scope with nothing focusable in it still has to hold focus.**
+        //
+        // `skip_traversal` says Tab does not *stop* here; it does not say focus
+        // may never *rest* here, and `focus_scope` reads it as the former when
+        // it builds the set. So a scope whose descendants are all unfocusable
+        // leaves `wanted` empty, focus is dropped below, and with focus nowhere
+        // the containment questions answer that no keyboard layer is up at all
+        // — a modal's keys then leak to whatever is behind it, which is worse
+        // than a stray highlight and is not what any caller asked for by
+        // marking a subtree skippable.
+        //
+        // Falling back to the scope's own element keeps the keyboard where the
+        // scope says it belongs. The editor reaches this whenever a plugin
+        // panel's interior is described but nothing in it takes focus, and the
+        // symptom was a dialog that would not close: Escape never reached the
+        // panel, so its scrim outlived it.
+        let wanted_id = wanted.map(|e| e.id).or_else(|| {
+            self.active_scope()
+                .filter(|_| modal.is_some())
+                .and_then(|f| self.focus_tree.get(f))
+                .map(|n| n.element)
+        });
         let mut out = Vec::new();
-        match wanted {
-            Some(e) => {
-                let id = e.id;
+        match wanted_id {
+            Some(id) => {
                 self.focus_element(id, SelectionOnFocus::SelectAll, &mut out);
             }
             // Focus was somewhere the active scope cannot reach and there is

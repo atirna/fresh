@@ -605,6 +605,48 @@ fn a_scope_naming_nothing_falls_back_to_the_layer() {
     assert_eq!(reachable, vec!["sink".into()]);
 }
 
+/// **A scope whose content has nothing focusable still holds the keyboard.**
+///
+/// `skip_traversal` says Tab does not *stop* on a node; it does not say focus
+/// may never *rest* there. `focus_scope` reads it as the former when it builds
+/// the traversal set, so a scope root marked skippable is absent from its own
+/// scope — and when its descendants are unfocusable too, the set is empty.
+/// Focus was then dropped, and with focus nowhere the containment questions
+/// answer that no keyboard layer is up at all, so the layer's keys leak to
+/// whatever is behind it.
+///
+/// The editor reached this with a plugin panel whose interior is described but
+/// holds no focusable control. The symptom was a dialog that would not close:
+/// Escape never reached the panel, and the scrim it had raised outlived it,
+/// swallowing clicks meant for the menu bar underneath.
+#[test]
+fn an_empty_scope_keeps_the_keyboard_at_its_root() {
+    let mut ui: Ui<()> = Ui::new();
+    ui.frame(
+        col()
+            .child(
+                layer()
+                    .anchor(Anchor::Screen(Align::Start))
+                    .modality(Modality::Focus)
+                    .scope_at("body".into()),
+            )
+            // The scope root is focusable but skipped, exactly as a panel's
+            // fallback key handler is, and nothing inside it takes focus.
+            .child(focusable(col().child(text("nothing focusable"))).key("body").skip_traversal()),
+        FRAME,
+    );
+    let root = ui.find_by_key(&"body".into()).expect("the scope root");
+    assert_eq!(
+        ui.focused(),
+        Some(root),
+        "focus rests on the scope root rather than being dropped"
+    );
+    assert!(
+        ui.focus_scope().ordered().is_empty(),
+        "and it is still not a Tab stop"
+    );
+}
+
 // -- the key capture leg ------------------------------------------------------
 
 /// A capture listener sees the key before the focused element, and can decline
