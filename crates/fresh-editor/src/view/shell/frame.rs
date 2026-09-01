@@ -1068,4 +1068,78 @@ mod tests {
             );
         }
     }
+
+    /// **Escape reaches a described floating panel.** The New Workspace dialog
+    /// is a plugin panel with a form in it, and closing it on Escape goes
+    /// through `UiFact::PanelKey`: the fact says only *which* panel, and the
+    /// host reads the key itself. So the fact has to be emitted for every key
+    /// the panel's widgets do not take, Escape included.
+    ///
+    /// The sink that used to hold the layer emitted it for every key. S2
+    /// replaced the sink with a named scope whose root is the fallback, and
+    /// this pins that the fallback still answers — with a focusable widget in
+    /// the interior holding focus, which is the configuration the dialog is
+    /// actually in and the one the sink-based test above does not cover.
+    #[test]
+    fn escape_reaches_a_described_floating_panel() {
+        use crate::view::shell::panel::Interior;
+        use fresh_core::api::WidgetSpec;
+        let spec = WidgetSpec::Button {
+            label: "Create".into(),
+            focused: false,
+            intent: Default::default(),
+            key: Some("create".into()),
+            disabled: false,
+            focusable: true,
+            bare: false,
+            full_width: false,
+            hover_style: None,
+        };
+        let mut p = crate::view::shell::panel::Panel {
+            spot: crate::view::shell::panel::Spot::Centered {
+                width_pct: 60,
+                content_rows: 6,
+            },
+            title: None,
+            closable: true,
+            focused: true,
+            fullscreen: false,
+            interior: None,
+        };
+        p.interior = Some(Interior {
+            spec: std::rc::Rc::new(spec),
+            states: Default::default(),
+            focus_key: "create".into(),
+            hovered_key: None,
+            hovered_item_key: String::new(),
+            hovered_popup_row: String::new(),
+            marker_gutter: false,
+            avail_height: None,
+            scrollbar_reveal: None,
+            has_focus_targets: true,
+            claims_tab: false,
+        });
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(
+            frame_tree(Frame {
+                panel: Some(p),
+                panel_keys: true,
+                menu_bar: false,
+                status_bar: false,
+                ..Frame::default()
+            }),
+            Size::new(120, 40),
+        );
+        let got = ui.dispatch(fresh_ui::Input::Key(fresh_ui::KeyPress {
+            code: fresh_ui::KeyCode::Esc,
+            mods: fresh_ui::Mods::NONE,
+        }));
+        assert!(
+            got.msgs
+                .iter()
+                .any(|m| matches!(m, UiMsg::Ui(UiFact::PanelKey(Slot::Floating)))),
+            "Escape did not reach the panel: {:?}",
+            got.msgs
+        );
+    }
 }
