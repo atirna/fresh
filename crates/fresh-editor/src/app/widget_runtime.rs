@@ -162,20 +162,34 @@ pub(super) fn translate_plugin_animation_kind(
 }
 
 impl Editor {
-    /// Process a resolved widget hit (from a TUI cell click, a floating
-    /// panel click, or a native-frontend click): move focus to the hit's
+    /// Process a resolved widget press (from a TUI cell click, a floating
+    /// panel click, or a native-frontend click): move focus to the event's
     /// OWNING widget, run the owner kind's own pointer handler
     /// ([`crate::widgets::kinds::WidgetImpl::on_pointer`] — tree
     /// expansion, list/tree selection, dropdown open/commit, dual-list
     /// cursors all live with their kinds), apply the effects it
-    /// requested, and — unless the kind consumed the hit — fire the
-    /// recorded event tagged `via: "click"`. This is the single dispatch
+    /// requested, and — unless the kind consumed the press — fire the
+    /// event tagged `via: "click"`. This is the single dispatch
     /// path shared by every frontend, so a click delivers identical
     /// behaviour in all of them. No per-kind decision happens here.
+    ///
+    /// **`clicked_byte` is measured from the start of the widget's own
+    /// rendered row**, which is the space the `focus` event's
+    /// `valueInnerStart` breadcrumb is in. A described widget is its own node,
+    /// so the byte the library reports for a press on it is already that; a
+    /// caller resolving through the text projection's rows
+    /// ([`crate::widgets::WidgetRegistry::hit_test_row_aware`]) holds a byte
+    /// in a *composed* row and rebases it by the matched
+    /// [`HitArea::byte_start`](crate::widgets::HitArea::byte_start) before
+    /// calling. Rebasing here instead is what made the described path add
+    /// `byte_start` on and this function take it straight back off.
+    ///
+    /// `None` when the press carries no byte at all — the web's by-index
+    /// route, and a keyboard activation.
     pub(crate) fn deliver_widget_hit(
         &mut self,
         panel_key: &crate::widgets::PanelKey,
-        hit: &crate::widgets::HitArea,
+        hit: &crate::widgets::WidgetEvent,
         clicked_byte: Option<usize>,
     ) {
         use crate::widgets::kinds::{PointerDisposition, PointerFx};
@@ -232,14 +246,13 @@ impl Editor {
                         panel_key,
                         &hit.widget_key,
                         line as usize,
-                        byte.saturating_sub(hit.byte_start),
+                        byte,
                     );
                 } else {
                     self.reposition_widget_text_cursor_from_click(
                         panel_key,
                         &hit.widget_key,
                         byte,
-                        hit.byte_start,
                         &hit.payload,
                     );
                 }
@@ -276,15 +289,17 @@ impl Editor {
         }
     }
 
-    /// Native-frontend entry point: deliver the hit at `hit_index` in panel
-    /// `(plugin, panel_id)`'s recorded hit list — the same hits `widgets_view`
-    /// shipped to the frontend. Runs the shared `deliver_widget_hit` path.
+    /// Native-frontend entry point: deliver the event at `hit_index` in panel
+    /// `(plugin, panel_id)`'s recorded hit list — the same list `widgets_view`
+    /// shipped to the frontend, whose `WidgetHitView` is the recorded hits'
+    /// identity half and nothing else. Runs the shared `deliver_widget_hit`
+    /// path.
     pub fn deliver_widget_hit_by_index(&mut self, plugin: &str, panel_id: u64, hit_index: usize) {
         let panel_key = crate::widgets::PanelKey::new(plugin, panel_id);
         let hit = self
             .widget_registry
             .get(&panel_key)
-            .and_then(|p| p.hits.get(hit_index).cloned());
+            .and_then(|p| p.hits.get(hit_index).map(|h| h.event.clone()));
         if let Some(hit) = hit {
             // Native frontends deliver by index, without a per-cell click
             // column, so there's no click-to-position payload to honour here.
@@ -327,6 +342,7 @@ impl Editor {
                 panel
                     .hits
                     .iter()
+                    .map(|h| &h.event)
                     .find(|h| {
                         h.event_type == event_type
                             && h.widget_key == widget_key
@@ -358,7 +374,7 @@ impl Editor {
                         identity(false)
                     }
                 })
-                .or_else(|| hit_index.and_then(|i| panel.hits.get(i).cloned()))
+                .or_else(|| hit_index.and_then(|i| panel.hits.get(i).map(|h| h.event.clone())))
                 .or_else(|| Self::synthesize_list_hit(panel, event_type, payload))
                 .or_else(|| Self::synthesize_tree_hit(panel, widget_key, event_type, payload))
                 .or_else(|| Self::synthesize_control_hit(panel, widget_key, event_type, payload))
@@ -383,9 +399,9 @@ impl Editor {
         }
     }
 
-    /// Rebuild the `HitArea` that `collect_list` would have emitted for a
-    /// list row that is outside the TUI's scroll window (so no hit was
-    /// recorded), from the panel's own spec: the payload's `list_key` must
+    /// Rebuild the [`WidgetEvent`](crate::widgets::WidgetEvent) that
+    /// `collect_list` would have emitted for a list row outside the TUI's
+    /// scroll window (so no hit was recorded), from the panel's own spec: the payload's `list_key` must
     /// name a `List` in the spec and `index` must be in bounds; the item key
     /// is read from the spec's `item_keys`. Returns `None` for anything
     /// that isn't a valid in-bounds list `select` or right-click `context`
@@ -395,7 +411,7 @@ impl Editor {
         panel: &crate::widgets::WidgetPanelState,
         event_type: &str,
         payload: &serde_json::Value,
-    ) -> Option<crate::widgets::HitArea> {
+    ) -> Option<crate::widgets::WidgetEvent> {
         if event_type != "select" && event_type != "context" {
             return None;
         }
@@ -431,24 +447,21 @@ impl Editor {
         } else {
             "select"
         };
-        Some(crate::widgets::HitArea {
+        Some(crate::widgets::WidgetEvent {
             row_target: true,
             context_click: true,
-            overlay: false,
             widget_key: item_key.clone(),
             widget_kind: "list",
-            buffer_row: 0,
-            byte_start: 0,
-            byte_end: 0,
             payload: row_payload,
             event_type,
             owner_key: Some(list_key.to_string()),
         })
     }
 
-    /// Rebuild the `HitArea` `render_widget_tree` would have emitted for a
-    /// tree row outside the TUI's scroll window (so no hit was recorded),
-    /// from the panel's own spec: `widget_key` must name a `Tree`, the
+    /// Rebuild the [`WidgetEvent`](crate::widgets::WidgetEvent)
+    /// `render_widget_tree` would have emitted for a tree row outside the
+    /// TUI's scroll window (so no hit was recorded), from the panel's own
+    /// spec: `widget_key` must name a `Tree`, the
     /// payload's `index` must be in bounds, and the row's item key comes
     /// from the spec's `item_keys`. Covers the row-body `select`, the
     /// disclosure `expand`, the checkbox `toggle`, and the right-click
@@ -460,7 +473,7 @@ impl Editor {
         widget_key: &str,
         event_type: &str,
         payload: &serde_json::Value,
-    ) -> Option<crate::widgets::HitArea> {
+    ) -> Option<crate::widgets::WidgetEvent> {
         if !matches!(event_type, "select" | "expand" | "toggle" | "context")
             || widget_key.is_empty()
         {
@@ -516,23 +529,19 @@ impl Editor {
                 serde_json::json!({ "index": index, "key": item_key }),
             ),
         };
-        Some(crate::widgets::HitArea {
+        Some(crate::widgets::WidgetEvent {
             row_target: true,
             context_click: true,
-            overlay: false,
             widget_key: widget_key.to_string(),
             widget_kind: "tree",
-            buffer_row: 0,
-            byte_start: 0,
-            byte_end: 0,
             payload,
             event_type,
             owner_key: None,
         })
     }
 
-    /// Rebuild the `HitArea` the renderer would have emitted for a keyed
-    /// control widget that recorded no hit — because the TUI clipped it (a
+    /// Rebuild the [`WidgetEvent`](crate::widgets::WidgetEvent) the renderer
+    /// would have emitted for a keyed control widget that recorded no hit — because the TUI clipped it (a
     /// native frontend grows a floating panel to fit its content) or
     /// because the frontend renders states the TUI's hit window didn't
     /// (e.g. a dropdown's option rows). State comes from the panel's own
@@ -544,7 +553,7 @@ impl Editor {
         widget_key: &str,
         event_type: &str,
         payload: &serde_json::Value,
-    ) -> Option<crate::widgets::HitArea> {
+    ) -> Option<crate::widgets::WidgetEvent> {
         if widget_key.is_empty() {
             return None;
         }
@@ -595,15 +604,11 @@ impl Editor {
             }
             _ => return None,
         };
-        Some(crate::widgets::HitArea {
+        Some(crate::widgets::WidgetEvent {
             row_target: false,
             context_click: false,
-            overlay: false,
             widget_key: widget_key.to_string(),
             widget_kind,
-            buffer_row: 0,
-            byte_start: 0,
-            byte_end: 0,
             payload,
             event_type,
             owner_key: None,
@@ -1676,36 +1681,38 @@ impl Editor {
     }
 
     /// Reposition a just-focused Text widget's cursor to the byte under
-    /// a mouse click (#2573). `entry_byte` is the click's byte offset
-    /// within the rendered row (as resolved by `hit_test`); `payload` is
-    /// the `focus` HitArea payload, which carries the value-layout
-    /// breadcrumbs the renderer stamped on it (`valueInnerStart` and the
-    /// truncation fields). Maps the row byte back to a value byte, moves
-    /// the cursor, and fires `change` so a plugin mirroring the cursor
-    /// position (e.g. Search & Replace) stays in sync.
+    /// a mouse click (#2573). `byte_in_field` is the click's byte offset
+    /// within *the field's own* rendered row; `payload` is the `focus`
+    /// event's payload, which carries the value-layout breadcrumbs the
+    /// renderer stamped on it (`valueInnerStart` and the truncation
+    /// fields). Maps that byte back to a value byte, moves the cursor, and
+    /// fires `change` so a plugin mirroring the cursor position (e.g. Search
+    /// & Replace) stays in sync.
     ///
-    /// A no-op for hits without the layout payload (older render paths,
+    /// **One coordinate space, and the caller puts the click in it.**
+    /// `valueInnerStart` is relative to the field's own rendered text
+    /// (gutter + label + `[`), and the pass that composes two fields onto one
+    /// line (Search + Replace) shifts the `HitArea`'s byte range without
+    /// shifting the payload — so a caller resolving through the text
+    /// projection's rows subtracts the matched hit's `byte_start` before
+    /// calling. This used to take that offset as a parameter and subtract it
+    /// here, which meant the described path, whose byte is field-relative
+    /// already, had to add it on first.
+    ///
+    /// A no-op for events without the layout payload (older render paths,
     /// non-text widgets) or when the clicked widget isn't the focused
     /// one — the caller is expected to focus it first.
     pub(super) fn reposition_widget_text_cursor_from_click(
         &mut self,
         panel_key: &crate::widgets::PanelKey,
         widget_key: &str,
-        entry_byte: usize,
-        hit_byte_start: usize,
+        byte_in_field: usize,
         payload: &serde_json::Value,
     ) {
-        // `valueInnerStart` is relative to the *field's own* rendered
-        // text (gutter + label + `[`). Fields can be composed
-        // horizontally into a shared row (Search + Replace live on one
-        // line), so `hit_byte_start` — the field's offset within that
-        // composed row — rebases both the click and the value origin
-        // into the same coordinate space.
         let inner_start = match payload.get("valueInnerStart").and_then(|v| v.as_u64()) {
             Some(v) => v as usize,
             None => return,
         };
-        let offset_in_field = entry_byte.saturating_sub(hit_byte_start);
         // The cursor op below targets the panel's *focused* widget; guard
         // that focus already landed on the clicked field so a stray call
         // can't move an unrelated field's cursor.
@@ -1731,10 +1738,11 @@ impl Editor {
             .unwrap_or(0) as usize;
 
         // Translate the click's field byte → value byte (shared with the
-        // Settings UI via `crate::widgets`). `offset_in_field` already
-        // rebased the click by `hit_byte_start`, so pass `byte_start = 0`.
+        // Settings UI via `crate::widgets`). The click is already field-
+        // relative, so there is no row offset left to take off: `byte_start`
+        // is 0.
         let value_byte = crate::widgets::row_byte_to_value_byte(
-            offset_in_field,
+            byte_in_field,
             0,
             inner_start,
             dropped,
@@ -2322,9 +2330,6 @@ struct FloatingWidgetProbe {
 /// dismissal. Behavior owned by the panel runtime (moved from
 /// mouse_input.rs).
 impl Editor {
-    /// Hit-test a click against the floating widget panel. Clicks
-    /// inside the panel's inner rect resolve to a widget row/byte
-    /// and fire `widget_event` via the same path
     /// Forward a vertical-wheel scroll to the active floating
     /// widget panel — same plumbing the orchestrator's
     /// embedded-widget panels use, but the floating panel
@@ -2690,7 +2695,7 @@ impl Editor {
     pub(super) fn fire_widget_context(
         &mut self,
         slot: super::PanelSlot,
-        hit: &crate::widgets::HitArea,
+        hit: &crate::widgets::WidgetEvent,
         col: u16,
         row: u16,
     ) -> bool {
@@ -2805,20 +2810,16 @@ impl Editor {
         };
         // Option row → select that index (fires `change`) and close.
         if let Some(hit) = hits.iter().find(|h| in_rect(col, row, h.rect)) {
-            let ha = crate::widgets::HitArea {
-                overlay: false,
+            let ev = crate::widgets::WidgetEvent {
                 row_target: false,
                 context_click: false,
                 widget_key: key,
                 widget_kind: "dropdown",
-                buffer_row: 0,
-                byte_start: 0,
-                byte_end: 0,
                 payload: serde_json::json!({ "index": hit.index }),
                 event_type: "dropdown_select",
                 owner_key: None,
             };
-            self.deliver_widget_hit(&panel_key, &ha, None);
+            self.deliver_widget_hit(&panel_key, &ev, None);
             return true;
         }
         // Inside the box but not on a row (its border): consume so the
@@ -2838,6 +2839,25 @@ impl Editor {
     /// disagree about what the pointer is on. They did once for left- vs
     /// right-click (byte-exact vs row-wide resolution), and compact dock
     /// rows silently swallowed clicks past their label for it.
+    ///
+    /// **It cannot currently answer, and the chain is worth writing down
+    /// rather than acting on.** Its one caller,
+    /// [`Self::handle_floating_widget_click`], is reached from `UiFact::
+    /// DockPress` — which `view::shell::dock::column` emits only when
+    /// `panel_interior` is `None` — and from `UiFact::ModalPointer`, which
+    /// `view::shell::panel::frame_box` produces only under the same
+    /// condition. `panel_interior` and `Editor::panel_is_described` ask one
+    /// question (a panel in the slot, mounted in the registry), and
+    /// `render_floating_widget_panel` records `last_inner_rect` only when
+    /// that question is `true` or when the web's no-paint pass runs. So the
+    /// first line here returns `None` on every path that can reach it.
+    ///
+    /// It is left standing because removing it is S7's step, not S5's: it is
+    /// the only reader of `panel.entries` and `panel.overlays`, and those go
+    /// with the collector's paint of a described surface. What S5 owes is
+    /// that the *identity* it resolves no longer travels with the geometry —
+    /// which it does not: it hands `hit.event` on, and rebases `bcol` out of
+    /// the panel row's space itself.
     fn probe_floating_widget(
         &self,
         slot: super::PanelSlot,
@@ -2950,19 +2970,23 @@ impl Editor {
         };
         tracing::debug!(
             target: "fresh::dock",
-            hit_key = %hit.widget_key,
-            hit_kind = hit.widget_kind,
-            hit_event = %hit.event_type,
+            hit_key = %hit.event.widget_key,
+            hit_kind = hit.event.widget_kind,
+            hit_event = %hit.event.event_type,
             "handle_floating_widget_click: hit"
         );
         // The shared pointer dispatch — identical to a buffer-cell or
-        // native-frontend click: focus the hit's owner, run the kind's
-        // own `on_pointer`, place a text caret from the clicked byte
-        // column (`bcol`), fire the recorded event unless consumed.
-        // This TUI-native path used to hand-copy a subset of that
-        // ladder and drifted (no list-selection sync, no dual-list
-        // cursor move); delegating is what keeps the three frontends
-        // behaving identically.
-        self.deliver_widget_hit(&panel_key, &hit, Some(bcol));
+        // native-frontend click: focus the event's owner, run the kind's
+        // own `on_pointer`, place a text caret from the clicked byte,
+        // fire the event unless consumed. This TUI-native path used to
+        // hand-copy a subset of that ladder and drifted (no list-selection
+        // sync, no dual-list cursor move); delegating is what keeps the three
+        // frontends behaving identically.
+        //
+        // `bcol` is a byte in the panel *row*; the dispatch wants one in the
+        // widget's own row, which is the same rebase `click_handlers` makes
+        // for the same reason.
+        let byte_in_field = bcol.saturating_sub(hit.byte_start);
+        self.deliver_widget_hit(&panel_key, &hit.event, Some(byte_in_field));
     }
 }

@@ -4275,10 +4275,12 @@ impl Editor {
         });
         crate::view::shell::frame::Frame {
             panel: self.panel_description(),
-            // The dock's content, described when the adapter covers every
-            // variant of the orchestrator's spec and left to the painter
-            // otherwise — `panel_interior`'s `covered` gate is what makes
-            // that decision, the same way it does for the floating panel.
+            // The dock's content, described whenever a panel is mounted in
+            // the slot. There is no gate left: `panel_interior` answers
+            // `None` only for an empty slot, the same way it does for the
+            // floating panel. (It used to consult `covered`, which asked
+            // whether the adapter had an arm for every variant of the spec;
+            // that function ran out of `false` arms and was deleted in 2.4.)
             dock_interior: self.panel_interior(crate::app::PanelSlot::Dock),
             dock_grip_hovered: matches!(
                 self.shell_hover,
@@ -7849,19 +7851,6 @@ impl Editor {
         crate::view::shell::cell_of(ui, key, ratatui::layout::Rect::new(0, 0, f.width, f.height))
     }
 
-    /// The panel's interior as a description, when every variant of its spec
-    /// is one the tree describes.
-    ///
-    /// **All of it is host state the spec does not carry** — the focused
-    /// widget, the widget and row under the pointer, whether the focus-marker
-    /// gutter is reserved, the auto-size row budget, and the instance state
-    /// the stateful kinds are authoritative for. The runtime read the same
-    /// list off a `RenderContext`; here it is resolved once, where the
-    /// description is built, and handed down.
-    ///
-    /// `None` sends the whole panel down the runtime's path. A panel is
-    /// described or painted and never half of each, so `covered` asks the
-    /// whole tree — see `view::shell::widgets::covered`.
     /// The mounted panel a pane is showing, if it is showing one.
     ///
     /// **A pane is one buffer, and a buffer names its panel.** That is the
@@ -8065,6 +8054,22 @@ impl Editor {
         self.active_window().is_non_scrollable_buffer(buffer)
     }
 
+    /// The panel's interior as a description.
+    ///
+    /// **All of it is host state the spec does not carry** — the focused
+    /// widget, the widget and row under the pointer, whether the focus-marker
+    /// gutter is reserved, the auto-size row budget, and the instance state
+    /// the stateful kinds are authoritative for. The runtime read the same
+    /// list off a `RenderContext`; here it is resolved once, where the
+    /// description is built, and handed down.
+    ///
+    /// `None` means there is no panel in the slot, or none mounted in the
+    /// registry — never "this spec has a variant the tree cannot describe",
+    /// which is what the `covered` gate this used to consult meant before it
+    /// ran out of `false` arms and was deleted. [`Self::panel_is_described`]
+    /// is the same question without the clone, and the surfaces that route a
+    /// press by it (`view::shell::dock::column`,
+    /// `render_floating_widget_panel`) must keep asking the same one.
     pub(crate) fn panel_interior(
         &self,
         slot: crate::app::PanelSlot,

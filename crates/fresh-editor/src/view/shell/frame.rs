@@ -1124,6 +1124,13 @@ mod tests {
             frame_tree(Frame {
                 panel: Some(p),
                 panel_keys: true,
+                // **With a dock open beside it, which is the real case.** The
+                // New Workspace dialog is raised *from* the orchestrator dock,
+                // so both keyboard layers are declared and the panel's — being
+                // declared last — has to win. Without this the frame has only
+                // one keyboard layer and the test cannot see it lose.
+                dock: Some(30),
+                dock_keys: true,
                 menu_bar: false,
                 status_bar: false,
                 ..Frame::default()

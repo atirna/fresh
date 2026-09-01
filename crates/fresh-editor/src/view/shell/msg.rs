@@ -35,19 +35,35 @@ pub enum UiMsg {
 /// comparable, and tests compare facts.
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiFact {
-    /// A press landed on a plugin widget, carrying the widget's own hit.
+    /// A press landed on a plugin widget, carrying what that press means.
     ///
     /// **What replaces the byte-range scan.** The runtime recorded a
     /// `HitArea` per interactive range and resolved a click by walking those
     /// ranges against a row and a byte offset; the tree hit-tests a rectangle
-    /// it laid out and the node hands over the hit it was built with. The
+    /// it laid out and the node hands over the event it was built with. The
     /// dispatch behind it — `deliver_widget_hit`, which all three frontends
-    /// share — is unchanged, so the byte range stops being a hit-test and
-    /// becomes what it always was: a payload.
+    /// share — is unchanged.
+    ///
+    /// **A [`WidgetEvent`](crate::widgets::WidgetEvent), not a `HitArea`.**
+    /// The row and byte range a `HitArea` also carries belong to the text
+    /// projection's rows, and this surface has none: its widgets are nodes
+    /// and layout answered where they are. While the fact carried them the
+    /// applier used them — it added `byte_start` to the pressed byte and the
+    /// dispatch subtracted it again — a round trip through a coordinate space
+    /// nothing here is in.
     WidgetHit {
         slot: super::widgets::Slot,
-        hit: crate::widgets::HitArea,
-        /// The byte the press landed on, within the hit's own piece.
+        event: crate::widgets::WidgetEvent,
+        /// The byte the press landed on, measured from the start of the
+        /// **widget's own rendered row** — the space its `focus` payload's
+        /// `valueInnerStart` and the rest of its layout breadcrumbs are in.
+        ///
+        /// The library reports a byte within the *piece* the pointer is on,
+        /// and one widget can be drawn as several: `row_pieces` cuts a row at
+        /// the caret so a zero-width marker can sit between the halves. So the
+        /// piece adds its own origin back on before the fact is raised
+        /// (`hit_node`'s `piece_at`). Without that, every press into an
+        /// already-focused field resolved to the value's first byte.
         ///
         /// **A byte, not a column, and the difference is a bug this carried.**
         /// A press on a text field means "put the caret here", and the runtime
@@ -58,10 +74,10 @@ pub enum UiFact {
         /// one byte and one cell. `fresh_ui::Event::text_byte` reports the byte
         /// instead, from the shaping that actually drew the row.
         ///
-        /// `None` for a hit with no pointer behind it, and for a press on a
-        /// piece that is not text.
+        /// `None` for an event with no pointer behind it, and for a press on
+        /// a piece that is not text.
         byte: Option<usize>,
-        /// The column the press landed on, within the hit's own piece.
+        /// The column the press landed on, within the pressed **piece**.
         ///
         /// **Not a worse `byte`; a different question.** `byte` asks where in
         /// the *text* the press was, and is what a caret wants. This asks
@@ -70,6 +86,16 @@ pub enum UiFact {
         /// columns the row was built with, and no byte of the label answers
         /// where that button is. Both are facts about one press; neither
         /// substitutes for the other.
+        ///
+        /// **Its origin is the piece and not the row, which `byte`'s is.**
+        /// Nothing rebases a column, because nothing can: a piece knows its
+        /// byte offset in the row and not its column, and the two part company
+        /// on the first wide glyph. A consumer that wants a *row* column can
+        /// only get one from a widget drawn as a single piece — which is what
+        /// the `TextList` row is meant to be, and `None` besides. Its
+        /// one reader (`Editor::entry_text_list_press`) takes
+        /// `at.unwrap_or(0)`, so a `None` here silently reads as "column 0";
+        /// see the note on the list arm in `view::shell::widgets`.
         at: Option<u16>,
         /// How many presses in the run this one was — `Event::clicks`.
         ///
@@ -80,8 +106,8 @@ pub enum UiFact {
         /// which is B.4's side channel; it rides on the fact now, exactly as
         /// `PaneContentPress` carries the press's modifiers.
         ///
-        /// `0` for a hit no mouse made — a keyboard activation, or the web's
-        /// own route.
+        /// `0` for an event no mouse made — a keyboard activation, or the
+        /// web's own route.
         clicks: u8,
     },
     /// The floating plugin panel's `[×]` was pressed.
@@ -712,7 +738,7 @@ pub enum UiFact {
     /// the row index.
     WidgetContext {
         slot: super::widgets::Slot,
-        hit: crate::widgets::HitArea,
+        event: crate::widgets::WidgetEvent,
         x: u16,
         y: u16,
     },

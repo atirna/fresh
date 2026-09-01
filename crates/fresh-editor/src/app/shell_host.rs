@@ -1170,7 +1170,7 @@ impl Editor {
 impl Editor {
     pub(crate) fn settings_widget_hit(
         &mut self,
-        hit: &crate::widgets::HitArea,
+        hit: &crate::widgets::WidgetEvent,
         byte: Option<usize>,
         clicks: u8,
     ) {
@@ -1229,8 +1229,9 @@ impl Editor {
             _ => SettingsHit::Item(idx),
         };
         // A press on a text field also says *where* in the value the caret
-        // goes (#2573). The press reports its byte in the row; the hit's own
-        // payload carries the breadcrumbs that undo the field's layout.
+        // goes (#2573). The press reports its byte in the field's own row;
+        // the event's payload carries the breadcrumbs that undo the field's
+        // layout, measured from that same row start.
         //
         // **This used to render the control a second time and measure the row
         // it produced**, because a column cannot be turned into a byte without
@@ -1418,23 +1419,26 @@ impl Editor {
             // payload now, not a position the caller resolved.
             UiFact::WidgetHit {
                 slot,
-                hit,
+                event: hit,
                 byte,
                 at,
                 clicks,
             } => {
-                // **The byte the press landed on.** `byte` is the offset
-                // inside the hit's own piece and `byte_start` is where that
-                // piece begins in the entry's rendered row, so their sum is
-                // the entry byte `reposition_widget_text_cursor_from_click`
-                // subtracts `byte_start` back off.
+                // **The byte the press landed on, and nothing is done to it.**
+                // A described widget is its own node, so the piece the press
+                // sits on begins where the widget's row does and `byte` is
+                // already in the coordinate space `deliver_widget_hit` wants.
                 //
-                // This used to add a *column* to `byte_start` — the two agree
-                // only while every character is one byte and one cell, so
-                // clicking into a field with a localized label or a non-ASCII
-                // value put the caret in the wrong place. The library reports
-                // the byte now, from the shaping that drew the row.
-                let clicked_byte = byte.map(|b| hit.byte_start.saturating_add(b));
+                // Two arithmetics have stood here. The first added a *column*
+                // to the recorded `byte_start`, which agrees with a byte only
+                // while every character is one byte and one cell — so a
+                // localized label or a non-ASCII value put the caret in the
+                // wrong place. The second added the *byte* to `byte_start`
+                // and the dispatch subtracted it straight back off: correct,
+                // but a round trip through the text projection's rows, which
+                // this surface does not have. The event carries no
+                // `byte_start` now, so neither is stateable.
+                let clicked_byte = byte;
                 let slot = match slot {
                     crate::view::shell::widgets::Slot::Dock => crate::app::PanelSlot::Dock,
                     crate::view::shell::widgets::Slot::Floating => crate::app::PanelSlot::Floating,
@@ -1506,20 +1510,16 @@ impl Editor {
                             (!key.is_empty()).then(|| (p.panel_key.clone(), key))
                         });
                         if let Some((panel_key, widget_key)) = open {
-                            let ha = crate::widgets::HitArea {
-                                overlay: false,
+                            let ev = crate::widgets::WidgetEvent {
                                 row_target: false,
                                 context_click: false,
                                 widget_key,
                                 widget_kind: "dropdown",
-                                buffer_row: 0,
-                                byte_start: 0,
-                                byte_end: 0,
                                 payload: serde_json::json!({}),
                                 event_type: "dropdown_toggle",
                                 owner_key: None,
                             };
-                            self.deliver_widget_hit(&panel_key, &ha, None);
+                            self.deliver_widget_hit(&panel_key, &ev, None);
                         }
                     }
                 }
@@ -1606,7 +1606,12 @@ impl Editor {
             // and `DockContext`: the un-blur fires a `focus` widget_event, and
             // any mirror of dock-focus state has to update before the menu the
             // press raises reads it.
-            UiFact::WidgetContext { slot, hit, x, y } => {
+            UiFact::WidgetContext {
+                slot,
+                event: hit,
+                x,
+                y,
+            } => {
                 use crate::view::shell::widgets::Slot;
                 let panel = match slot {
                     Slot::Dock => crate::app::PanelSlot::Dock,
@@ -2072,7 +2077,7 @@ impl Editor {
             // **The cell is no longer read, and the menu no longer comes from
             // here.** This used to refocus and then probe the runtime's boxes
             // at `(x, y)` to raise the plugin's context menu. The widget's own
-            // node carries the `HitArea` now, so `UiFact::WidgetContext` has
+            // node carries the `WidgetEvent` now, so `UiFact::WidgetContext` has
             // already raised it by the time this runs — what is left of the
             // right press is the focus it takes, which is the half that was
             // never about geometry.

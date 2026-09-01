@@ -687,15 +687,11 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                 rendered.value_range,
                 cx.slot,
                 &cx.surface,
-                crate::widgets::HitArea {
+                crate::widgets::WidgetEvent {
                     row_target: false,
                     context_click: false,
-                    overlay: false,
                     widget_key: key.unwrap_or("").to_string(),
                     widget_kind: "number",
-                    buffer_row: 0,
-                    byte_start: rendered.value_range.0,
-                    byte_end: rendered.value_range.1,
                     payload: serde_json::json!({}),
                     event_type: "number_value",
                     owner_key: None,
@@ -836,15 +832,11 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                 chip,
                 cx.slot,
                 &cx.surface,
-                crate::widgets::HitArea {
+                crate::widgets::WidgetEvent {
                     row_target: false,
                     context_click: false,
-                    overlay: false,
                     widget_key: key.unwrap_or("").to_string(),
                     widget_kind: "toggle",
-                    buffer_row: 0,
-                    byte_start: chip.0,
-                    byte_end: chip.1,
                     payload: serde_json::json!({ "checked": !checked }),
                     event_type: "toggle",
                     owner_key: None,
@@ -857,11 +849,12 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
         // `render_bare_button` know what a framed action looks like, and that
         // is domain knowledge. What moves is the hit: the runtime recorded a
         // `HitArea` spanning the row's bytes and a click was resolved by
-        // scanning those ranges; the node carries the same `HitArea` and hands
-        // it over when it is pressed, so everything downstream —
-        // `deliver_widget_hit`, the kind's `on_pointer`, the plugin's
-        // `widget_event` — is untouched. The byte range stops being a
-        // hit-test and becomes what it always was: a payload.
+        // scanning those ranges; the node carries the `WidgetEvent` half of
+        // that same value and hands it over when it is pressed, so everything
+        // downstream — `deliver_widget_hit`, the kind's `on_pointer`, the
+        // plugin's `widget_event` — is untouched. The byte range does not come
+        // with it: it said where the row was drawn, and the node is where the
+        // row is.
         //
         // A disabled button has no hit at all, matching the runtime: the
         // renderer excludes it from the tab cycle, so a click that focused and
@@ -915,19 +908,18 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                 false => hit_node(
                     n,
                     cx.slot,
-                    crate::widgets::HitArea {
+                    crate::widgets::WidgetEvent {
                         row_target: false,
                         context_click: false,
-                        overlay: false,
                         widget_key: key.unwrap_or("").to_string(),
                         widget_kind: "button",
-                        buffer_row: 0,
-                        byte_start: 0,
-                        byte_end: entry.text.len(),
                         payload: serde_json::json!({}),
                         event_type: "activate",
                         owner_key: None,
                     },
+                    // The whole row is the button, and it is one node: the
+                    // press's byte is already the row's.
+                    0,
                 ),
             }
         }
@@ -1074,7 +1066,7 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
             .on_activate_handler(Rc::new(move |i, e: &fresh_ui::Event| {
                 Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
                     slot,
-                    hit: crate::widgets::HitArea {
+                    event: crate::widgets::WidgetEvent {
                         row_target: true,
                         // **What the runtime's own row says** (`kinds/list.rs`
                         // sets it too). It cost nothing while the probe
@@ -1083,12 +1075,8 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                         // for a described panel, a row that does not declare
                         // the capability raises no context menu at all.
                         context_click: true,
-                        overlay: false,
                         widget_key: hit_keys.get(i).cloned().unwrap_or_default(),
                         widget_kind: "list",
-                        buffer_row: i as u32,
-                        byte_start: 0,
-                        byte_end: 0,
                         payload: serde_json::json!({
                             "index": i,
                             "key": hit_keys.get(i).cloned().unwrap_or_default(),
@@ -1100,6 +1088,20 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                         owner_key: Some(list_key.clone()),
                     },
                     byte: None,
+                    // **A row press here reports no column, and one reader
+                    // needs one.** `Editor::entry_text_list_press` asks
+                    // `widget_map::text_list_target(col)` whether the press
+                    // was on the row's trailing `[x]`/`[+]`, and reads this
+                    // through `at.unwrap_or(0)` — so with `None` every press
+                    // on such a row answers "the cell", and the button is
+                    // unreachable by mouse in the settings entry dialog.
+                    //
+                    // Not fixed here because what to send is not obvious:
+                    // `List::on_activate_handler` hands the activation's own
+                    // `Event`, whose `local` is relative to whatever node
+                    // carries the listener, and `text_list_target` wants a
+                    // column of the *row*. Establishing which those are is a
+                    // change to this arm's contract, not to the hit split.
                     at: None,
                     clicks: e.clicks,
                 }))
@@ -1270,15 +1272,11 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                 let item_key = hit_keys.get(i).cloned().unwrap_or_default();
                 Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
                     slot,
-                    hit: crate::widgets::HitArea {
+                    event: crate::widgets::WidgetEvent {
                         row_target: true,
                         context_click: true,
-                        overlay: false,
                         widget_key: item_key.clone(),
                         widget_kind: "list",
-                        buffer_row: i as u32,
-                        byte_start: 0,
-                        byte_end: 0,
                         payload: serde_json::json!({
                             "index": i,
                             "key": item_key,
@@ -1415,15 +1413,16 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                         crate::widgets::render::apply_hover_band(e);
                     }
                 };
-                let select = |a: usize, b: usize, row_target: bool| crate::widgets::HitArea {
+                // The row's three targets differ only in what they fire and
+                // where they are; `row_target` is the difference between the
+                // body (a press anywhere on the row is its) and the two glyphs
+                // (a press inside their own bytes only). Where each one is is
+                // the range beside it in `hits`, not anything this states.
+                let select = |row_target: bool| crate::widgets::WidgetEvent {
                     row_target,
                     context_click: row_target,
-                    overlay: false,
                     widget_key: tree_key.clone(),
                     widget_kind: "tree",
-                    buffer_row: 0,
-                    byte_start: a,
-                    byte_end: b,
                     payload: serde_json::json!({ "index": abs, "key": item_key }),
                     event_type: "select",
                     owner_key: None,
@@ -1432,16 +1431,16 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                 let mut primary = r.entry.clone();
                 dress(&mut primary);
                 let end = primary.text.len();
-                let mut hits: Vec<((usize, usize), crate::widgets::HitArea)> = Vec::new();
+                let mut hits: Vec<((usize, usize), crate::widgets::WidgetEvent)> = Vec::new();
                 if let Some((a, b)) = r.disclosure_range {
-                    let mut h = select(a, b, false);
+                    let mut h = select(false);
                     h.event_type = "expand";
                     h.payload =
                         serde_json::json!({ "index": abs, "key": item_key, "expanded": !open });
                     hits.push(((a, b), h));
                 }
                 if let Some((a, b)) = r.checkbox_range {
-                    let mut h = select(a, b, false);
+                    let mut h = select(false);
                     h.event_type = "toggle";
                     h.payload = serde_json::json!({
                         "index": abs,
@@ -1459,7 +1458,7 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                     (None, None) => 0,
                 };
                 if body < end {
-                    hits.push(((body, end), select(body, end, true)));
+                    hits.push(((body, end), select(true)));
                 }
                 rows.push(entry_row_hits(&primary, cx.slot, &cx.surface, &hits));
                 for extra in r.extra_entries.iter() {
@@ -1467,7 +1466,7 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                     dress(&mut e);
                     let b = e.text.len();
                     rows.push(match b > 0 {
-                        true => entry_row_hit(&e, (0, b), cx.slot, &cx.surface, select(0, b, true)),
+                        true => entry_row_hit(&e, (0, b), cx.slot, &cx.surface, select(true)),
                         false => entry_row(&e, &cx.surface),
                     });
                 }
@@ -1560,15 +1559,11 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                                row_target: bool| {
                         (
                             (a, b),
-                            crate::widgets::HitArea {
+                            crate::widgets::WidgetEvent {
                                 row_target,
                                 context_click: row_target,
-                                overlay: false,
                                 widget_key: tree_key.clone(),
                                 widget_kind: "tree",
-                                buffer_row: i as u32,
-                                byte_start: a,
-                                byte_end: b,
                                 payload,
                                 event_type: kind,
                                 owner_key: None,
@@ -1762,20 +1757,16 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                     // Clicking any row of the editing region focuses the
                     // field — the collector's one hit per row, stated where
                     // the row is.
-                    let mine: Vec<((usize, usize), crate::widgets::HitArea)> =
+                    let mine: Vec<((usize, usize), crate::widgets::WidgetEvent)> =
                         match widget_key.is_empty() {
                             true => Vec::new(),
                             false => vec![(
                                 (0, e.text.len()),
-                                crate::widgets::HitArea {
+                                crate::widgets::WidgetEvent {
                                     row_target: false,
                                     context_click: false,
-                                    overlay: false,
                                     widget_key: widget_key.clone(),
                                     widget_kind: "text",
-                                    buffer_row: (i + head) as u32,
-                                    byte_start: 0,
-                                    byte_end: e.text.len(),
                                     payload: serde_json::json!({}),
                                     event_type: "focus",
                                     owner_key: None,
@@ -1946,10 +1937,10 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
             let list = fresh_ui::List::windowed(n, |i| fresh_ui::Key::Str(i.to_string().into()), {
                 let rows_src = rows_src.clone();
                 move |i| {
-                    let mine: Vec<((usize, usize), crate::widgets::HitArea)> = hits
+                    let mine: Vec<((usize, usize), crate::widgets::WidgetEvent)> = hits
                         .iter()
                         .filter(|h| h.buffer_row as usize == i + head)
-                        .map(|h| ((h.byte_start, h.byte_end), h.clone()))
+                        .map(|h| ((h.byte_start, h.byte_end), h.event.clone()))
                         .collect();
                     // No caret marker: the zero-width node `row_pieces`
                     // places one at is what a non-modal surface's *hardware*
@@ -2054,15 +2045,11 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                 rendered.button_range,
                 cx.slot,
                 &cx.surface,
-                crate::widgets::HitArea {
+                crate::widgets::WidgetEvent {
                     row_target: false,
                     context_click: false,
-                    overlay: false,
                     widget_key: widget_key.clone(),
                     widget_kind: "dropdown",
-                    buffer_row: 0,
-                    byte_start: rendered.button_range.0,
-                    byte_end: rendered.button_range.1,
                     payload: serde_json::json!({}),
                     event_type: "dropdown_toggle",
                     owner_key: None,
@@ -2216,10 +2203,10 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                     move |window| {
                         let line = build_line(window);
                         let next = line.scroll;
-                        let hits: Vec<((usize, usize), crate::widgets::HitArea)> = line
+                        let hits: Vec<((usize, usize), crate::widgets::WidgetEvent)> = line
                             .hit
                             .into_iter()
-                            .map(|h| ((h.byte_start, h.byte_end), h))
+                            .map(|h| ((h.byte_start, h.byte_end), h.event))
                             .collect();
                         let node = match hits.is_empty() && line.caret.is_none() {
                             true => entry_row(&line.entry, &surface),
@@ -2365,22 +2352,18 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
             kids.push(entry_row(&dl::header_row(&st, col_w), &cx.surface));
             for i in 0..st.body_rows(*visible_rows) {
                 let r = dl::body_row(options, &st, i, col_w);
-                let hits: Vec<((usize, usize), crate::widgets::HitArea)> =
+                let hits: Vec<((usize, usize), crate::widgets::WidgetEvent)> =
                     [(r.available, "available"), (r.included, "included")]
                         .into_iter()
                         .filter_map(|(range, column)| {
                             let (byte_start, byte_end) = range?;
                             Some((
                                 (byte_start, byte_end),
-                                crate::widgets::HitArea {
+                                crate::widgets::WidgetEvent {
                                     row_target: false,
                                     context_click: false,
-                                    overlay: false,
                                     widget_key: widget_key.clone(),
                                     widget_kind: "dual_list",
-                                    buffer_row: 0,
-                                    byte_start,
-                                    byte_end,
                                     payload: serde_json::json!({
                                         "column": column,
                                         "index": i,
@@ -2835,15 +2818,11 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
                 (0, e.text.len()),
                 cx.slot,
                 &ground,
-                crate::widgets::HitArea {
+                crate::widgets::WidgetEvent {
                     row_target: true,
                     context_click: false,
-                    overlay: true,
                     widget_key: p.widget_key.clone(),
                     widget_kind: "dropdown",
-                    buffer_row: i as u32,
-                    byte_start: 0,
-                    byte_end: e.text.len(),
                     payload: serde_json::json!({ "index": idx }),
                     event_type: "dropdown_select",
                     owner_key: None,
@@ -2901,15 +2880,27 @@ fn popup_layer(p: &crate::widgets::PanelPopup, cx: &Ctx<'_>) -> Node<UiMsg> {
         .child(box_node)
 }
 
-/// Wrap a widget's node so a press on it delivers the widget's own hit.
+/// Wrap a widget's node so a press on it delivers what that press means.
 ///
 /// This is what replaces the byte-range scan. `deliver_widget_hit` — the
-/// dispatch all three frontends share — takes a `HitArea` and does the rest:
-/// focus the owner, run the kind's `on_pointer`, fire the plugin's event. It
-/// does not change; what changes is that the tree *finds* the widget, by
-/// hit-testing a rectangle it laid out, instead of the host reconstructing it
-/// from a row and a byte offset.
-fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<UiMsg> {
+/// dispatch all three frontends share — takes a `WidgetEvent` and does the
+/// rest: focus the owner, run the kind's `on_pointer`, fire the plugin's
+/// event. It does not change; what changes is that the tree *finds* the
+/// widget, by hit-testing a rectangle it laid out, instead of the host
+/// reconstructing it from a row and a byte offset.
+///
+/// **And the event is all it carries.** Where the widget is is this node's
+/// rectangle, so the row and byte range a `HitArea` also holds would be a
+/// second answer to a question layout already answered — in the coordinate
+/// space of rows this surface does not have. The caller hands the byte range
+/// to `row_pieces` instead, which is where it belongs: it says where to *cut
+/// the row*, not where the press was.
+fn hit_node(
+    n: Node<UiMsg>,
+    slot: Slot,
+    hit: crate::widgets::WidgetEvent,
+    piece_at: usize,
+) -> Node<UiMsg> {
     // **And the hover, for the same reason.** A widget's rectangle is what
     // answers "is the pointer on it", and this is the one wrapper every hit
     // piece goes through — a button, a list row, each of a tree row's three
@@ -2949,11 +2940,18 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
                 e.stop();
                 Some(UiMsg::Ui(super::msg::UiFact::WidgetHit {
                     slot,
-                    hit: hit.clone(),
+                    event: hit.clone(),
                     // The library's answer, not a column of our own: only the
                     // shaping that drew the row knows where each character
                     // landed in it. See `UiFact::WidgetHit::byte`.
-                    byte: e.text_byte,
+                    //
+                    // `text_byte` is measured from the start of the piece the
+                    // pointer is on, and the widget's breadcrumbs are measured
+                    // from the start of its row, so the piece says where it
+                    // began. For a hit drawn as one piece the two agree and
+                    // this adds nothing; for a field whose caret split its row
+                    // they do not.
+                    byte: e.text_byte.map(|b| piece_at + b),
                     at: Some(e.local.x.max(0) as u16),
                     clicks: e.clicks,
                 }))
@@ -2966,7 +2964,7 @@ fn hit_node(n: Node<UiMsg>, slot: Slot, hit: crate::widgets::HitArea) -> Node<Ui
                 e.stop();
                 Some(UiMsg::Ui(super::msg::UiFact::WidgetContext {
                     slot,
-                    hit: hit.clone(),
+                    event: hit.clone(),
                     x: e.pos.x.max(0) as u16,
                     y: e.pos.y.max(0) as u16,
                 }))
@@ -3040,7 +3038,7 @@ pub fn entry_row_hit(
     range: (usize, usize),
     slot: Slot,
     surface: &Ink,
-    hit: crate::widgets::HitArea,
+    hit: crate::widgets::WidgetEvent,
 ) -> Node<UiMsg> {
     entry_row_hits(entry, slot, surface, &[(range, hit)])
 }
@@ -3052,7 +3050,7 @@ fn entry_row_hit_boxed(
     range: (usize, usize),
     slot: Slot,
     surface: &Ink,
-    hit: crate::widgets::HitArea,
+    hit: crate::widgets::WidgetEvent,
 ) -> Node<UiMsg> {
     row_pieces(entry, slot, surface, &[(range, hit)], None, Fill::ToText)
 }
@@ -3068,7 +3066,7 @@ pub fn entry_row_hits(
     entry: &TextPropertyEntry,
     slot: Slot,
     surface: &Ink,
-    hits: &[((usize, usize), crate::widgets::HitArea)],
+    hits: &[((usize, usize), crate::widgets::WidgetEvent)],
 ) -> Node<UiMsg> {
     row_pieces(entry, slot, surface, hits, None, Fill::ToRowEnd)
 }
@@ -3127,7 +3125,7 @@ fn row_pieces(
     entry: &TextPropertyEntry,
     slot: Slot,
     surface: &Ink,
-    hits: &[((usize, usize), crate::widgets::HitArea)],
+    hits: &[((usize, usize), crate::widgets::WidgetEvent)],
     caret: Option<usize>,
     fill: Fill,
 ) -> Node<UiMsg> {
@@ -3154,24 +3152,40 @@ fn row_pieces(
     let mut kids: Vec<Node<UiMsg>> = Vec::new();
     let mut group: Vec<Run> = Vec::new();
     let mut group_of: Option<usize> = None;
-    let flush = |kids: &mut Vec<Node<UiMsg>>, group: &mut Vec<Run>, of: Option<usize>| {
-        if group.is_empty() {
-            return;
-        }
-        let piece = text_runs(std::mem::take(group)).h(Sizing::Cells(1));
-        kids.push(match of {
-            Some(i) => hit_node(piece, slot, hits[i].1.clone()),
-            None => piece,
-        });
-    };
+    // **Where the piece starts in the row, because that is what a press on it
+    // is reported against.** `Event::text_byte` is measured from the start of
+    // the run the pointer landed on, and one hit can span several pieces — the
+    // caret's marker cuts a field's row in two without changing whose the
+    // bytes are. So a piece has to say its own origin or the byte comes back
+    // in a space nothing else uses: `valueInnerStart` and every other
+    // breadcrumb the `focus` event carries are measured from the row's start.
+    //
+    // This was the bug that came with the units fix. When the press carried a
+    // column, `hit_node` was handed the *hit's* `byte_start`, and for a hit
+    // that is one piece those two are the same number — every case anyone
+    // checked. A focused single-line field is not: its caret splits the row,
+    // and a second click anywhere right of the caret resolved to value byte 0.
+    let mut group_at = 0usize;
+    let flush =
+        |kids: &mut Vec<Node<UiMsg>>, group: &mut Vec<Run>, of: Option<usize>, at: usize| {
+            if group.is_empty() {
+                return;
+            }
+            let piece = text_runs(std::mem::take(group)).h(Sizing::Cells(1));
+            kids.push(match of {
+                Some(i) => hit_node(piece, slot, hits[i].1.clone(), at),
+                None => piece,
+            });
+        };
     let mut end = 0usize;
     for (at, run) in runs {
         let of = owner(&at);
         // The caret sits *between* two runs, so the group before it has to
         // close whether or not the hit changes there.
         if of != group_of || caret == Some(at.start) {
-            flush(&mut kids, &mut group, group_of);
+            flush(&mut kids, &mut group, group_of, group_at);
             group_of = of;
+            group_at = at.start;
         }
         if caret == Some(at.start) {
             kids.push(marker());
@@ -3179,7 +3193,7 @@ fn row_pieces(
         end = at.end;
         group.push(run);
     }
-    flush(&mut kids, &mut group, group_of);
+    flush(&mut kids, &mut group, group_of, group_at);
     // A caret past the last glyph — the usual place for one — is the row's
     // end, which no run starts at.
     if caret.is_some_and(|c| c >= end) {
@@ -3206,10 +3220,15 @@ fn row_pieces(
     // glyph or the box belongs to it rather than to `select`".
     if fill == Fill::ToRowEnd {
         if let Some((_, h)) = hits.iter().rev().find(|(_, h)| h.row_target) {
+            // Past the last glyph, which is where this node begins. It carries
+            // no text, so no press on it reports a byte at all — the origin is
+            // stated for the same reason the pieces state theirs, not because
+            // anything reads it.
             kids.push(hit_node(
                 row().w(Sizing::Flex(1)).h(Sizing::Cells(1)),
                 slot,
                 h.clone(),
+                end,
             ));
         }
     }
@@ -3893,9 +3912,10 @@ mod tests {
         }
     }
 
-    /// **The seam.** A press delivers the widget's own hit — the same
-    /// `HitArea` the runtime recorded — so `deliver_widget_hit` behind it does
-    /// not change. What changed is that the tree found the widget.
+    /// **The seam.** A press delivers the widget's own event — the identity
+    /// half of the `HitArea` the runtime recorded — so `deliver_widget_hit`
+    /// behind it does not change. What changed is that the tree found the
+    /// widget.
     #[test]
     fn pressing_a_button_delivers_the_hit_the_runtime_recorded() {
         let spec = button("Go", Some("go"), false, false);
@@ -3914,13 +3934,73 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let UiFact::WidgetHit { slot, hit, .. } = got.first().expect("a hit") else {
+        let UiFact::WidgetHit {
+            slot, event: hit, ..
+        } = got.first().expect("a hit")
+        else {
             panic!("expected a widget hit, got {got:?}");
         };
         assert_eq!(*slot, Slot::Floating);
         assert_eq!(hit.widget_key, "go");
         assert_eq!(hit.widget_kind, "button");
         assert_eq!(hit.event_type, "activate");
+    }
+
+    /// **The whole event, not a field of it, and the collector is the
+    /// oracle.**
+    ///
+    /// The two projections have to agree about what a press *means*, because
+    /// a plugin cannot tell them apart: the same `widget_event` fires from a
+    /// TUI cell click, from a node the tree hit-tested, and from the web's
+    /// index. `WidgetEvent` is `PartialEq` so that agreement can be asserted
+    /// whole rather than field by field — a payload key added on one side and
+    /// not the other is exactly the drift this catches, and it is silent
+    /// everywhere else.
+    ///
+    /// What is deliberately *not* compared is the geometry beside it in the
+    /// recorded `HitArea`. The collector drew these widgets into rows and the
+    /// tree did not; asking the two to agree about a row and a byte range
+    /// would be asking the description to reproduce a layout it replaced.
+    #[test]
+    fn the_event_a_press_delivers_is_the_one_the_collector_recorded() {
+        let press = |spec: &WidgetSpec| -> crate::widgets::WidgetEvent {
+            let mut ui: Ui<UiMsg> = Ui::new();
+            ui.frame(node(spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+            let got = facts(ui.dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(1, 0),
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            )));
+            match got.into_iter().next() {
+                Some(UiFact::WidgetHit { event, .. }) => event,
+                other => panic!("expected a widget hit, got {other:?}"),
+            }
+        };
+        let recorded = |spec: &WidgetSpec| -> crate::widgets::WidgetEvent {
+            crate::widgets::render_spec_with_options(
+                spec,
+                &Default::default(),
+                WIDTH as u32,
+                crate::widgets::RenderOptions {
+                    prev_focus_key: "",
+                    auto_focus_first: false,
+                    ..Default::default()
+                },
+            )
+            .hits
+            .into_iter()
+            .next()
+            .expect("the collector records one hit for these")
+            .event
+        };
+        for (label, spec) in [
+            ("button", button("Go", Some("go"), false, false)),
+            ("bare button", button("Go", Some("go"), false, true)),
+            ("toggle", toggle("Case", false, false)),
+            ("checked toggle", toggle("Case", true, false)),
+        ] {
+            assert_eq!(press(&spec), recorded(&spec), "{label}");
+        }
     }
 
     /// A disabled button has no hit at all — the runtime excludes it from the
@@ -4043,7 +4123,7 @@ mod tests {
         let h = out.hits.first().expect("a hit");
         let chip_col = out.entries[0].text[..h.byte_start].chars().count() as i32;
         let got = hit_at(&mut ui, chip_col).expect("a press on the chip is the toggle's");
-        let UiFact::WidgetHit { hit, .. } = got else {
+        let UiFact::WidgetHit { event: hit, .. } = got else {
             unreachable!()
         };
         assert_eq!(hit.widget_kind, "toggle");
@@ -4156,7 +4236,8 @@ mod tests {
         );
         let h = out.hits.first().expect("a hit");
         let col = out.entries[0].text[..h.byte_start].chars().count() as i32;
-        let UiFact::WidgetHit { hit, .. } = press(&mut ui, col).expect("the value cell") else {
+        let UiFact::WidgetHit { event: hit, .. } = press(&mut ui, col).expect("the value cell")
+        else {
             unreachable!()
         };
         assert_eq!(hit.widget_kind, "number");
@@ -4558,7 +4639,7 @@ mod tests {
         let hit = msgs
             .into_iter()
             .find_map(|m| match m {
-                UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => Some(hit),
+                UiMsg::Ui(UiFact::WidgetHit { event: hit, .. }) => Some(hit),
                 _ => None,
             })
             .expect("a row press");
@@ -4589,7 +4670,9 @@ mod tests {
         let (hit, x, y) = msgs
             .into_iter()
             .find_map(|m| match m {
-                UiMsg::Ui(UiFact::WidgetContext { hit, x, y, .. }) => Some((hit, x, y)),
+                UiMsg::Ui(UiFact::WidgetContext {
+                    event: hit, x, y, ..
+                }) => Some((hit, x, y)),
                 _ => None,
             })
             .expect("a right press on a tree row");
@@ -4729,7 +4812,7 @@ mod tests {
             .msgs
             .into_iter()
             .find_map(|m| match m {
-                UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => {
+                UiMsg::Ui(UiFact::WidgetHit { event: hit, .. }) => {
                     Some((hit.event_type, hit.payload.clone()))
                 }
                 _ => None,
@@ -4827,7 +4910,11 @@ mod tests {
             },
         );
         let mut seen: Vec<String> = Vec::new();
-        for h in out.hits.iter().filter(|h| h.event_type == "dual_focus") {
+        for h in out
+            .hits
+            .iter()
+            .filter(|h| h.event.event_type == "dual_focus")
+        {
             let text = &out.entries[h.buffer_row as usize].text;
             let col = text[..h.byte_start].chars().count() as i32;
             let got = ui
@@ -4839,7 +4926,7 @@ mod tests {
                 .msgs
                 .into_iter()
                 .find_map(|m| match m {
-                    UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => {
+                    UiMsg::Ui(UiFact::WidgetHit { event: hit, .. }) => {
                         Some(hit.payload["column"].as_str().unwrap_or("").to_string())
                     }
                     _ => None,
@@ -4862,15 +4949,11 @@ mod tests {
     #[test]
     fn a_row_with_several_hits_answers_each_over_its_own_bytes() {
         let e = raw("[v] > label");
-        let hit = |kind: &'static str, a: usize, b: usize| crate::widgets::HitArea {
+        let hit = |kind: &'static str| crate::widgets::WidgetEvent {
             row_target: false,
             context_click: false,
-            overlay: false,
             widget_key: "t".into(),
             widget_kind: "tree",
-            buffer_row: 0,
-            byte_start: a,
-            byte_end: b,
             payload: serde_json::json!({}),
             event_type: kind,
             owner_key: None,
@@ -4880,9 +4963,9 @@ mod tests {
             Slot::Floating,
             &panel_surface(),
             &[
-                ((0, 3), hit("toggle", 0, 3)),
-                ((4, 5), hit("expand", 4, 5)),
-                ((6, 11), hit("select", 6, 11)),
+                ((0, 3), hit("toggle")),
+                ((4, 5), hit("expand")),
+                ((6, 11), hit("select")),
             ],
         );
         let mut ui: Ui<UiMsg> = Ui::new();
@@ -4896,7 +4979,7 @@ mod tests {
             .msgs
             .into_iter()
             .find_map(|m| match m {
-                UiMsg::Ui(UiFact::WidgetHit { hit, .. }) => Some(hit.event_type),
+                UiMsg::Ui(UiFact::WidgetHit { event: hit, .. }) => Some(hit.event_type),
                 _ => None,
             })
         };
@@ -5178,7 +5261,7 @@ mod tests {
             fresh_ui::MouseButton::Left,
             fresh_ui::Mods::NONE,
         )));
-        let UiFact::WidgetHit { hit, .. } = got.first().expect("a hit") else {
+        let UiFact::WidgetHit { event: hit, .. } = got.first().expect("a hit") else {
             panic!("expected a widget hit, got {got:?}");
         };
         assert_eq!(hit.event_type, "dropdown_select");
@@ -5264,7 +5347,7 @@ mod tests {
         let spec = dropdown(&["fast", "slow"], 0, false, 0);
         let out = crate::widgets::render_spec(&spec, &Default::default(), "", WIDTH as u32);
         let h = out.hits.first().expect("a toggle hit");
-        assert_eq!(h.event_type, "dropdown_toggle");
+        assert_eq!(h.event.event_type, "dropdown_toggle");
         let mut ui: Ui<UiMsg> = Ui::new();
         ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
         let on_button = facts(ui.dispatch(fresh_ui::Input::press(
@@ -5275,7 +5358,7 @@ mod tests {
         assert!(
             matches!(
                 on_button.first(),
-                Some(UiFact::WidgetHit { hit, .. }) if hit.event_type == "dropdown_toggle"
+                Some(UiFact::WidgetHit { event: hit, .. }) if hit.event_type == "dropdown_toggle"
             ),
             "the button toggles: {on_button:?}"
         );
@@ -5417,7 +5500,7 @@ mod tests {
         let hit = got
             .iter()
             .find_map(|f| match f {
-                UiFact::WidgetHit { hit, .. } => Some(hit),
+                UiFact::WidgetHit { event: hit, .. } => Some(hit),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("a select from the blank row under a card, got {got:?}"));
@@ -5602,7 +5685,7 @@ mod tests {
         let hit = got
             .iter()
             .find_map(|f| match f {
-                UiFact::WidgetHit { hit, .. } => Some(hit),
+                UiFact::WidgetHit { event: hit, .. } => Some(hit),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("a select, got {got:?}"));
@@ -5819,7 +5902,7 @@ mod tests {
         let hit = got
             .iter()
             .find_map(|f| match f {
-                UiFact::WidgetHit { hit, .. } => Some(hit),
+                UiFact::WidgetHit { event: hit, .. } => Some(hit),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("a select, got {got:?}"));
@@ -5987,12 +6070,142 @@ mod tests {
             fresh_ui::MouseButton::Left,
             fresh_ui::Mods::NONE,
         )));
-        let UiFact::WidgetHit { hit, .. } = got.first().expect("a hit") else {
+        let UiFact::WidgetHit { event: hit, .. } = got.first().expect("a hit") else {
             panic!("expected a widget hit, got {got:?}");
         };
         assert_eq!(hit.event_type, "focus");
         assert_eq!(hit.widget_key, "field");
-        assert_eq!(hit.payload, want.payload, "the value-layout breadcrumbs");
+        assert_eq!(
+            hit.payload, want.event.payload,
+            "the value-layout breadcrumbs"
+        );
+    }
+
+    /// **The press's byte, through the field's layout, is the byte the user
+    /// pointed at — with a label that is not ASCII.**
+    ///
+    /// This is the whole click-to-caret chain in one assertion, and every
+    /// link in it was once a unit conversion. `fresh_ui::Event::text_byte`
+    /// reports a *byte* from the shaping that drew the row; the `focus`
+    /// event's `valueInnerStart` is a *byte* measured from the start of the
+    /// same row; `value_byte_from_hit` subtracts one from the other. With an
+    /// ASCII label a column would have passed all three — `"名前: "` is five
+    /// glyphs, ten bytes and ten cells, so a column would land four bytes
+    /// short of the value and put the caret inside the label.
+    ///
+    /// It also pins that the event carries no row offset to reconcile: the
+    /// field is its own node, so the byte the library reports and the origin
+    /// the payload names are already in one space. When the fact carried a
+    /// `HitArea`, the applier added its `byte_start` on here and the dispatch
+    /// took it back off.
+    #[test]
+    fn a_press_lands_on_the_clicked_grapheme_past_a_non_ascii_label() {
+        let mut spec = text_field("abcdef", 0, true);
+        if let WidgetSpec::Text { label, .. } = &mut spec {
+            *label = "名前: ".into();
+        }
+        let focused = Ctx {
+            focus_key: "field".into(),
+            ..cx()
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &focused), Size::new(WIDTH, 8));
+        // Where the value's glyphs are on screen, asked of the same row the
+        // description drew: the runtime's entry is the oracle for the text,
+        // and `byte_start` of the value's `<inner>` region is the payload's.
+        let out = crate::widgets::render_spec_with_options(
+            &spec,
+            &Default::default(),
+            WIDTH as u32,
+            crate::widgets::RenderOptions {
+                prev_focus_key: "field",
+                auto_focus_first: false,
+                ..Default::default()
+            },
+        );
+        let row = out.entries[0].text.clone();
+        let inner = out.hits[0].event.payload["valueInnerStart"]
+            .as_u64()
+            .expect("the field stamps its value origin") as usize;
+        assert!(
+            row[..inner].contains('名'),
+            "the label has to be non-ASCII for this test to mean anything: {row:?}"
+        );
+        // Column of the value's third character, in cells.
+        let col = crate::primitives::display_width::str_width(&row[..inner + 2]) as i32;
+        let got = facts(ui.dispatch(fresh_ui::Input::press(
+            fresh_ui::Point::new(col, 0),
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        let UiFact::WidgetHit {
+            event: hit, byte, ..
+        } = got.first().expect("a hit")
+        else {
+            panic!("expected a widget hit, got {got:?}");
+        };
+        let byte = byte.expect("a press on a text run reports its byte");
+        assert_eq!(
+            crate::widgets::value_byte_from_hit(hit, byte),
+            Some(2),
+            "the third byte of \"abcdef\"; a column would have answered {}",
+            col as usize - inner
+        );
+    }
+
+    /// **A caret splits the row, and the press's byte still counts from the
+    /// row's start.**
+    ///
+    /// The narrow case behind the fix above, isolated: one hit, two pieces.
+    /// `row_pieces` cuts a row wherever the caret sits so a zero-width marker
+    /// can go between the halves, and both halves are still the field's `focus`
+    /// hit — but `Event::text_byte` counts from the start of the *piece* the
+    /// pointer is on. A press to the right of the caret therefore arrived
+    /// short by the caret's own offset, and `value_byte_from_hit` clamped the
+    /// difference to the value's first byte: every click into a field that was
+    /// already focused put the caret at byte 0.
+    ///
+    /// The first click was fine, which is why this survived — an *unfocused*
+    /// field draws no caret and so is one piece. The assertion is the pair:
+    /// the same press answers the same value byte with the caret before it and
+    /// with no caret at all.
+    #[test]
+    fn a_caret_splitting_the_row_does_not_move_the_pressed_byte() {
+        // Column of the value's fourth character. `field_width` is 20 and the
+        // label is empty, so the row is `[abcdef…]` and the value starts at
+        // column 1.
+        let col = 4;
+        let press_at = |spec: &WidgetSpec, focus: &str| -> Option<usize> {
+            let c = Ctx {
+                focus_key: focus.into(),
+                ..cx()
+            };
+            let mut ui: Ui<UiMsg> = Ui::new();
+            ui.frame(node(spec, WIDTH, &c), Size::new(WIDTH, 8));
+            let got = facts(ui.dispatch(fresh_ui::Input::press(
+                fresh_ui::Point::new(col, 0),
+                fresh_ui::MouseButton::Left,
+                fresh_ui::Mods::NONE,
+            )));
+            match got.first() {
+                Some(UiFact::WidgetHit {
+                    event: hit,
+                    byte: Some(b),
+                    ..
+                }) => crate::widgets::value_byte_from_hit(hit, *b),
+                other => panic!("expected a widget hit with a byte, got {other:?}"),
+            }
+        };
+        // Focused, caret parked at the value's start: the row is cut there, so
+        // the pressed piece begins three bytes into the row.
+        let split = press_at(&text_field("abcdef", 0, true), "field");
+        // The same press with no caret in the row at all — one piece.
+        let whole = press_at(&text_field("abcdef", -1, false), "");
+        assert_eq!(
+            split, whole,
+            "a caret in the row is not a coordinate change"
+        );
+        assert_eq!(split, Some(3), "the fourth byte of \"abcdef\"");
     }
 
     /// An unkeyed field answers nothing: `key.filter(|k| !k.is_empty())` gates
