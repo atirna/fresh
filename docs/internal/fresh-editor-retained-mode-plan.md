@@ -596,6 +596,15 @@ Three additions, in priority order:
 - **One push per CI run.** A push cancels the running workflow; batching is the
   difference between getting signal and spending forty minutes learning nothing.
 - **Do not run the full suite locally.** Push and read CI.
+- **Check a non-default feature configuration before pushing.** `cargo check
+  -p fresh-editor --lib` and targeted test filters do not compile the
+  `plugins`-gated arms out, so a call added to a `#[cfg(feature = "plugins")]`
+  item compiles cleanly for the whole session and breaks
+  `cargo check --no-default-features --features runtime --all-targets`. S6 did
+  exactly that: `slot_of_panel` carried a gate inherited from its one previous
+  caller, and the ring's new call site is ungated. The gate was incidental —
+  `PanelKey` and both panel slots are ungated — so the fix was to drop it, not
+  to gate the caller and let the ring take a different path in that build.
 
 ---
 
