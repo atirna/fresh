@@ -46,10 +46,12 @@
 //! thousands of lines to get the same cells. What moved is where the row is,
 //! what a press on it means, and who owns the window it sits in.
 //!
-//! Two calls into the collector remain, and both render a *nested spec*
-//! rather than routing a widget: a card list asks it for each item's subtree,
-//! and a markdown document view asks it for the whole reflowed document the
-//! viewport windows. Each is named at its arm, with what blocks it.
+//! One call into the collector remains, and it renders a *nested spec* rather
+//! than routing a widget: a markdown document view asks it for the whole
+//! reflowed document the viewport windows. It is named at its arm, with what
+//! blocks it. The card list's per-item call is gone — each card is
+//! `node_in`'d like any other subtree, and the band it sits in is measured by
+//! layout rather than counted off rows that had been formatted to find it.
 //!
 //! `Dropdown` and `Text` have left it (Phase 2.2): each is built from its own
 //! spec, calling the runtime's *formatter* through the pure functions
@@ -346,7 +348,8 @@ enum Axis {
 }
 
 /// Where in the panel a node is being laid: the axis of the container above
-/// it, and how far left of it a floating overlay row starts.
+/// it, how far left of it a floating overlay row starts, and whether it is
+/// inside the card a card list has selected.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Site {
     axis: Axis,
@@ -361,12 +364,27 @@ struct Site {
     /// that child landed two columns right of the frame it is drawn to line up
     /// with. This is that offset, stated by the node that creates it.
     escape: u16,
+    /// **This subtree is the selected card of a card list.**
+    ///
+    /// A card's box reads it to frame itself in heavy glyphs rather than
+    /// rounded ones — the marker `render::mark_list_card_selected` used to
+    /// apply by rewriting the cells it had already drawn. It rides here
+    /// because it is a fact about *where* a node is (inside the item the
+    /// owner picked) rather than about the spec, which is identical selected
+    /// or not; the other half of the marker, the weight, is on
+    /// [`Ctx::surface`], which every arm already reads.
+    ///
+    /// It propagates through containers, so a box nested inside a selected
+    /// card is heavy too — which is what swapping every box glyph in the
+    /// card's rows amounted to.
+    card_selected: bool,
 }
 
 impl Site {
     const ROOT: Site = Site {
         axis: Axis::Down,
         escape: 0,
+        card_selected: false,
     };
     fn across(self) -> Site {
         Site {
@@ -377,6 +395,14 @@ impl Site {
     fn down(self) -> Site {
         Site {
             axis: Axis::Down,
+            ..self
+        }
+    }
+    /// Inside the selected card of a card list, or not — see
+    /// [`Site::card_selected`].
+    fn on_selected_card(self, selected: bool) -> Site {
+        Site {
+            card_selected: selected,
             ..self
         }
     }
@@ -919,20 +945,40 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
         // translation, stated as layout instead of as an arithmetic shift
         // applied to six recorded channels.
         WidgetSpec::LabeledSection { label, child, .. } => {
-            let ring = cx.surface.to_string();
+            // **Rounded, because that is what this box has always been —
+            // heavy, when it is the card a card list has selected.**
+            // `render_section_top_border` writes `╭─ label ─…─╮`; the fold's
+            // border was unconditionally `┌┐└┘`, so describing the section
+            // squared it off. `BorderStyle` is the description saying which
+            // corner set it meant — see `fresh_ui::BorderStyle`.
+            //
+            // The heavy set with the border colour over it is
+            // `mark_list_card_selected`'s marker, said here rather than
+            // stamped over the cells this box had already drawn: the swap it
+            // performed was `╭─│` for `┏━┃` plus `ui.popup_border_fg` on the
+            // ring, which is one `BorderStyle` and one ink. The ring names the
+            // legend too, which is how the label came out tinted when the
+            // whole top row was recoloured. See the card list arm for the
+            // other half of the marker and for why it is a redesign.
+            let (corners, ring) = match site.card_selected {
+                false => (fresh_ui::BorderStyle::Rounded, cx.surface.to_string()),
+                true => (
+                    fresh_ui::BorderStyle::Heavy,
+                    cx.surface
+                        .clone()
+                        .with_fg(Paint::key("ui.popup_border_fg"))
+                        .plus(Attrs::BOLD)
+                        .to_string(),
+                ),
+            };
             // The child is handed the width less this box's four columns of
             // chrome, which is the contract `emit_completion_overlays` reads
             // when it widens a completion popup back out by four. Two of those
             // columns are on this side, so an overlay the child floats starts
             // two left of where the child does.
-            // **Rounded, because that is what this box has always been.**
-            // `render_section_top_border` writes `╭─ label ─…─╮`; the fold's
-            // border was unconditionally `┌┐└┘`, so describing the section
-            // squared it off. `BorderStyle` is the description saying which
-            // corner set it meant — see `fresh_ui::BorderStyle`.
             let framed = col()
                 .theme(ring.clone())
-                .border_style(fresh_ui::BorderStyle::Rounded)
+                .border_style(corners)
                 .pad(1, 0)
                 .child(node_in(
                     child,
@@ -941,6 +987,7 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                     Site {
                         axis: Axis::Down,
                         escape: 2,
+                        ..site
                     },
                 ));
             match label.is_empty() {
@@ -1077,65 +1124,75 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
         }
         // **A card list is a list whose items are blocks.**
         //
-        // `item_specs` makes each item a `WidgetSpec` rendered into a band of
-        // rows — a rounded pill with a title, a line of detail and a rule.
-        // Everything else about it is the list above: the window is in items,
-        // the selection is the owner's, a press anywhere on the card selects
-        // it. What it needed was for the library's `List` to stop stamping one
-        // cell on every row, which is `row_rows`.
+        // `item_specs` makes each item a `WidgetSpec` of its own — the
+        // orchestrator's session pills are a `LabeledSection` around a `Col`
+        // of two `Row`s and a `Raw` — and the list stacks those blocks a band
+        // at a time. Everything else about it is the plain list above: the
+        // window is in items, the selection is the owner's, `-1` is a
+        // controlled empty selection, and a press anywhere on the card
+        // selects it.
         //
-        // **The card's own rows stay the runtime's**, and so does the way a
-        // selected one is marked: `mark_list_card_selected` swaps the light
-        // box glyphs for heavy ones and adds bold and an accent, because "no
-        // background band — it reads garish over a multi-row card". That is
-        // not a theme name and could not be one, so the list's own row states
-        // are overridden to the base ink and the marking is applied where the
-        // rows are made.
+        // **Each card is described, not formatted.** This arm used to run the
+        // immediate-mode collector once per card on every frame and stack the
+        // rows that came back. `node_in` builds the item's own subtree
+        // instead — the same recursion the panel body takes — which is
+        // available because `node_body` is *total*: every `WidgetSpec`
+        // variant has an arm, `WindowEmbed` included since it became a `Host`
+        // leaf, and the wildcard under them is `unreachable_patterns`.
         //
-        // **The gutter is reserved whether the bar is there or not.** The
-        // runtime re-rendered every card one column narrower the moment the
-        // list overflowed, so adding one session reflowed all of them; a
-        // stable gutter is the same column, always, which is what that
-        // reflow was an accident of.
+        // **The cards are built here rather than inside the row builder**,
+        // and that is a lifetime fact rather than a preference: `List`'s
+        // builder is `'static`, and describing a card needs this panel's
+        // `Ctx`, which borrows the instance-state map. Built up front, the
+        // builder has owned nodes to hand back — `List::keyed`'s shape with
+        // the windowed form's key function — and nothing is lost by it,
+        // because a measured band describes every item anyway.
         //
-        // **This arm runs `render_collected` once per card, on every frame,
-        // and that is the last of it on this path besides the markdown
-        // document view.** It is not blocked by a missing arm: `node_body` is
-        // total over every variant but `WindowEmbed`, and the only cards a
-        // bundled plugin emits — `orchestrator.ts`'s session pills, which its
-        // *picker dialog* uses (the dock's list is a card `Tree`, which does
-        // not come through here) — are a `LabeledSection` around a `Col` of
-        // two `Row`s, each a `Raw`, a flexible `Spacer` and a `Raw`, and a
-        // third `Raw` under them. Every one of those has an arm above, and
-        // `LabeledSection` is a real box there rather than text. Two named
-        // things block it, and both are about the *band* rather than about
-        // the kinds in it:
+        // **The band is measured, not counted.** `RowHeight::UniformMeasured`
+        // lays every item out at the current width inside layout and takes
+        // the tallest; the number that existed only because every card had
+        // already been formatted into rows is now layout's answer to its own
+        // question. Two caveats that mode carries are met here rather than
+        // assumed. It measures with every row in `RowState::Normal`, and a
+        // card is exactly as tall selected as not — the marker below is a
+        // border style and a weight, and neither adds a row. And it describes
+        // and discards the items once per measurement, so a card carrying
+        // element state would pay a mount and an unmount for each one; the
+        // pills carry none. The measurement is O(items) whenever this
+        // description is rebuilt, which for the shell is still every frame —
+        // the same order as the render-per-card it replaces, minus a whole
+        // second rendering engine and the scratch state map it threw away.
+        // What removes the "every frame" is memoisation (Phase 3.1), not
+        // this.
         //
-        // 1. **`List::row_rows` wants a uniform band height as a number
-        //    before the row builder runs**, and it is right to: that is what
-        //    makes a window onto a million items possible without measuring
-        //    any of them. From nodes there is no height until layout, and the
-        //    only reason a number exists today is that every card — including
-        //    the ones off screen — was formatted into rows so the tallest
-        //    could be counted. Writing a row-count predictor over the spec
-        //    would be a second copy of the container layout rules, which is
-        //    the duplication this migration exists to remove. So this is a
-        //    **library gap**: `fresh-ui`'s windowed list has no form whose
-        //    items are measured by layout. `Anchor::reveal_key` already
-        //    exists for exactly that case — "content whose items differ in
-        //    height", which `reveal` cannot answer — so the piece missing is
-        //    the window itself, not the reveal.
+        // **The gutter is one column, reserved whether the bar is there or
+        // not.** The runtime re-rendered every card one column narrower the
+        // moment the list overflowed, so adding one session reflowed all of
+        // them; the card asks for `width - 1` and keeps asking for it, which
+        // is the same column whether the bar carves a gutter or — the dock's
+        // case — floats over it and carves none.
         //
-        // 2. **`render::mark_list_card_selected` is defined over rendered
-        //    cells**: it rewrites `╭─│` into `┏━┃`, bolds the whole entry and
-        //    tints the leading and trailing bars, because "no background band
-        //    — it reads garish over a multi-row card". As a description that
-        //    has to become "pass `selected` down, and let `LabeledSection`
-        //    pick a heavy border and bold its subtree", which is a redesign
-        //    of the marker rather than a translation of it — and
-        //    `a_selected_card_is_marked_in_its_own_glyphs` pins the *glyphs*
-        //    (`╭` unselected, `┏` selected), not merely the fact that a card
-        //    is marked, so that test changes with the marker.
+        // **A short card pads below itself, not around itself.** The band is
+        // the tallest card's, and a card handed the band as its own height
+        // would draw its box that tall. So the row is a column holding the
+        // card at its natural height, and the difference stays blank under
+        // it: the `blank_list_row`s the runtime emitted, said as layout.
+        //
+        // **The selection marker is a description now, and that is a redesign
+        // rather than a port.** `render::mark_list_card_selected` is defined
+        // over rendered cells — it rewrites `╭─│` into `┏━┃`, bolds the entry
+        // and tints the leading and trailing bars, deliberately avoiding a
+        // background band because one "reads garish over a multi-row card".
+        // None of that survives as cell surgery here and none of it needs to:
+        // `selected` travels down the [`Site`] to the card's own box, which
+        // picks `BorderStyle::Heavy` over `Rounded` and tints its ring, while
+        // the subtree's surface ink carries `+bold`, which every run built
+        // under it inherits. The three facts are the same three — heavy
+        // frame, bold text, no band — said by the description that draws them
+        // instead of stamped over what it drew. A card that is not a box gets
+        // the weight and no frame, which is what the substitution did with no
+        // glyphs to swap. `a_selected_card_is_marked_in_its_own_glyphs` still
+        // pins the glyphs and now pins where they come from.
         WidgetSpec::List {
             item_specs,
             item_keys,
@@ -1145,36 +1202,38 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
             ..
         } if !item_specs.is_empty() => {
             use std::rc::Rc;
-            let card_width = (width as u32).saturating_sub(1).max(1);
-            let mut cards: Vec<Vec<TextPropertyEntry>> = Vec::with_capacity(item_specs.len());
-            let mut item_height: u16 = 1;
-            for item in item_specs.iter() {
-                let mut scratch = std::collections::HashMap::new();
-                let rows = crate::widgets::render::render_collected(
-                    item,
-                    cx.states,
-                    &mut scratch,
-                    crate::widgets::RenderContext {
-                        focus_key: &cx.focus_key,
-                        hover_key: cx.hovered_key.as_deref().unwrap_or(""),
-                        hover_item_key: &cx.hovered_item_key,
-                        hover_popup_row: "",
-                        markdown: None,
-                        marker_gutter: cx.marker_gutter,
-                        avail_height: cx.avail_height,
-                    },
-                    card_width,
-                )
-                .entries;
-                item_height = item_height.max((rows.len() as u16).max(1));
-                cards.push(rows);
-            }
+            let card_width = width.saturating_sub(1).max(1);
+            let sel = *selected_index;
+            // The bold half of the marker. Said on the surface every arm
+            // already reads, so it reaches the whole card without a second
+            // rule per kind — `ink_of` merges an overlay's attributes over
+            // the ones under it rather than replacing them.
+            let marked = Ctx {
+                surface: cx.surface.clone().plus(Attrs::BOLD),
+                ..cx.clone()
+            };
+            let cards: Rc<Vec<Node<UiMsg>>> = Rc::new(
+                item_specs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, item)| {
+                        let selected = i as i32 == sel;
+                        col().w(Sizing::Cells(card_width)).child(node_in(
+                            item,
+                            card_width,
+                            match selected {
+                                true => &marked,
+                                false => cx,
+                            },
+                            site.down().on_selected_card(selected),
+                        ))
+                    })
+                    .collect(),
+            );
             let n = cards.len();
-            let cards = Rc::new(cards);
             let keys = Rc::new(item_keys.clone());
             let list_key = key.clone().unwrap_or_default();
             let slot = cx.slot;
-            let sel = *selected_index;
             let hit_keys = keys.clone();
             let list = fresh_ui::List::windowed(
                 n,
@@ -1186,27 +1245,10 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                         )
                     }
                 },
-                {
-                    let cards = cards.clone();
-                    let surface = cx.surface.clone();
-                    move |i| {
-                        let selected = i as i32 == sel;
-                        col().children((0..item_height as usize).map(|r| {
-                            let mut e = cards[i]
-                                .get(r)
-                                .cloned()
-                                .unwrap_or_else(crate::widgets::render::blank_list_row);
-                            e.normalize_widths();
-                            if selected {
-                                crate::widgets::render::mark_list_card_selected(&mut e);
-                            }
-                            entry_row(&e, &surface)
-                        }))
-                    }
-                },
+                move |i| cards[i].clone(),
             )
             .focusable(false)
-            .row_rows(item_height)
+            .row_height(fresh_ui::RowHeight::UniformMeasured)
             .scrollbar_gutter()
             .scrollbar_when(cx.scrollbar_reveal)
             .scrollbar_theme(bar_ink())
@@ -1250,10 +1292,15 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
                     clicks: e.clicks,
                 }))
             }));
-            let list = match sel >= 0 {
-                true => list.selected(sel as usize),
-                false => list,
-            };
+            // **`-1` is a controlled empty selection, not "no opinion"** —
+            // the same rule the plain list states above, and the card list
+            // was the arm still missing it. Left to its own the element
+            // selects row zero, which here would ask the window to reveal a
+            // card the owner did not pick.
+            let list = list.selection(match sel >= 0 {
+                true => Some(sel as usize),
+                false => None,
+            });
             let node = keyed(fresh_ui::ComponentExt::node(list), state_key(key));
             match visible_rows {
                 Some(r) => node.h(Sizing::Cells(*r as u16)),
@@ -2306,9 +2353,12 @@ fn node_body(spec: &WidgetSpec, width: u16, cx: &Ctx<'_>, site: Site) -> Node<Ui
             window_id, rows, ..
         } => fresh_ui::host(super::frame::embed_host_id(*window_id))
             .h(Sizing::Cells((*rows).min(u16::MAX as u32) as u16)),
-        // `covered` gates this; reaching it is a bug in the caller rather than
-        // a spec the plugin got wrong, so it is loud in debug and empty in
-        // release rather than silently dropping a panel's content.
+        // **Unreachable, and the attribute is the proof**: the arms above are
+        // exhaustive over `WidgetSpec`, which is what lets a card list build
+        // its items through `node_in` without asking whether they are
+        // describable. Kept so that a variant added to the vocabulary is loud
+        // in debug and empty in release rather than silently dropping a
+        // panel's content.
         #[allow(unreachable_patterns)]
         other => {
             debug_assert!(false, "widget variant not covered: {other:?}");
@@ -4263,7 +4313,16 @@ mod tests {
             ("a single-line field", multiline(1)),
             ("a multi-line field", multiline(6)),
             ("a card tree", card_tree(3, 0, 15)),
-        ] {}
+        ] {
+            // **The loop had no body**, which made the list above a comment
+            // with brackets round it. Each of these describes rows, and a
+            // variant that had no arm would describe none: `node_body`'s
+            // fallback is an empty node, and it is `unreachable_patterns`
+            // because the match over `WidgetSpec` is exhaustive.
+            let mut ui: Ui<UiMsg> = Ui::new();
+            ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+            assert!(!rows_of(&ui).is_empty(), "{what} described nothing");
+        }
 
         // And the one that used to be excluded: `WindowEmbed` is a `Host`
         // leaf, which is what "paints its own cells" has meant everywhere else
@@ -5211,9 +5270,143 @@ mod tests {
         assert_eq!(band("c2"), (y0 + 2 * h0 as i32, h0));
     }
 
-    /// The rows themselves are the runtime's, marking included: a selected
-    /// card is drawn in heavy box glyphs rather than banded, because a band
-    /// "reads garish over a multi-row card".
+    /// An unlabelled card `lines` rows tall inside its box.
+    fn card_of(lines: usize) -> WidgetSpec {
+        WidgetSpec::LabeledSection {
+            label: String::new(),
+            child: Box::new(WidgetSpec::Raw {
+                entries: (0..lines).map(|i| raw(&format!("line{i}"))).collect(),
+                key: None,
+            }),
+            width_pct: None,
+            key: None,
+        }
+    }
+
+    /// **The band is the tallest card's, and layout is what measures it.**
+    ///
+    /// Nobody can state the number: a card's height is what its own container
+    /// rules come to at the width it ends up with, which is why this arm used
+    /// to format every card through the immediate-mode collector purely to
+    /// count the rows that came back. `RowHeight::UniformMeasured` asks the
+    /// same question of the layout that is about to place them.
+    ///
+    /// The second half is what happens to the cards that are *not* the
+    /// tallest. Handed the band as its own height, a short card would draw
+    /// its box five rows tall; the padding belongs under it, which is what
+    /// the runtime's `blank_list_row`s did.
+    #[test]
+    fn an_uneven_card_lists_band_is_the_tallest_and_a_short_card_keeps_its_own_box() {
+        let spec = WidgetSpec::List {
+            items: Vec::new(),
+            item_specs: vec![card_of(1), card_of(3), card_of(1)],
+            item_keys: vec!["c0".into(), "c1".into(), "c2".into()],
+            selected_index: -1,
+            visible_rows: Some(18),
+            key: Some("cards".into()),
+            focusable: true,
+        };
+        let mut ui: Ui<UiMsg> = Ui::new();
+        ui.frame(node(&spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+        let band = |k: &str| {
+            let r = ui.rect_of(
+                ui.find_by_key(&fresh_ui::Key::Str(k.into()))
+                    .unwrap_or_else(|| panic!("card {k}")),
+            );
+            (r.y, r.h)
+        };
+        // Three rows of box around three lines, so the tallest is five.
+        assert_eq!(band("c0"), (0, 5), "a one-line card takes the tall band");
+        assert_eq!(band("c1"), (5, 5), "which is the three-line card's own");
+        assert_eq!(band("c2"), (10, 5));
+
+        let boxes: Vec<(i32, u16)> = ui
+            .spec()
+            .in_flow()
+            .iter()
+            .filter_map(|i| match i.draw {
+                fresh_ui::Draw::Border(_) => Some((i.rect.y, i.rect.h)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            boxes,
+            vec![(0, 3), (5, 5), (10, 3)],
+            "a short card's frame is its own height; the band pads below it"
+        );
+
+        // And the padding is still the card's: a press anywhere on the band
+        // selects it, which is what the runtime's blank rows carried a `select`
+        // hit for.
+        let at = fresh_ui::Point::new(2, 4);
+        ui.dispatch(fresh_ui::Input::press(
+            at,
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        ));
+        let got = facts(ui.dispatch(fresh_ui::Input::release(
+            at,
+            fresh_ui::MouseButton::Left,
+            fresh_ui::Mods::NONE,
+        )));
+        let hit = got
+            .iter()
+            .find_map(|f| match f {
+                UiFact::WidgetHit { hit, .. } => Some(hit),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a select from the blank row under a card, got {got:?}"));
+        assert_eq!(hit.widget_key, "c0");
+    }
+
+    /// **The bar's column is reserved whether the bar is there or not.**
+    ///
+    /// The runtime re-rendered every card one column narrower the moment the
+    /// list overflowed, so adding one session reflowed all of them — and the
+    /// dock, whose bar is an overlay that carves no column at all, would have
+    /// had its cards change width when one flashed. One column, always, in
+    /// every one of those states.
+    #[test]
+    fn a_card_lists_gutter_is_the_same_column_however_the_bar_behaves() {
+        let width_of = |n: usize, reveal: Option<bool>| -> u16 {
+            let spec = card_list(n, 0, 9);
+            let mut ui: Ui<UiMsg> = Ui::new();
+            let c = Ctx {
+                scrollbar_reveal: reveal,
+                ..cx()
+            };
+            ui.frame(node(&spec, WIDTH, &c), Size::new(WIDTH, 24));
+            ui.rect_of(
+                ui.find_by_key(&fresh_ui::Key::Str("c0".into()))
+                    .expect("c0"),
+            )
+            .w
+        };
+        // Two cards in a nine-row window do not overflow; twenty do.
+        assert_eq!(width_of(2, None), WIDTH - 1, "the column is reserved");
+        assert_eq!(
+            width_of(20, None),
+            WIDTH - 1,
+            "and overflowing does not reflow the cards"
+        );
+        // The dock's bar takes no column of its own, so the card still has to
+        // leave it one.
+        assert_eq!(width_of(20, Some(false)), WIDTH - 1);
+        assert_eq!(width_of(20, Some(true)), WIDTH - 1);
+    }
+
+    /// **The marker is the card's own description now, not a second pass over
+    /// its cells — and this test changed with it.**
+    ///
+    /// It used to say only that the rows the runtime produced came back with
+    /// heavy glyphs in them, which `mark_list_card_selected` achieved by
+    /// rewriting `╭─│` into `┏━┃` in text it had already formatted. The
+    /// glyphs are still pinned, because they are what the user sees and what
+    /// survives a theme with no contrast to spare — but so is where they come
+    /// from: a `Draw::Border(BorderStyle::Heavy)` the fold resolves, `+bold`
+    /// on the runs inside it, and no band, which was the third of the three
+    /// facts and the one with a reason attached ("it reads garish over a
+    /// multi-row card").
     #[test]
     fn a_selected_card_is_marked_in_its_own_glyphs() {
         let plain = tree_rows(&card_list(3, -1, 12));
@@ -5231,6 +5424,90 @@ mod tests {
             picked.len(),
             "and marking does not change the layout"
         );
+
+        let laid = |spec: &WidgetSpec| -> Vec<fresh_ui::Item> {
+            let mut ui: Ui<UiMsg> = Ui::new();
+            ui.frame(node(spec, WIDTH, &cx()), Size::new(WIDTH, 24));
+            ui.spec().in_flow().to_vec()
+        };
+        let corners = |items: &[fresh_ui::Item]| -> Vec<fresh_ui::BorderStyle> {
+            items
+                .iter()
+                .filter_map(|i| match i.draw {
+                    fresh_ui::Draw::Border(b) => Some(b),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (none, one) = (laid(&card_list(3, -1, 12)), laid(&card_list(3, 0, 12)));
+        use fresh_ui::BorderStyle::{Heavy, Rounded};
+        assert_eq!(
+            corners(&none),
+            vec![Rounded; 3],
+            "three cards, three light boxes, and the glyphs are the border's"
+        );
+        assert_eq!(
+            corners(&one),
+            vec![Heavy, Rounded, Rounded],
+            "the selected card names the heavy set; nothing rewrites a cell"
+        );
+
+        // The weight, which is the half of the marker a card with no box of
+        // its own still wears.
+        let bold = |items: &[fresh_ui::Item]| {
+            items.iter().any(|i| {
+                matches!(i.draw, fresh_ui::Draw::Lines(_))
+                    && Ink::parse(i.theme.as_str()).is_some_and(|k| k.attrs.contains(Attrs::BOLD))
+            })
+        };
+        assert!(
+            !bold(&none),
+            "nothing is emphasised while nothing is picked"
+        );
+        assert!(bold(&one), "the selected card's text is bold");
+
+        // And no band: the row states are held at the panel's own ground, so
+        // a selection is never a block of colour behind a multi-row card.
+        let banded: Vec<&str> = one
+            .iter()
+            .map(|i| i.theme.as_str())
+            .filter(|t| {
+                Ink::parse(t).and_then(|k| k.bg.name().map(str::to_string))
+                    == Some("ui.popup_selection_bg".into())
+            })
+            .collect();
+        assert!(
+            banded.is_empty(),
+            "a selected card is not banded: {banded:?}"
+        );
+    }
+
+    /// **The oracle, for everything the marker did not change.** A card is
+    /// now `node_in`'d like any other subtree rather than formatted by the
+    /// collector, so the question "does a card still look like a card" has an
+    /// answer the runtime can give: an unselected card list draws exactly the
+    /// block the collector drew, one column in. That column is the gutter
+    /// this arm always reserves and the runtime reserved only once the list
+    /// overflowed — the reflow-on-overflow bug, visible here as the whole of
+    /// the difference.
+    #[test]
+    fn an_unselected_card_lists_cards_are_the_ones_the_runtime_draws() {
+        let spec = card_list(3, -1, 12);
+        let runtime: Vec<String> =
+            crate::widgets::render_spec(&spec, &Default::default(), "", (WIDTH - 1) as u32)
+                .entries
+                .iter()
+                .map(|e| {
+                    let mut n = e.clone();
+                    n.normalize_widths();
+                    n.text.trim_end_matches('\n').trim_end().to_string()
+                })
+                // The runtime pads a list out to its advertised `visible_rows`
+                // with blank entries; the description paints no row there, so
+                // the two agree on everything that has ink in it.
+                .filter(|r| !r.is_empty())
+                .collect();
+        assert_eq!(tree_rows(&spec), runtime);
     }
 
     /// A press anywhere on a card selects it, and says which — the same
